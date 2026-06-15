@@ -6,7 +6,7 @@ authors = [".dark_hunter"]
 edition = "2021"
 
 [lib]
-name = "openanime_desktop_lib"
+name = "openanime_desktops_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
