@@ -118,8 +118,8 @@ Eğer yerel olarak macOS sisteminiz yoksa veya paketleme işlemleriyle uğraşma
 Sürüm etiketi (Tag) oluşturup GitHub'a gönderdiğinizde, GitHub bulut sunucuları (macOS ve Windows runner'lar) sizin yerinize paketleri otomatik derler:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 Derleme bittiğinde, GitHub deponuzun **Releases** sekmesinde Windows (`.exe` / `.msi`) ve macOS (`.dmg` / `.app`) kurulum dosyaları otomatik olarak yayınlanıp indirilmeye hazır hale gelir.
