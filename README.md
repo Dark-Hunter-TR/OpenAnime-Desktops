@@ -21,7 +21,7 @@
 
 ## 📌 Proje Hakkında
 
-Bu uygulama, **OpenAnime** (https://openani.me) platformu için geliştirilmiş modern bir masaüstü istemcisidir. **Sitenin kurucularının bilgisi ve haberi dahilinde kişisel olarak hazırlanmıştır.** 
+Bu uygulama, **[OpenAnime](https://openani.me)** platformu için geliştirilmiş modern bir masaüstü istemcisidir. **Sitenin kurucularının bilgisi ve haberi dahilinde kişisel olarak hazırlanmıştır.** 
 
 Sitenin orijinal/resmi Windows uygulaması da mevcuttur ve [resmi indirme sayfasından](https://ors.openani.me/en) edinilebilir. Resmi sitede şu an için yalnızca Windows sürümü sunulmaktadır. Geliştirdiğimiz bu alternatif sürüm ise hem **Windows** hem de **macOS** işletim sistemlerinde sorunsuz çalışmaktadır (özellikle Mac kullanıcıları için harika bir alternatiftir).
 
