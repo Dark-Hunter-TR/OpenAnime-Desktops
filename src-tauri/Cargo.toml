@@ -6,7 +6,7 @@ authors = [".dark_hunter"]
 edition = "2021"
 
 [lib]
-name = "openanime_desktop_windows_lib"
+name = "openanime_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -18,9 +18,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2.4.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wry = "0.55"
-webview2-com = "0.38"
-windows-core = "0.61"
+webview2-com = "0.36"
+windows-core = "0.58"
 
 [profile.release]
 opt-level = 3
