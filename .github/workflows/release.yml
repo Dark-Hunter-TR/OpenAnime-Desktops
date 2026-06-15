@@ -1,0 +1,52 @@
+name: 'publish'
+
+on:
+  push:
+    tags:
+      - 'v*' # Triggers on tags like v1.0.0
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: install frontend dependencies
+        run: bun install
+
+      - name: build the app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'OpenAnime Desktop v__VERSION__'
+          releaseBody: 'See the assets below to download and install this version.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
