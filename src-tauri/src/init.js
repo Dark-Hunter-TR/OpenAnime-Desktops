@@ -1,0 +1,832 @@
+(function () {
+  if (window.self !== window.top) return;
+
+  // --- Tauri API Polyfill for Remote Origin ---
+  if (!window.__TAURI__) {
+    const tauriInvoke = function (cmd, args = {}) {
+      return new Promise((resolve, reject) => {
+        const callback = '_' + Math.random().toString(36).substr(2, 9);
+        const error = '_' + Math.random().toString(36).substr(2, 9);
+
+        window[callback] = (res) => {
+          resolve(res);
+          delete window[callback];
+          delete window[error];
+        };
+
+        window[error] = (err) => {
+          reject(err);
+          delete window[callback];
+          delete window[error];
+        };
+
+        if (window.__TAURI_IPC__) {
+          window.__TAURI_IPC__({
+            cmd: cmd,
+            callback: callback,
+            error: error,
+            ...args
+          });
+        } else {
+          reject(new Error("Tauri IPC not found"));
+        }
+      });
+    };
+
+    const currentWindowInstance = {
+      minimize: () => tauriInvoke('plugin:window|minimize'),
+      maximize: () => tauriInvoke('plugin:window|maximize'),
+      unmaximize: () => tauriInvoke('plugin:window|unmaximize'),
+      close: () => tauriInvoke('plugin:window|close'),
+      isMaximized: () => tauriInvoke('plugin:window|is_maximized'),
+      isFullscreen: () => tauriInvoke('plugin:window|is_fullscreen'),
+      setFullscreen: (value) => tauriInvoke('plugin:window|set_fullscreen', { value }),
+      hide: () => tauriInvoke('plugin:window|hide'),
+      show: () => tauriInvoke('plugin:window|show'),
+    };
+
+    const currentWebviewInstance = {
+      setZoom: (value) => tauriInvoke('plugin:webview|set_webview_zoom', { value }),
+    };
+
+    window.__TAURI__ = {
+      core: {
+        invoke: tauriInvoke
+      },
+      window: {
+        getCurrentWindow: () => currentWindowInstance
+      },
+      webview: {
+        getCurrentWebview: () => currentWebviewInstance
+      },
+      opener: {
+        openUrl: (url) => tauriInvoke('plugin:opener|open', { value: url }),
+        open: (url) => tauriInvoke('plugin:opener|open', { value: url })
+      }
+    };
+  }
+  // -------------------------------------------
+
+  try {
+    if (navigator.gpu && typeof navigator.gpu.requestAdapter === "function") {
+      const originalRequestAdapter = navigator.gpu.requestAdapter.bind(
+        navigator.gpu,
+      );
+      navigator.gpu.requestAdapter = async function (options) {
+        const isPlayerActive =
+          window.location.href.includes("/anime") ||
+          document.querySelector("video") !== null;
+        const newOptions = { ...options };
+        newOptions.powerPreference = isPlayerActive
+          ? "high-performance"
+          : "low-power";
+        return originalRequestAdapter(newOptions);
+      };
+    }
+  } catch (gpuError) {}
+
+  function injectPerformanceCSS() {
+    try {
+      const style = document.createElement("style");
+      style.id = "openanime-performance-styles";
+      style.textContent = `
+        html { scroll-behavior: smooth !important; }
+        img { image-rendering: -webkit-optimize-contrast !important; }
+      `;
+      (document.head || document.documentElement).appendChild(style);
+    } catch (e) {}
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", injectPerformanceCSS);
+  } else {
+    injectPerformanceCSS();
+  }
+
+  const CONTROLS_WIDTH = 138;
+
+  let currentZoom = 1.0;
+  try {
+    const savedZoom = localStorage.getItem("tauri-zoom-level");
+    if (savedZoom) {
+      currentZoom = parseFloat(savedZoom);
+      if (isNaN(currentZoom) || currentZoom < 0.3 || currentZoom > 2.0)
+        currentZoom = 1.0;
+    }
+  } catch (e) {}
+
+  function getActiveZoom() {
+    const isFullscreen = !!(
+      document.fullscreenElement || document.webkitFullscreenElement
+    );
+    return isFullscreen ? 1.0 : currentZoom;
+  }
+
+  if (
+    window.__TAURI__ &&
+    window.__TAURI__.webview &&
+    typeof window.__TAURI__.webview.getCurrentWebview === "function"
+  ) {
+    const webview = window.__TAURI__.webview.getCurrentWebview();
+    if (webview && typeof webview.setZoom === "function") {
+      const az = getActiveZoom();
+      webview.setZoom(az).catch(console.error);
+    }
+  }
+
+  if (window.__TAURI__) {
+    try {
+      const appWindow = window.__TAURI__.window.getCurrentWindow();
+      const shouldMaximize =
+        localStorage.getItem("tauri-window-maximized") === "true";
+      if (shouldMaximize && typeof appWindow.maximize === "function") {
+        appWindow.maximize().catch(console.error);
+      }
+      window.addEventListener("resize", async () => {
+        try {
+          if (typeof appWindow.isMaximized === "function") {
+            const isMax = await appWindow.isMaximized();
+            localStorage.setItem("tauri-window-maximized", isMax.toString());
+          }
+          applyZoom(getActiveZoom());
+        } catch (err) {}
+      });
+    } catch (e) {}
+  }
+
+  function applyZoom(zoom, triggerIndicator = false) {
+    if (
+      window.__TAURI__ &&
+      window.__TAURI__.webview &&
+      typeof window.__TAURI__.webview.getCurrentWebview === "function"
+    ) {
+      const webview = window.__TAURI__.webview.getCurrentWebview();
+      if (webview && typeof webview.setZoom === "function") {
+        webview.setZoom(zoom)
+          .then(() => {
+            if (triggerIndicator) {
+              setTimeout(() => {
+                showZoomIndicator(zoom);
+              }, 30);
+            }
+          })
+          .catch((err) => {
+            console.error(err);
+            if (triggerIndicator) showZoomIndicator(zoom);
+          });
+      } else if (triggerIndicator) {
+        showZoomIndicator(zoom);
+      }
+    } else if (triggerIndicator) {
+      showZoomIndicator(zoom);
+    }
+
+    if (document.body) {
+      document.body.style.removeProperty("transform");
+      document.body.style.removeProperty("transform-origin");
+      document.body.style.removeProperty("width");
+      document.body.style.removeProperty("height");
+      document.body.style.removeProperty("position");
+      document.body.style.removeProperty("left");
+      document.body.style.removeProperty("top");
+      document.body.style.removeProperty("margin");
+      document.body.style.removeProperty("zoom");
+      document.body.style.removeProperty("min-width");
+      document.body.style.removeProperty("min-height");
+    }
+
+    const controls = document.getElementById("tauri-controls-container");
+    if (controls) {
+      const isFullscreen = !!(
+        document.fullscreenElement || document.webkitFullscreenElement
+      );
+      if (isFullscreen) {
+        controls.style.setProperty("display", "none", "important");
+      } else {
+        controls.style.removeProperty("display");
+      }
+    }
+    return true;
+  }
+
+  function handleZoomChange(newZoom) {
+    const indicator = document.getElementById("tauri-zoom-indicator");
+    if (indicator) {
+      indicator.classList.remove("visible");
+    }
+
+    applyZoom(newZoom, true);
+    try {
+      localStorage.setItem("tauri-zoom-level", newZoom.toString());
+    } catch (err) {}
+  }
+
+  let zoomIndicatorTimeout = null;
+  function showZoomIndicator(zoom) {
+    let indicator = document.getElementById("tauri-zoom-indicator");
+    if (!indicator) {
+      indicator = document.createElement("div");
+      indicator.id = "tauri-zoom-indicator";
+      const style = document.createElement("style");
+      style.id = "tauri-zoom-indicator-style";
+      style.textContent = `
+        #tauri-zoom-indicator {
+          position: fixed !important; left: 50% !important;
+          z-index: 999999999 !important;
+          background-color: rgba(0,0,0,0.6) !important; backdrop-filter: blur(8px) !important;
+          border-style: solid !important; border-color: rgba(255,255,255,0.2) !important;
+          color: #fff !important;
+          display: flex !important; align-items: center !important; justify-content: center !important;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+          font-weight: 600 !important;
+          line-height: 1 !important;
+          user-select: none !important; pointer-events: none !important;
+          opacity: 0 !important; transition: opacity 0.15s ease-in-out !important;
+          transform: translateX(-50%) !important;
+        }
+        #tauri-zoom-indicator.visible { opacity: 1 !important; }
+      `;
+      document.documentElement.appendChild(indicator);
+      indicator.appendChild(style);
+    }
+
+    // Adjust layout dimensions dynamically based on zoom percentage (level) to counteract the native zoom
+    const invZoom = 1 / zoom;
+    indicator.style.setProperty("bottom", `${50 * invZoom}px`, "important");
+    indicator.style.setProperty("width", `${80 * invZoom}px`, "important");
+    indicator.style.setProperty("height", `${40 * invZoom}px`, "important");
+    indicator.style.setProperty("border-radius", `${8 * invZoom}px`, "important");
+    indicator.style.setProperty("font-size", `${14 * invZoom}px`, "important");
+    indicator.style.setProperty("border-width", `${1 * invZoom}px`, "important");
+
+    Array.from(indicator.childNodes).forEach((node) => {
+      if (node.id !== "tauri-zoom-indicator-style") indicator.removeChild(node);
+    });
+    indicator.appendChild(
+      document.createTextNode(Math.round(zoom * 100) + "%"),
+    );
+
+    // Fade in only after the transform is applied in the DOM
+    requestAnimationFrame(() => {
+      indicator.classList.add("visible");
+    });
+
+    if (zoomIndicatorTimeout) clearTimeout(zoomIndicatorTimeout);
+    zoomIndicatorTimeout = setTimeout(
+      () => indicator.classList.remove("visible"),
+      1200,
+    );
+  }
+
+  function setupTauriWindow() {
+    let controls = document.getElementById("tauri-controls-container");
+    if (!controls) {
+      controls = document.createElement("div");
+      controls.id = "tauri-controls-container";
+      controls.className = "tauri-window-controls";
+      controls.innerHTML = `
+        <div class="tauri-window-control-btn minimize" id="tauri-minimize" title="Minimize">
+          <svg viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" stroke-width="1" shape-rendering="crispEdges"/></svg>
+        </div>
+        <div class="tauri-window-control-btn maximize" id="tauri-maximize" title="Maximize">
+          <svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1" shape-rendering="crispEdges"/></svg>
+        </div>
+        <div class="tauri-window-control-btn close" id="tauri-close" title="Close">
+          <svg viewBox="0 0 10 10"><path d="M1.5,1.5 L8.5,8.5 M8.5,1.5 L1.5,8.5" stroke="currentColor" stroke-width="1"/></svg>
+        </div>
+      `;
+      document.documentElement.appendChild(controls);
+      if (window.__TAURI__) {
+        const { getCurrentWindow } = window.__TAURI__.window;
+        const appWindow = getCurrentWindow();
+
+        controls
+          .querySelector("#tauri-minimize")
+          .addEventListener("click", async () => {
+            await appWindow.minimize();
+          });
+
+        controls
+          .querySelector("#tauri-maximize")
+          .addEventListener("click", async () => {
+            const isMaximized = await appWindow.isMaximized();
+            if (isMaximized) {
+              await appWindow.unmaximize();
+            } else {
+              await appWindow.maximize();
+            }
+          });
+
+        controls
+          .querySelector("#tauri-close")
+          .addEventListener("click", async () => {
+            await appWindow.close();
+          });
+      }
+      const style = document.createElement("style");
+      style.id = "tauri-controls-style";
+      style.textContent = `
+        .tauri-window-controls {
+          display: flex !important; position: fixed !important; top: 0 !important; right: 0 !important;
+          z-index: 99999999 !important; -webkit-app-region: no-drag !important;
+          user-select: none !important; background-color: transparent !important; pointer-events: none !important;
+        }
+        .tauri-window-control-btn {
+          display: flex !important; align-items: center !important; justify-content: center !important;
+          width: 46px !important; height: 100% !important; cursor: pointer !important;
+          color: rgba(255,255,255,0.8) !important; background-color: transparent !important;
+          transition: background-color 0.1s, color 0.1s !important;
+          -webkit-app-region: no-drag !important; pointer-events: auto !important;
+        }
+        .tauri-window-control-btn:hover { background-color: rgba(255,255,255,0.1) !important; color: #fff !important; }
+        .tauri-window-control-btn.close:hover { background-color: #e81123 !important; color: #fff !important; }
+        .tauri-window-control-btn svg { width: 10px !important; height: 10px !important; }
+      `;
+      controls.appendChild(style);
+    }
+
+    const topbar = document.querySelector(".topbar");
+    const s = 1 / currentZoom;
+    controls.style.setProperty("transform", `scale(${s})`, "important");
+    controls.style.setProperty("transform-origin", "top right", "important");
+    controls.style.setProperty(
+      "height",
+      `${(topbar ? topbar.getBoundingClientRect().height : 48) * currentZoom}px`,
+      "important",
+    );
+
+    const headerRight = document.querySelector(".header-right");
+    if (headerRight) {
+      headerRight.style.setProperty(
+        "margin-right",
+        `${CONTROLS_WIDTH / currentZoom}px`,
+        "important",
+      );
+    }
+    if (
+      topbar &&
+      topbar.style.marginRight &&
+      topbar.style.marginRight !== "0px"
+    ) {
+      topbar.style.removeProperty("margin-right");
+    }
+    return true;
+  }
+
+  function setupDragRegion() {
+    const topbar = document.querySelector(".topbar");
+    let fallbackDragBar = document.getElementById("tauri-fallback-drag-bar");
+    if (!topbar) {
+      if (!fallbackDragBar) {
+        fallbackDragBar = document.createElement("div");
+        fallbackDragBar.id = "tauri-fallback-drag-bar";
+        fallbackDragBar.setAttribute("data-tauri-drag-region", "");
+        fallbackDragBar.style.cssText = `position: fixed !important; top: 0 !important; left: 0 !important; width: calc(100% - ${CONTROLS_WIDTH}px) !important; height: 48px !important; z-index: 999998 !important; background: transparent !important; pointer-events: auto !important;`;
+        document.documentElement.appendChild(fallbackDragBar);
+      }
+      return;
+    } else {
+      if (fallbackDragBar) fallbackDragBar.remove();
+    }
+    topbar.querySelectorAll("div, span, img, a").forEach((el) => {
+      const isInteractive = el.closest(
+        'input, button, svg, .tauri-window-controls, #account, #search, #notification-center, #download-manager, .header-right, [role="button"], .account-flyout, .context-menu-wrapper',
+      );
+      if (!isInteractive) el.setAttribute("data-tauri-drag-region", "");
+      else el.removeAttribute("data-tauri-drag-region");
+    });
+  }
+
+  // ─── Fullscreen video fix ────────────────────────────────────────────────────
+  // Sorun: video parent'ı height:1032, video position:absolute top:1032px
+  // Fix: fullscreen'de video ve parent'ını force override et,
+  // MutationObserver ile site override etmeye çalışırsa geri yaz.
+
+  let videoFixInterval = null;
+
+  function forceVideoFullscreen() {
+    const v = document.querySelector("video");
+    if (!v) return;
+    const p = v.parentElement;
+    // Parent fix
+    if (p) {
+      p.style.setProperty("height", "100vh", "important");
+      p.style.setProperty("min-height", "100vh", "important");
+      p.style.setProperty("overflow", "visible", "important");
+    }
+    // Video fix
+    v.style.setProperty("position", "absolute", "important");
+    v.style.setProperty("top", "0", "important");
+    v.style.setProperty("left", "0", "important");
+    v.style.setProperty("width", "100%", "important");
+    v.style.setProperty("height", "100%", "important");
+  }
+
+  function clearVideoFullscreen() {
+    const v = document.querySelector("video");
+    if (!v) return;
+    const p = v.parentElement;
+    if (p) {
+      p.style.removeProperty("height");
+      p.style.removeProperty("min-height");
+      p.style.removeProperty("overflow");
+    }
+    v.style.removeProperty("position");
+    v.style.removeProperty("top");
+    v.style.removeProperty("left");
+    v.style.removeProperty("width");
+    v.style.removeProperty("height");
+  }
+
+  let observerStarted = false;
+  function startObserver() {
+    if (observerStarted || !document.body) return;
+    if (window.MutationObserver) {
+      const observer = new MutationObserver(() => {
+        const isFullscreen = !!(
+          document.fullscreenElement || document.webkitFullscreenElement
+        );
+        if (isFullscreen) {
+          // Fullscreen'deyken sadece video fix'i uygula
+          forceVideoFullscreen();
+        } else {
+          applyZoom(getActiveZoom());
+          setupTauriWindow();
+          setupDragRegion();
+        }
+      });
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["style"],
+      });
+      observerStarted = true;
+    }
+  }
+
+  const interval = setInterval(() => {
+    applyZoom(getActiveZoom());
+    if (document.body) {
+      startObserver();
+      if (setupTauriWindow()) {
+        setupDragRegion();
+        clearInterval(interval);
+      }
+    }
+  }, 100);
+
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "F5" || (e.ctrlKey && (e.key === "r" || e.key === "R"))) {
+        e.preventDefault();
+        window.location.reload();
+        return;
+      }
+      if (e.ctrlKey && (e.key === "+" || e.key === "=")) {
+        e.preventDefault();
+        let z = Math.round(Math.min(currentZoom + 0.1, 2.0) * 100) / 100;
+        if (z !== currentZoom) {
+          currentZoom = z;
+          handleZoomChange(currentZoom);
+        }
+        return;
+      }
+      if (e.ctrlKey && e.key === "-") {
+        e.preventDefault();
+        let z = Math.round(Math.max(currentZoom - 0.1, 0.3) * 100) / 100;
+        if (z !== currentZoom) {
+          currentZoom = z;
+          handleZoomChange(currentZoom);
+        }
+        return;
+      }
+      if (e.ctrlKey && e.key === "0") {
+        e.preventDefault();
+        if (currentZoom !== 1.0) {
+          currentZoom = 1.0;
+          handleZoomChange(currentZoom);
+        }
+        return;
+      }
+      if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        window.history.back();
+        return;
+      }
+      if (e.altKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        window.history.forward();
+        return;
+      }
+      if (e.key === "Backspace") {
+        const activeEl = document.activeElement;
+        const isInput =
+          activeEl &&
+          (activeEl.tagName === "INPUT" ||
+            activeEl.tagName === "TEXTAREA" ||
+            activeEl.isContentEditable);
+        if (!isInput) {
+          e.preventDefault();
+          window.history.back();
+        }
+      }
+    },
+    true,
+  );
+
+  window.addEventListener(
+    "mouseup",
+    (e) => {
+      if (e.button === 3) {
+        e.preventDefault();
+        window.history.back();
+      }
+      if (e.button === 4) {
+        e.preventDefault();
+        window.history.forward();
+      }
+    },
+    true,
+  );
+
+  window.addEventListener(
+    "wheel",
+    (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        let z = currentZoom;
+        if (e.deltaY < 0) z = Math.min(z + 0.1, 2.0);
+        else if (e.deltaY > 0) z = Math.max(z - 0.1, 0.3);
+        z = Math.round(z * 100) / 100;
+        if (z !== currentZoom) {
+          currentZoom = z;
+          handleZoomChange(currentZoom);
+        }
+      }
+    },
+    { passive: false, capture: true },
+  );
+
+  const originalWindowOpen = window.open;
+  window.open = function (url, target, features) {
+    if (!url)
+      return originalWindowOpen
+        ? originalWindowOpen(url, target, features)
+        : null;
+    let isInternal = false;
+    try {
+      const parsed = new URL(url, window.location.href);
+      isInternal =
+        parsed.hostname === window.location.hostname ||
+        parsed.hostname.endsWith("openani.me");
+    } catch (e) {
+      isInternal = true;
+    }
+    if (isInternal) {
+      window.location.href = url;
+      return window;
+    }
+    if (window.__TAURI__) {
+      if (window.__TAURI__.opener?.openUrl)
+        window.__TAURI__.opener.openUrl(url).catch(console.error);
+      else if (window.__TAURI__.opener?.open)
+        window.__TAURI__.opener.open(url).catch(console.error);
+      else
+        window.__TAURI__.core
+          .invoke("plugin:opener|open", { value: url })
+          .catch(console.error);
+    } else if (originalWindowOpen) originalWindowOpen(url, target, features);
+    return null;
+  };
+
+  window.addEventListener(
+    "click",
+    (e) => {
+      const anchor = e.target.closest("a");
+      if (anchor && anchor.href) {
+        let isInternal = false;
+        try {
+          const parsed = new URL(anchor.href, window.location.href);
+          isInternal =
+            parsed.hostname === window.location.hostname ||
+            parsed.hostname.endsWith("openani.me");
+        } catch (err) {
+          isInternal = true;
+        }
+
+        const isCtrlClick = e.ctrlKey || e.metaKey;
+
+        if (isCtrlClick) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          if (window.__TAURI__ && window.__TAURI__.core) {
+            window.__TAURI__.core
+              .invoke("open_new_window", { url: anchor.href })
+              .catch(console.error);
+          } else {
+            window.open(anchor.href, "_blank");
+          }
+          return;
+        }
+
+        if (isInternal) {
+          if (anchor.getAttribute("target") === "_blank") {
+            e.preventDefault();
+            window.location.href = anchor.href;
+          }
+        } else {
+          e.preventDefault();
+          const url = anchor.href;
+          if (window.__TAURI__) {
+            if (window.__TAURI__.opener?.openUrl)
+              window.__TAURI__.opener.openUrl(url).catch(console.error);
+            else if (window.__TAURI__.opener?.open)
+              window.__TAURI__.opener.open(url).catch(console.error);
+            else
+              window.__TAURI__.core
+                .invoke("plugin:opener|open", { value: url })
+                .catch(console.error);
+          } else window.open(url, "_blank");
+        }
+      }
+    },
+    true,
+  );
+
+  let wasMaximizedBeforeFullscreen = false;
+
+  async function hideWindow(appWindow) {
+    try {
+      await appWindow.hide();
+    } catch (e) {}
+  }
+
+  async function showWindow(appWindow) {
+    try {
+      await appWindow.show();
+    } catch (e) {}
+  }
+
+// ─── requestFullscreen intercept ─────────────────────────────────────────────
+(function interceptRequestFullscreen() {
+  if (!window.__TAURI__ || !window.__TAURI__.window) return;
+
+  const originalRequestFullscreen = Element.prototype.requestFullscreen;
+  const originalWebkitRequestFullscreen =
+    Element.prototype.webkitRequestFullscreen;
+  const originalExitFullscreen = Document.prototype.exitFullscreen;
+
+  let isEnteringFullscreen = false;
+  let isExitingFullscreen = false;
+
+  async function tauriAwareFullscreen(options) {
+    if (isEnteringFullscreen) return;
+    isEnteringFullscreen = true;
+
+    try {
+      const appWindow = window.__TAURI__.window.getCurrentWindow();
+      const isAlreadyFs = await appWindow.isFullscreen();
+
+      if (!isAlreadyFs) {
+        wasMaximizedBeforeFullscreen = await appWindow.isMaximized();
+
+        if (wasMaximizedBeforeFullscreen) {
+          // Pencereyi gizle → unmaximize → fullscreen → göster
+          // Kullanıcı geçişi görmez
+          await hideWindow(appWindow);
+          await appWindow.unmaximize();
+          await appWindow.setFullscreen(true);
+          await new Promise((r) => setTimeout(r, 50));
+          await showWindow(appWindow);
+        } else {
+          await appWindow.setFullscreen(true);
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+
+      try {
+        await originalRequestFullscreen.call(this, options);
+      } catch (err) {}
+
+    } catch (err) {
+      console.warn("[OpenAnime] Tauri setFullscreen failed:", err);
+      try { await originalRequestFullscreen.call(this, options); } catch (e) {}
+    } finally {
+      isEnteringFullscreen = false;
+    }
+  }
+
+  Element.prototype.requestFullscreen = tauriAwareFullscreen;
+
+  if (originalWebkitRequestFullscreen) {
+    Element.prototype.webkitRequestFullscreen = function (options) {
+      return tauriAwareFullscreen.call(this, options);
+    };
+  }
+
+  Document.prototype.exitFullscreen = async function () {
+    if (isExitingFullscreen) return;
+    isExitingFullscreen = true;
+
+    try {
+      const appWindow = window.__TAURI__.window.getCurrentWindow();
+
+      // Browser fullscreen'den çık
+      try { await originalExitFullscreen.call(this); } catch (err) {}
+
+      const isFs = await appWindow.isFullscreen();
+      if (isFs) {
+        if (wasMaximizedBeforeFullscreen) {
+          // Gizle → fullscreen kapat → maximize → göster
+          await hideWindow(appWindow);
+          await appWindow.setFullscreen(false);
+          await new Promise((r) => setTimeout(r, 300));
+          await appWindow.maximize();
+          await new Promise((r) => setTimeout(r, 50));
+          await showWindow(appWindow);
+          wasMaximizedBeforeFullscreen = false;
+        } else {
+          await appWindow.setFullscreen(false);
+        }
+      } else if (wasMaximizedBeforeFullscreen) {
+        await appWindow.maximize();
+        wasMaximizedBeforeFullscreen = false;
+      }
+
+    } catch (err) {
+    } finally {
+      isExitingFullscreen = false;
+    }
+  };
+})();
+
+async function handleFullscreenChange() {
+  const isFullscreen = !!(
+    document.fullscreenElement || document.webkitFullscreenElement
+  );
+
+  applyZoom(isFullscreen ? 1.0 : currentZoom);
+
+  if (isFullscreen) {
+    forceVideoFullscreen();
+    if (videoFixInterval) clearInterval(videoFixInterval);
+    videoFixInterval = setInterval(forceVideoFullscreen, 100);
+
+    if (window.__TAURI__ && window.__TAURI__.window) {
+      try {
+        const appWindow = window.__TAURI__.window.getCurrentWindow();
+        const isFs = await appWindow.isFullscreen();
+        if (!isFs) {
+          const isMax = await appWindow.isMaximized();
+          if (isMax) {
+            wasMaximizedBeforeFullscreen = true;
+            await hideWindow(appWindow);
+            await appWindow.unmaximize();
+            await appWindow.setFullscreen(true);
+            await new Promise((r) => setTimeout(r, 50));
+            await showWindow(appWindow);
+          } else {
+            wasMaximizedBeforeFullscreen = false;
+            await appWindow.setFullscreen(true);
+          }
+        }
+      } catch (err) {}
+    }
+
+  } else {
+    if (videoFixInterval) {
+      clearInterval(videoFixInterval);
+      videoFixInterval = null;
+    }
+    clearVideoFullscreen();
+
+    if (window.__TAURI__ && window.__TAURI__.window) {
+      try {
+        const appWindow = window.__TAURI__.window.getCurrentWindow();
+        const isFs = await appWindow.isFullscreen();
+        if (isFs) {
+          if (wasMaximizedBeforeFullscreen) {
+            await hideWindow(appWindow);
+            await appWindow.setFullscreen(false);
+            await new Promise((r) => setTimeout(r, 300));
+            await appWindow.maximize();
+            await new Promise((r) => setTimeout(r, 50));
+            await showWindow(appWindow);
+            wasMaximizedBeforeFullscreen = false;
+          } else {
+            await appWindow.setFullscreen(false);
+          }
+        } else if (wasMaximizedBeforeFullscreen) {
+          await appWindow.maximize();
+          wasMaximizedBeforeFullscreen = false;
+        }
+      } catch (err) {}
+    }
+  }
+}
+
+  document.addEventListener("fullscreenchange", handleFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+})();
