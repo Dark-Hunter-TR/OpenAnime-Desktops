@@ -63,6 +63,7 @@ Dileyen resmi uygulamayı, dileyen bu alternatifi, dileyen de tarayıcı üzerin
 | `Ctrl` + `0` | Yakınlaştırmayı sıfırlar (%100) |
 | `Alt` + `Sol Yön Tuşu` / `Backspace` | Geri git |
 | `Alt` + `Sağ Yön Tuşu` | İleri git |
+| `Ctrl` + `Sol Click` | Yeni Pencere Açma
 
 ---
 
