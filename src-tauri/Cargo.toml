@@ -15,10 +15,12 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["native-tls-vendored"] }
 tauri-plugin-opener = "2"
+tauri-plugin-window-state = "2.4.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
 wry = "0.55"
 webview2-com = "0.38"
 windows-core = "0.61"
-tauri-plugin-window-state = "2.4.1"
 
 [profile.release]
 opt-level = 3
@@ -26,4 +28,3 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
-
