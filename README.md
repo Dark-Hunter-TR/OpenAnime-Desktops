@@ -47,7 +47,7 @@ Dileyen resmi uygulamayı, dileyen bu alternatifi, dileyen de tarayıcı üzerin
 *   **Gelişmiş Geri/İleri Navigasyonu:** Fare üzerindeki 4. ve 5. butonlar (Geri/İleri tuşları), `Backspace` tuşu veya `Alt + Sol/Sağ Yön Tuşları` ile tarayıcı geçmişinde kolayca gezinebilirsiniz.
 
 ### 🔍 Dinamik Yakınlaştırma (Dinamik Zoom)
-*   `Ctrl + Sol Click` ile yeni pencere açma, `Ctrl + Fare Tekerleği` veya `Ctrl + +` / `Ctrl + -` kısayollarıyla sayfayı %30 ile %200 arasında yakınlaştırıp uzaklaştırabilirsiniz.
+*   `Ctrl + Sol Click` ile yeni pencere açma, `Ctrl + Fare Tekerleği` veya `Ctrl + +` / `Ctrl + -` kısayollarıyla sayfayı %30 ile %200 arasında yakınlaştırıp uzaklaştırabilirsiniz (ekran boyutunuza göre otomatik sınır eklenilmektedir).
 *   Yakınlaştırma seviyeniz otomatik olarak kaydedilir ve sonraki açılışlarda korunur.
 
 ---
