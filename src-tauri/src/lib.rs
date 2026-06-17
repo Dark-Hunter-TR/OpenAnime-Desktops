@@ -6,6 +6,95 @@ extern "system" {
     fn SetCurrentProcessExplicitAppUserModelID(app_id: *const u16) -> i32;
 }
 
+#[cfg(target_os = "macos")]
+mod gpu_switch_macos {
+    use std::sync::Mutex;
+
+    #[repr(C)]
+    struct CGLPixelFormatObject {
+        _opaque: [u8; 0],
+    }
+    type CGLPixelFormatObj = *mut CGLPixelFormatObject;
+
+    #[repr(C)]
+    struct CGLContextObject {
+        _opaque: [u8; 0],
+    }
+    type CGLContextObj = *mut CGLContextObject;
+
+    type CGLError = i32;
+    type CGLPixelFormatAttribute = i32;
+    type GLint = i32;
+
+    const K_CGL_PFA_NO_RECOVERY: CGLPixelFormatAttribute = 72;
+    const K_CGL_PFA_ACCELERATED: CGLPixelFormatAttribute = 73;
+
+    #[link(name = "OpenGL", kind = "framework")]
+    extern "C" {
+        fn CGLChoosePixelFormat(
+            attribs: *const CGLPixelFormatAttribute,
+            pix: *mut CGLPixelFormatObj,
+            npix: *mut GLint,
+        ) -> CGLError;
+        fn CGLDestroyPixelFormat(pix: CGLPixelFormatObj) -> CGLError;
+        fn CGLCreateContext(
+            pix: CGLPixelFormatObj,
+            share: CGLContextObj,
+            ctx: *mut CGLContextObj,
+        ) -> CGLError;
+        fn CGLDestroyContext(ctx: CGLContextObj) -> CGLError;
+    }
+
+    struct DiscreteGpuHandle {
+        pixel_format: CGLPixelFormatObj,
+        context: CGLContextObj,
+    }
+
+    unsafe impl Send for DiscreteGpuHandle {}
+
+    static ACTIVE_CONTEXT: Mutex<Option<DiscreteGpuHandle>> = Mutex::new(None);
+
+    pub fn activate() -> Result<(), String> {
+        let mut guard = ACTIVE_CONTEXT.lock().map_err(|e| e.to_string())?;
+        if guard.is_some() {
+            return Ok(());
+        }
+        unsafe {
+            let attribs: [CGLPixelFormatAttribute; 3] =
+                [K_CGL_PFA_ACCELERATED, K_CGL_PFA_NO_RECOVERY, 0];
+            let mut pix: CGLPixelFormatObj = std::ptr::null_mut();
+            let mut npix: GLint = 0;
+            let err = CGLChoosePixelFormat(attribs.as_ptr(), &mut pix, &mut npix);
+            if err != 0 || pix.is_null() {
+                return Err(format!("CGLChoosePixelFormat failed: {}", err));
+            }
+            let mut ctx: CGLContextObj = std::ptr::null_mut();
+            let err2 = CGLCreateContext(pix, std::ptr::null_mut(), &mut ctx);
+            if err2 != 0 || ctx.is_null() {
+                CGLDestroyPixelFormat(pix);
+                return Err(format!("CGLCreateContext failed: {}", err2));
+            }
+            *guard = Some(DiscreteGpuHandle {
+                pixel_format: pix,
+                context: ctx,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn deactivate() -> Result<(), String> {
+        let mut guard = ACTIVE_CONTEXT.lock().map_err(|e| e.to_string())?;
+        if let Some(handle) = guard.take() {
+            unsafe {
+                CGLDestroyContext(handle.context);
+                CGLDestroyPixelFormat(handle.pixel_format);
+            }
+        }
+        Ok(())
+    }
+}
+
+
 #[tauri::command]
 async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
     println!("[Tauri] open_new_window invoked with URL: {}", url);
@@ -15,13 +104,13 @@ async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), Strin
         .unwrap_or(0));
 
     #[cfg(target_os = "windows")]
-    let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/0.1.0";
+    let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
     #[cfg(target_os = "linux")]
-    let user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/0.1.0";
+    let user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
     #[cfg(target_os = "macos")]
-    let user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/0.1.0";
+    let user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    let user_agent = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/0.1.0";
+    let user_agent = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
 
     let win_builder = WebviewWindowBuilder::new(
         &app,
@@ -40,13 +129,34 @@ async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), Strin
     .zoom_hotkeys_enabled(true)
     .user_agent(user_agent);
 
+    // OpenAnime modülleri - tek IIFE içinde birleştiriliyor (shared scope = .bak mantığı)
+    // concat!() kullanıyoruz çünkü format!() JS'deki {} karakterlerini bozuyor
+    let win_builder = win_builder
+        .initialization_script(concat!(
+            "(function () {\nif (window.self !== window.top) return;\n",
+            include_str!("js/modules/tauri-bridge.js"),
+            "\n",
+            include_str!("js/modules/webgpu-patcher.js"),
+            "\n",
+            include_str!("js/modules/performance-css.js"),
+            "\n",
+            include_str!("js/modules/zoom-manager.js"),
+            "\n",
+            include_str!("js/modules/window-controls.js"),
+            "\n",
+            include_str!("js/modules/keyboard-shortcuts.js"),
+            "\n",
+            include_str!("js/modules/link-interceptor.js"),
+            "\n",
+            include_str!("js/modules/fullscreen-manager.js"),
+            "\n",
+            include_str!("js/init.js"),
+            "\n})();"
+        ));
+
     #[cfg(target_os = "windows")]
     let win_builder = win_builder
-        .initialization_script(include_str!("init.js"))
-        .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=ParallelDownloading --enable-quic --enable-fast-unload --js-flags=\"--max-old-space-size=512 --optimize-for-size\"");
-
-    #[cfg(not(target_os = "windows"))]
-    let win_builder = win_builder.initialization_script(include_str!("init.js"));
+        .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=ParallelDownloading --enable-quic --enable-fast-unload --js-flags=\"--max-old-space-size=512 --optimize-for-size\" --force-gpu-selection=high-performance --force_high_performance_gpu");
 
     match win_builder.build() {
         Ok(_) => {
@@ -61,10 +171,33 @@ async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), Strin
     }
 }
 
+#[cfg(target_os = "windows")]
+fn setup_windows_gpu_preference() {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_str) = exe_path.to_str() {
+            println!("[Tauri] Setting DirectX GpuPreference to High Performance for: {}", exe_str);
+            let _ = std::process::Command::new("reg")
+                .args(&[
+                    "add",
+                    "HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences",
+                    "/v",
+                    exe_str,
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    "GpuPreference=2;",
+                    "/f",
+                ])
+                .output();
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
     {
+        setup_windows_gpu_preference();
         let app_id = "com.darkhunter.openanime-desktops";
         let wide_id: Vec<u16> = app_id.encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
@@ -76,13 +209,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             #[cfg(target_os = "windows")]
-            let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/0.1.0";
+            let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
             #[cfg(target_os = "linux")]
-            let user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/0.1.0";
+            let user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
             #[cfg(target_os = "macos")]
-            let user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/0.1.0";
+            let user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
             #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-            let user_agent = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/0.1.0";
+            let user_agent = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
 
             let win_builder = WebviewWindowBuilder::new(
                 app, 
@@ -97,13 +230,34 @@ pub fn run() {
             .zoom_hotkeys_enabled(true)
             .user_agent(user_agent);
 
+            // OpenAnime modülleri - tek IIFE içinde birleştiriliyor (shared scope = .bak mantığı)
+            // concat!() kullanıyoruz çünkü format!() JS'deki {} karakterlerini bozuyor
+            let win_builder = win_builder
+                .initialization_script(concat!(
+                    "(function () {\nif (window.self !== window.top) return;\n",
+                    include_str!("js/modules/tauri-bridge.js"),
+                    "\n",
+                    include_str!("js/modules/webgpu-patcher.js"),
+                    "\n",
+                    include_str!("js/modules/performance-css.js"),
+                    "\n",
+                    include_str!("js/modules/zoom-manager.js"),
+                    "\n",
+                    include_str!("js/modules/window-controls.js"),
+                    "\n",
+                    include_str!("js/modules/keyboard-shortcuts.js"),
+                    "\n",
+                    include_str!("js/modules/link-interceptor.js"),
+                    "\n",
+                    include_str!("js/modules/fullscreen-manager.js"),
+                    "\n",
+                    include_str!("js/init.js"),
+                    "\n})();"
+                ));
+
             #[cfg(target_os = "windows")]
             let win_builder = win_builder
-                .initialization_script(include_str!("init.js"))
-                .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=ParallelDownloading --enable-quic --enable-fast-unload --js-flags=\"--max-old-space-size=512 --optimize-for-size\"");
-
-            #[cfg(not(target_os = "windows"))]
-            let win_builder = win_builder.initialization_script(include_str!("init.js"));
+                .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=ParallelDownloading --enable-quic --enable-fast-unload --js-flags=\"--max-old-space-size=512 --optimize-for-size\" --force-gpu-selection=high-performance --force_high_performance_gpu");
 
             win_builder.build()?;
             Ok(())
@@ -144,7 +298,9 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![open_new_window])
+        .invoke_handler(tauri::generate_handler![
+            open_new_window
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}// trigger rebuild
+}

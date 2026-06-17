@@ -2356,7 +2356,7 @@ dependencies = [
 
 [[package]]
 name = "openanime"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "tauri",
  "tauri-build",
@@ -2364,7 +2364,6 @@ dependencies = [
  "tauri-plugin-window-state",
  "webview2-com",
  "windows-core 0.61.2",
- "wry",
 ]
 
 [[package]]

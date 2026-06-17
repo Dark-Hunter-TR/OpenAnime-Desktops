@@ -1,7 +1,6 @@
 (function () {
   if (window.self !== window.top) return;
-
-  // --- Tauri API Polyfill for Remote Origin ---
+  
   if (!window.__TAURI__) {
     const tauriInvoke = function (cmd, args = {}) {
       return new Promise((resolve, reject) => {
@@ -65,7 +64,6 @@
       }
     };
   }
-  // -------------------------------------------
 
   try {
     if (navigator.gpu && typeof navigator.gpu.requestAdapter === "function") {
@@ -84,6 +82,104 @@
       };
     }
   } catch (gpuError) {}
+
+  let dummyCanvas = null;
+  let dummyGL = null;
+  let activeGPUDevice = null;
+  let isGPUActive = false;
+
+  function activateHighPerformanceGPU() {
+    if (dummyGL || activeGPUDevice) return;
+    if (!document.body) return;
+    try {
+      dummyCanvas = document.createElement("canvas");
+      dummyCanvas.id = "openanime-gpu-trigger";
+      dummyCanvas.width = 1;
+      dummyCanvas.height = 1;
+      dummyCanvas.style.cssText =
+        "position: absolute !important; top: -9999px !important; left: -9999px !important; width: 1px !important; height: 1px !important; opacity: 0 !important; pointer-events: none !important; z-index: -99999 !important;";
+      document.body.appendChild(dummyCanvas);
+      dummyGL =
+        dummyCanvas.getContext("webgl2", {
+          powerPreference: "high-performance",
+          failIfMajorPerformanceCaveat: false,
+        }) ||
+        dummyCanvas.getContext("webgl", {
+          powerPreference: "high-performance",
+          failIfMajorPerformanceCaveat: false,
+        });
+      if (dummyGL) {
+        dummyGL.clearColor(0, 0, 0, 0);
+        dummyGL.clear(dummyGL.COLOR_BUFFER_BIT);
+      }
+    } catch (e) {}
+
+    if (navigator.gpu && typeof navigator.gpu.requestAdapter === "function") {
+      navigator.gpu
+        .requestAdapter({ powerPreference: "high-performance" })
+        .then((adapter) => {
+          if (adapter) {
+            adapter
+              .requestDevice()
+              .then((device) => {
+                activeGPUDevice = device;
+              })
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+
+    if (window.__TAURI__ && window.__TAURI__.core) {
+      window.__TAURI__.core.invoke("activate_discrete_gpu").catch(() => {});
+    }
+  }
+
+  function deactivateHighPerformanceGPU() {
+    if (window.__TAURI__ && window.__TAURI__.core) {
+      window.__TAURI__.core.invoke("deactivate_discrete_gpu").catch(() => {});
+    }
+    if (activeGPUDevice) {
+      try {
+        activeGPUDevice.destroy();
+      } catch (e) {}
+      activeGPUDevice = null;
+    }
+    if (dummyGL) {
+      const ext = dummyGL.getExtension("WEBGL_lose_context");
+      if (ext) ext.loseContext();
+      dummyGL = null;
+    }
+    if (dummyCanvas) {
+      try {
+        dummyCanvas.remove();
+      } catch (e) {}
+      dummyCanvas = null;
+    }
+  }
+
+  function monitorGPUState() {
+    setInterval(() => {
+      try {
+        const isPlayerActive =
+          window.location.href.includes("/anime") ||
+          document.querySelector("video") !== null;
+        if (isPlayerActive && !isGPUActive) {
+          activateHighPerformanceGPU();
+          isGPUActive = true;
+        } else if (!isPlayerActive && isGPUActive) {
+          deactivateHighPerformanceGPU();
+          isGPUActive = false;
+        }
+      } catch (e) {}
+    }, 1000);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", monitorGPUState);
+  } else {
+    monitorGPUState();
+  }
 
   function injectPerformanceCSS() {
     try {
@@ -250,7 +346,6 @@
       indicator.appendChild(style);
     }
 
-    // Adjust layout dimensions dynamically based on zoom percentage (level) to counteract the native zoom
     const invZoom = 1 / zoom;
     indicator.style.setProperty("bottom", `${50 * invZoom}px`, "important");
     indicator.style.setProperty("width", `${80 * invZoom}px`, "important");
@@ -266,7 +361,6 @@
       document.createTextNode(Math.round(zoom * 100) + "%"),
     );
 
-    // Fade in only after the transform is applied in the DOM
     requestAnimationFrame(() => {
       indicator.classList.add("visible");
     });
@@ -397,24 +491,17 @@
     });
   }
 
-  // ─── Fullscreen video fix ────────────────────────────────────────────────────
-  // Sorun: video parent'ı height:1032, video position:absolute top:1032px
-  // Fix: fullscreen'de video ve parent'ını force override et,
-  // MutationObserver ile site override etmeye çalışırsa geri yaz.
-
   let videoFixInterval = null;
 
   function forceVideoFullscreen() {
     const v = document.querySelector("video");
     if (!v) return;
     const p = v.parentElement;
-    // Parent fix
     if (p) {
       p.style.setProperty("height", "100vh", "important");
       p.style.setProperty("min-height", "100vh", "important");
       p.style.setProperty("overflow", "visible", "important");
     }
-    // Video fix
     v.style.setProperty("position", "absolute", "important");
     v.style.setProperty("top", "0", "important");
     v.style.setProperty("left", "0", "important");
@@ -669,7 +756,7 @@
     } catch (e) {}
   }
 
-// ─── requestFullscreen intercept ─────────────────────────────────────────────
+
 (function interceptRequestFullscreen() {
   if (!window.__TAURI__ || !window.__TAURI__.window) return;
 
@@ -693,8 +780,6 @@
         wasMaximizedBeforeFullscreen = await appWindow.isMaximized();
 
         if (wasMaximizedBeforeFullscreen) {
-          // Pencereyi gizle → unmaximize → fullscreen → göster
-          // Kullanıcı geçişi görmez
           await hideWindow(appWindow);
           await appWindow.unmaximize();
           await appWindow.setFullscreen(true);
@@ -733,13 +818,11 @@
     try {
       const appWindow = window.__TAURI__.window.getCurrentWindow();
 
-      // Browser fullscreen'den çık
       try { await originalExitFullscreen.call(this); } catch (err) {}
 
       const isFs = await appWindow.isFullscreen();
       if (isFs) {
         if (wasMaximizedBeforeFullscreen) {
-          // Gizle → fullscreen kapat → maximize → göster
           await hideWindow(appWindow);
           await appWindow.setFullscreen(false);
           await new Promise((r) => setTimeout(r, 300));
