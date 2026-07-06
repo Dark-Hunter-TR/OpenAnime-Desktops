@@ -134,6 +134,11 @@ Uygulamayı üzerinde çalıştığınız yerel sistem için derlemek isterseniz
 
 ## 🐧 Linux Kurulum
 
+> ⚠️ **Beta Sürüm Uyarısı:** Linux desteği yeni eklenmiştir ve **beta** aşamasındadır. 
+> Dağıtıma/masaüstü ortamına göre beklenmedik hatalar, eksik özellikler veya kararsızlıklar 
+> yaşanabilir. Karşılaştığınız sorunları OpenAnime Discord sunucusu üzerinden **#destek** 
+> kanalına yazarak veya doğrudan DM atarak bildirebilirsiniz.
+
 ### AppImage (Tüm Dağıtımlar — Önerilen)
 1. [Releases](https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases) sayfasından `.AppImage` dosyasını indirin
 2. Çalıştırılabilir yapın:
