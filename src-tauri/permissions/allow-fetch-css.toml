@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-fetch-css"
+description = "Allows the frontend to invoke the fetch_css command"
+
+[permission.commands]
+allow = [
+    "fetch_css"
+]

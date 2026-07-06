@@ -1,0 +1,37 @@
+.tauri-window-controls {
+  display: flex !important;
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  height: 48px !important;
+  z-index: 99999999 !important;
+  -webkit-app-region: no-drag !important;
+  user-select: none !important;
+  background-color: transparent !important;
+  pointer-events: none !important;
+}
+.tauri-window-control-btn {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 46px !important;
+  height: 48px !important;
+  cursor: pointer !important;
+  color: rgba(255,255,255,0.8) !important;
+  background-color: transparent !important;
+  transition: background-color 0.1s, color 0.1s !important;
+  -webkit-app-region: no-drag !important;
+  pointer-events: auto !important;
+}
+.tauri-window-control-btn:hover {
+  background-color: rgba(255,255,255,0.1) !important;
+  color: #fff !important;
+}
+.tauri-window-control-btn.close:hover {
+  background-color: #e81123 !important;
+  color: #fff !important;
+}
+.tauri-window-control-btn svg {
+  width: 10px !important;
+  height: 10px !important;
+}

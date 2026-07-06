@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-theme-builder"
+description = "Tema oluşturucu Svelte penceresini açma komutuna izin verir"
+
+[permission.commands]
+allow = [
+    "open_theme_builder"
+]

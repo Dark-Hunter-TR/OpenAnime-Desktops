@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-open-theme-window"
+description = "Allows invoking the open_theme_window command"
+
+[permission.commands]
+allow = [
+  "open_theme_window"
+]

@@ -2,8 +2,12 @@
 // MutationObserver ve setup interval orchestration
 // NOT: Tüm fonksiyonlar (setupTauriWindow, setupDragRegion, applyZoom, getActiveZoom)
 // lib.rs'deki tek IIFE wrapper sayesinde shared scope'ta mevcuttur.
+
 {
   var observerStarted = false;
+
+
+
   function startObserver() {
     if (observerStarted || !document.body) return;
     if (window.MutationObserver) {
@@ -12,7 +16,6 @@
           document.fullscreenElement || document.webkitFullscreenElement
         );
         if (isFullscreen) {
-          // Fullscreen'deyken sadece video fix'i uygula
           if (typeof forceVideoFullscreen === "function") forceVideoFullscreen();
         } else {
           applyZoom(getActiveZoom());
@@ -37,7 +40,14 @@
       if (setupTauriWindow()) {
         setupDragRegion();
         clearInterval(interval);
+        try {
+          if (window.parent && typeof window.parent.postMessage === "function") {
+            window.parent.postMessage({ type: "openanime-ready" }, "*");
+          }
+        } catch (e) {}
       }
     }
   }, 100);
+
+
 }

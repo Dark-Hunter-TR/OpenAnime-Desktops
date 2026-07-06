@@ -1,5 +1,6 @@
 // === OpenAnime - WebGPU Patcher Module ===
 // Harici oynatıcı komut dosyalarındaki WebGPU düzen uyuşmazlıklarını düzeltir
+
 {
   function patchDevice(device) {
     if (!device || device.__patched) return;
@@ -51,6 +52,8 @@
         patchAdapter(adapter);
         return adapter;
       };
+    } else {
+      console.log('[WebGPU Patcher] WebGPU not available — skipping.');
     }
   } catch (e) {}
 

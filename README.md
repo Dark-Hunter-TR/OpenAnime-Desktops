@@ -1,16 +1,17 @@
-# ⚡ OpenAnime Desktop (Windows & macOS)
+# ⚡ OpenAnime Desktop (Windows, macOS & Linux)
 
 <p align="center">
   <img src="src-tauri/icons/icon.png" alt="OpenAnime Logo" width="128" height="128" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(255, 152, 0, 0.25);" />
 </p>
 
 <p align="center">
-  Tauri v2, Rust ve Svelte v5 ile geliştirilmiş; hem <b>Windows</b> hem de <b>macOS</b> işletim sistemlerinde çalışan ultra hafif, yüksek performanslı ve WebGPU optimize edilmiş modern OpenAnime masaüstü uygulaması.
+  Tauri v2, Rust ve Svelte v5 ile geliştirilmiş; <b>Windows</b>, <b>macOS</b> ve <b>Linux</b> işletim sistemlerinde çalışan ultra hafif, yüksek performanslı ve WebGPU optimize edilmiş modern OpenAnime masaüstü uygulaması.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Windows-Supported-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Badge" />
   <img src="https://img.shields.io/badge/macOS-Supported-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS Badge" />
+  <img src="https://img.shields.io/badge/Linux-Supported-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux Badge" />
   <img src="https://img.shields.io/badge/Tauri-v2-FFC107?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri Badge" />
   <img src="https://img.shields.io/badge/Rust-Stable-black?style=for-the-badge&logo=rust&logoColor=white" alt="Rust Badge" />
   <img src="https://img.shields.io/badge/Svelte-v5-FF3E00?style=for-the-badge&logo=svelte&logoColor=white" alt="Svelte Badge" />
@@ -47,7 +48,7 @@ Dileyen resmi uygulamayı, dileyen bu alternatifi, dileyen de tarayıcı üzerin
 *   **Gelişmiş Geri/İleri Navigasyonu:** Fare üzerindeki 4. ve 5. butonlar (Geri/İleri tuşları), `Backspace` tuşu veya `Alt + Sol/Sağ Yön Tuşları` ile tarayıcı geçmişinde kolayca gezinebilirsiniz.
 
 ### 🔍 Dinamik Yakınlaştırma (Dinamik Zoom)
-*   `Ctrl + Sol Click` ile yeni pencere açma, `Ctrl + Fare Tekerleği` veya `Ctrl + +` / `Ctrl + -` kısayollarıyla sayfayı %30 ile %200 arasında yakınlaştırıp uzaklaştırabilirsiniz (ekran boyutunuza göre otomatik sınır eklenilmektedir).
+*   `Ctrl + Sol Click` ile yeni pencere açma, `Ctrl + Fare Tekerleği` veya `Ctrl + +` / `Ctrl + -` kısayollarıyla sayfayı %30 ile %200 arasında yakınlaştırıp uzaklaştırabilirsiniz.
 *   Yakınlaştırma seviyeniz otomatik olarak kaydedilir ve sonraki açılışlarda korunur.
 
 ---
@@ -109,20 +110,69 @@ Uygulamayı üzerinde çalıştığınız yerel sistem için derlemek isterseniz
   ```
   *(Çıktı olarak `.dmg` veya `.app` oluşturur)*
 
+* **Linux Üzerinde (Yerel Derleme):**
+
+  **Debian/Ubuntu:**
+  ```bash
+  sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+    libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly gstreamer1.0-libav
+  bun run tauri build
+  ```
+
+  **Arch Linux:**
+  ```bash
+  sudo pacman -S webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg \
+    gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
+    gst-plugins-ugly gst-libav base-devel xdotool
+  bun run tauri build
+  ```
+
+---
+
+## 🐧 Linux Kurulum
+
+### AppImage (Tüm Dağıtımlar — Önerilen)
+1. [Releases](https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases) sayfasından `.AppImage` dosyasını indirin
+2. Çalıştırılabilir yapın:
+   ```bash
+   chmod +x OpenAnime_*.AppImage
+   ./OpenAnime_*.AppImage
+   ```
+
+> **Not:** AppImage bazı dağıtımlarda ek bağımlılık gerektirebilir:
+> - **Ubuntu 22.04+:** `sudo apt install libfuse2`
+> - **Arch:** `fuse2` paketi (genelde base'de mevcut)
+
+3. Streaming video oynatma için GStreamer codec'lerinin kurulu olduğunu doğrulayın.
+
+### Arch Linux (AUR)
+```bash
+yay -S openanime-desktops
+```
+
+### Debian/Ubuntu (.deb)
+```bash
+sudo dpkg -i openanime_*.deb
+sudo apt install -f  # eksik bağımlılıkları çözer
+```
+
 ---
 
 ## ☁️ CI/CD Otomatik Bulut Derleme (Önerilen Yöntem)
 
-Eğer yerel olarak macOS sisteminiz yoksa veya paketleme işlemleriyle uğraşmak istemiyorsanız, projede tanımlı olan **GitHub Actions** iş akışını kullanabilirsiniz. Bu, macOS paketlerini derlemenin en pratik ve standart yoludur.
+Eğer yerel olarak macOS/Linux sisteminiz yoksa veya paketleme işlemleriyle uğraşmak istemiyorsanız, projede tanımlı olan **GitHub Actions** iş akışını kullanabilirsiniz. Bu, paketleri derlemenin en pratik ve standart yoludur.
 
-Sürüm etiketi (Tag) oluşturup GitHub'a gönderdiğinizde, GitHub bulut sunucuları (macOS ve Windows runner'lar) sizin yerinize paketleri otomatik derler:
+Sürüm etiketi (Tag) oluşturup GitHub'a gönderdiğinizde, GitHub bulut sunucuları (macOS, Windows ve Linux runner'lar) sizin yerinize paketleri otomatik derler:
 
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Derleme bittiğinde, GitHub deponuzun **Releases** sekmesinde Windows (`.exe` / `.msi`) ve macOS (`.dmg` / `.app`) kurulum dosyaları otomatik olarak yayınlanıp indirilmeye hazır hale gelir.
+Derleme bittiğinde, GitHub deponuzun **Releases** sekmesinde Windows (`.exe` / `.msi`), macOS (`.dmg` / `.app`) ve Linux (`.AppImage` / `.deb` / `.rpm`) kurulum dosyaları otomatik olarak yayınlanıp indirilmeye hazır hale gelir.
 
 ---
 

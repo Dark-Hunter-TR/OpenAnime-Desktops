@@ -20,64 +20,49 @@
         </div>
       `;
       document.documentElement.appendChild(controls);
+
       if (window.__TAURI__) {
         const { getCurrentWindow } = window.__TAURI__.window;
         const appWindow = getCurrentWindow();
 
-        controls
-          .querySelector("#tauri-minimize")
-          .addEventListener("click", async () => {
-            await appWindow.minimize();
-          });
+        controls.querySelector("#tauri-minimize").addEventListener("click", async () => {
+          await appWindow.minimize();
+        });
 
-        controls
-          .querySelector("#tauri-maximize")
-          .addEventListener("click", async () => {
-            const isMaximized = await appWindow.isMaximized();
-            if (isMaximized) {
-              await appWindow.unmaximize();
-            } else {
-              await appWindow.maximize();
-            }
-          });
+        controls.querySelector("#tauri-maximize").addEventListener("click", async () => {
+          const isMaximized = await appWindow.isMaximized();
+          if (isMaximized) {
+            await appWindow.unmaximize();
+          } else {
+            await appWindow.maximize();
+          }
+        });
 
-        controls
-          .querySelector("#tauri-close")
-          .addEventListener("click", async () => {
-            await appWindow.close();
-          });
+        controls.querySelector("#tauri-close").addEventListener("click", async () => {
+          await appWindow.close();
+        });
       }
+
       const style = document.createElement("style");
       style.id = "tauri-controls-style";
-      style.textContent = `
-        .tauri-window-controls {
-          display: flex !important; position: fixed !important; top: 0 !important; right: 0 !important;
-          z-index: 99999999 !important; -webkit-app-region: no-drag !important;
-          user-select: none !important; background-color: transparent !important; pointer-events: none !important;
-        }
-        .tauri-window-control-btn {
-          display: flex !important; align-items: center !important; justify-content: center !important;
-          width: 46px !important; height: 100% !important; cursor: pointer !important;
-          color: rgba(255,255,255,0.8) !important; background-color: transparent !important;
-          transition: background-color 0.1s, color 0.1s !important;
-          -webkit-app-region: no-drag !important; pointer-events: auto !important;
-        }
-        .tauri-window-control-btn:hover { background-color: rgba(255,255,255,0.1) !important; color: #fff !important; }
-        .tauri-window-control-btn.close:hover { background-color: #e81123 !important; color: #fff !important; }
-        .tauri-window-control-btn svg { width: 10px !important; height: 10px !important; }
-      `;
+      style.textContent = WINDOW_CONTROLS_CSS;
       controls.appendChild(style);
     }
-
+    
     const topbar = document.querySelector(".topbar");
     const s = 1 / currentZoom;
+    const topbarH = (topbar && topbar.getBoundingClientRect().height > 0)
+      ? topbar.getBoundingClientRect().height
+      : 48;
+    const displayH = `${topbarH * currentZoom}px`;
+
     controls.style.setProperty("transform", `scale(${s})`, "important");
     controls.style.setProperty("transform-origin", "top right", "important");
-    controls.style.setProperty(
-      "height",
-      `${(topbar ? topbar.getBoundingClientRect().height : 48) * currentZoom}px`,
-      "important",
-    );
+    controls.style.setProperty("height", displayH, "important");
+
+    controls.querySelectorAll(".tauri-window-control-btn").forEach(btn => {
+      btn.style.setProperty("height", displayH, "important");
+    });
 
     const headerRight = document.querySelector(".header-right");
     if (headerRight) {
@@ -87,11 +72,7 @@
         "important",
       );
     }
-    if (
-      topbar &&
-      topbar.style.marginRight &&
-      topbar.style.marginRight !== "0px"
-    ) {
+    if (topbar && topbar.style.marginRight && topbar.style.marginRight !== "0px") {
       topbar.style.removeProperty("margin-right");
     }
     return true;

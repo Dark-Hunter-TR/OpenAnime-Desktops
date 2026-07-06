@@ -1,10 +1,10 @@
 // === OpenAnime - Zoom Manager Module ===
 // currentZoom doğrudan paylaşılan değişken (shared closure scope)
 // NOT: var kullanıyoruz - let/const block-scoped olur, var function-scoped (tüm IIFE'ye yayılır)
+
 {
   var CONTROLS_WIDTH = 138;
 
-  // openani.me'nin rahat çalıştığı minimum layout genişliği
   var MIN_SITE_WIDTH = 1024;
 
   // Ekran genişliğine göre dinamik max zoom:
@@ -13,7 +13,6 @@
   var curScreenW  = window.screen.width;
   var curScreenH  = window.screen.height;
   var curDPR      = window.devicePixelRatio || 1;
-  // Fiziksel değil, efektif (CSS) piksel genişliğini kullan
   var effectiveScreenW = curScreenW / curDPR;
   var maxZoom = Math.min(2.0, Math.floor((effectiveScreenW / MIN_SITE_WIDTH) * 10) / 10);
   var minZoom = 0.5;
@@ -35,7 +34,6 @@
         );
 
         if (screenChanged) {
-          // Farklı ekranda açıldı → zoom'u 1.0'a sıfırla
           currentZoom = 1.0;
           try {
             localStorage.setItem("tauri-zoom-level", "1");
@@ -44,13 +42,10 @@
             localStorage.setItem("tauri-zoom-dpr", curDPR.toString());
           } catch (e) {}
         } else {
-          // Aynı ekran — max zoom ile sınırla (büyük ekranda kaydedilen değer küçükte aşabilir)
           currentZoom = Math.min(parsedZoom, maxZoom);
           if (currentZoom !== parsedZoom) {
-            // Değer clamplanmışsa kaydet
             try { localStorage.setItem("tauri-zoom-level", currentZoom.toString()); } catch(e) {}
           }
-          // Ekran bilgisini kaydet (daha önce kaydedilmemişse)
           if (!savedScreenW) {
             try {
               localStorage.setItem("tauri-zoom-screen-w", curScreenW.toString());
@@ -71,7 +66,6 @@
     return isFullscreen ? 1.0 : currentZoom;
   }
 
-  // İlk zoom uygulaması
   if (
     window.__TAURI__ &&
     window.__TAURI__.webview &&
@@ -83,7 +77,6 @@
     }
   }
 
-  // Window maximize state restore
   if (window.__TAURI__) {
     try {
       const appWindow = window.__TAURI__.window.getCurrentWindow();
@@ -165,13 +158,11 @@
 
     applyZoom(newZoom, true);
 
-    // Controls scale'ini hemen güncelle — MutationObserver'a bırakma
     setupTauriWindow();
     setupDragRegion();
 
     try {
       localStorage.setItem("tauri-zoom-level", newZoom.toString());
-      // Ekran bilgisini de kaydet — farklı monitörde açılınca adaptasyon için
       localStorage.setItem("tauri-zoom-screen-w", window.screen.width.toString());
       localStorage.setItem("tauri-zoom-screen-h", window.screen.height.toString());
       localStorage.setItem("tauri-zoom-dpr", (window.devicePixelRatio || 1).toString());
@@ -186,23 +177,7 @@
       indicator.id = "tauri-zoom-indicator";
       const style = document.createElement("style");
       style.id = "tauri-zoom-indicator-style";
-      style.textContent = `
-        #tauri-zoom-indicator {
-          position: fixed !important; left: 50% !important;
-          z-index: 999999999 !important;
-          background-color: rgba(0,0,0,0.6) !important; backdrop-filter: blur(8px) !important;
-          border-style: solid !important; border-color: rgba(255,255,255,0.2) !important;
-          color: #fff !important;
-          display: flex !important; align-items: center !important; justify-content: center !important;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-          font-weight: 600 !important;
-          line-height: 1 !important;
-          user-select: none !important; pointer-events: none !important;
-          opacity: 0 !important; transition: opacity 0.15s ease-in-out !important;
-          transform: translateX(-50%) !important;
-        }
-        #tauri-zoom-indicator.visible { opacity: 1 !important; }
-      `;
+      style.textContent = ZOOM_MANAGER_CSS;
       document.documentElement.appendChild(indicator);
       indicator.appendChild(style);
     }

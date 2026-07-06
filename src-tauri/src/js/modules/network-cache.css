@@ -1,0 +1,78 @@
+#openanime-api-status-indicator {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(18, 12, 12, 0.92);
+  padding: 7px 14px 7px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(237, 66, 69, 0.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  color: #ff5c5c;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: default;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.45), 0 0 0 0.5px rgba(237,66,69,0.2);
+  transition: opacity 0.35s ease, transform 0.35s ease, bottom 0.35s ease;
+  transform: translateY(0);
+  opacity: 1;
+  user-select: none;
+}
+#openanime-api-status-indicator.oa-hidden {
+  opacity: 0;
+  transform: translateY(8px);
+}
+#openanime-api-status-indicator:hover .api-status-tooltip {
+  opacity: 1;
+  transform: translateY(0) translateX(0);
+  pointer-events: auto;
+}
+.api-status-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  background-color: #ff4a4a;
+  border-radius: 50%;
+  box-shadow: 0 0 6px #ff4a4a;
+  animation: api-pulse-sw 1.6s ease-in-out infinite;
+}
+.api-status-label {
+  white-space: nowrap;
+}
+.api-status-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: rgba(12, 8, 8, 0.97);
+  border: 1px solid rgba(237, 66, 69, 0.35);
+  border-radius: 8px;
+  padding: 7px 11px;
+  font-size: 11px;
+  font-weight: 400;
+  color: rgba(255,255,255,0.75);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  min-width: 180px;
+}
+.api-status-tooltip strong {
+  display: block;
+  color: #ff5c5c;
+  font-weight: 600;
+  margin-bottom: 2px;
+  font-size: 11.5px;
+}
+@keyframes api-pulse-sw {
+  0%   { transform: scale(0.9);  box-shadow: 0 0 0 0   rgba(255,74,74,0.7); }
+  60%  { transform: scale(1.05); box-shadow: 0 0 0 5px rgba(255,74,74,0);   }
+  100% { transform: scale(0.9);  box-shadow: 0 0 0 0   rgba(255,74,74,0);   }
+}

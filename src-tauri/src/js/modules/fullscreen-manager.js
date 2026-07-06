@@ -1,6 +1,7 @@
 // === OpenAnime - Fullscreen Manager Module ===
 // Fullscreen intercept, video fix, fullscreenchange handler
 // NOT: applyZoom, currentZoom, setupTauriWindow, setupDragRegion shared scope'tan gelir
+
 {
   var videoFixInterval = null;
   var wasMaximizedBeforeFullscreen = false;
@@ -44,8 +45,7 @@
   async function showWindow(appWindow) {
     try { await appWindow.show(); } catch (e) {}
   }
-
-  // Fullscreen intercept
+  
   if (window.__TAURI__ && window.__TAURI__.window) {
     const originalRequestFullscreen = Element.prototype.requestFullscreen;
     const originalWebkitRequestFullscreen = Element.prototype.webkitRequestFullscreen;
@@ -126,8 +126,7 @@
       }
     };
   }
-
-  // Fullscreen change handler
+  
   async function handleFullscreenChange() {
     const isFullscreen = !!(
       document.fullscreenElement || document.webkitFullscreenElement

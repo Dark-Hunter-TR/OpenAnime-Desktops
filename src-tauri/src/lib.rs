@@ -1,5 +1,8 @@
 use tauri::{WebviewWindowBuilder, WebviewUrl, Manager};
 
+#[allow(non_snake_case)]
+mod discordRPC;
+
 #[cfg(target_os = "windows")]
 #[link(name = "shell32")]
 extern "system" {
@@ -94,32 +97,113 @@ mod gpu_switch_macos {
     }
 }
 
+const COMMON_INIT_SCRIPT: &str = concat!(
+    "(function () {\nif (window.self !== window.top) {\n  let isBuilder = false;\n  try {\n    isBuilder = window.location.search.includes(\"theme_builder=true\") || sessionStorage.getItem(\"theme_builder_active\") === \"true\";\n  } catch (e) {}\n  if (!isBuilder) return;\n}\n",
+    include_str!("js/modules/tauri-bridge.js"),
+    "\n",
+    "{\nconst NETWORK_CACHE_CSS = String.raw`",
+    include_str!("js/modules/network-cache.css"),
+    "`;\n",
+    include_str!("js/modules/network-cache.js"),
+    "}\n",
+    include_str!("js/modules/webgpu-patcher.js"),
+    "\n",
 
-#[tauri::command]
-async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    println!("[Tauri] open_new_window invoked with URL: {}", url);
-    let label = format!("win_{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0));
+    "{\nconst ZOOM_MANAGER_CSS = String.raw`",
+    include_str!("js/modules/zoom-manager.css"),
+    "`;\n",
+    include_str!("js/modules/zoom-manager.js"),
+    "}\n",
+    "{\nconst WINDOW_CONTROLS_CSS = String.raw`",
+    include_str!("js/modules/window-controls.css"),
+    "`;\n",
+    include_str!("js/modules/window-controls.js"),
+    "}\n",
+    include_str!("js/modules/keyboard-shortcuts.js"),
+    "\n",
+    include_str!("js/modules/link-interceptor.js"),
+    "\n",
+    include_str!("js/modules/fullscreen-manager.js"),
+    "\n",
+    "{\n",
+    include_str!("js/modules/discord/state.js"),
+    "\n",
+    include_str!("js/modules/discord/anime-extractor.js"),
+    "\n",
+    include_str!("js/modules/discord/poster-fetcher.js"),
+    "\n",
+    include_str!("js/modules/discord/settings-ui.js"),
+    "\n",
+    include_str!("js/modules/discord/discord-rpc.js"),
+    "\n}\n",
+    include_str!("js/modules/page-recovery.js"),
+    "\n",
+    include_str!("js/modules/video-optimizer.js"),
+    "\n",
+    "{\n",
+    "const THEME_UI_CSS = String.raw`",
+    include_str!("js/modules/theme/theme-styles.css"),
+    "`;\n",
+    "const THEME_HIDE_CSS = String.raw`",
+    include_str!("js/modules/theme/theme-hide.css"),
+    "`;\n",
+    include_str!("js/modules/theme/theme-core.js"),
+    "\n",
+    include_str!("js/modules/theme/theme-page-core.js"),
+    "\n",
+    include_str!("js/modules/theme/theme-styles.js"),
+    "\n",
+    include_str!("js/modules/theme/theme-page-render.js"),
+    "\n",
+    include_str!("js/modules/theme/theme-observer.js"),
+    "\n}\n",
+    include_str!("js/init.js"),
+    "\n})();"
+);
 
+#[cfg(target_os = "windows")]
+pub const WINDOWS_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=2048\" --force-gpu-selection=high-performance --force_high_performance_gpu";
+
+fn platform_user_agent() -> &'static str {
     #[cfg(target_os = "windows")]
-    let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
+    {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+    }
     #[cfg(target_os = "linux")]
-    let user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
+    {
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+    }
     #[cfg(target_os = "macos")]
-    let user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
+    {
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+    }
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    let user_agent = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
+    {
+        "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+    }
+}
 
+fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
+    println!("[Tauri] build_new_window invoked with URL: {}", url);
+
+    let label = format!(
+        "win_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+
+    let user_agent = platform_user_agent();
+    
+    let parsed_url = url.parse::<tauri::Url>()
+        .map_err(|e| format!("Invalid URL: {}", e))?;
+
+    let app_handle = app.clone();
     let win_builder = WebviewWindowBuilder::new(
-        &app,
+        app,
         &label,
-        WebviewUrl::External(tauri::Url::parse(&url).map_err(|e| {
-            let err_msg = format!("[Tauri] Url parse error: {}", e);
-            eprintln!("{}", err_msg);
-            err_msg
-        })?)
+        WebviewUrl::External(parsed_url),
     )
     .title("OpenAnime")
     .inner_size(1280.0, 848.0)
@@ -127,36 +211,25 @@ async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), Strin
     .center()
     .decorations(false)
     .zoom_hotkeys_enabled(true)
-    .user_agent(user_agent);
-
-    // OpenAnime modülleri - tek IIFE içinde birleştiriliyor (shared scope = .bak mantığı)
-    // concat!() kullanıyoruz çünkü format!() JS'deki {} karakterlerini bozuyor
-    let win_builder = win_builder
-        .initialization_script(concat!(
-            "(function () {\nif (window.self !== window.top) return;\n",
-            include_str!("js/modules/tauri-bridge.js"),
-            "\n",
-            include_str!("js/modules/webgpu-patcher.js"),
-            "\n",
-            include_str!("js/modules/performance-css.js"),
-            "\n",
-            include_str!("js/modules/zoom-manager.js"),
-            "\n",
-            include_str!("js/modules/window-controls.js"),
-            "\n",
-            include_str!("js/modules/keyboard-shortcuts.js"),
-            "\n",
-            include_str!("js/modules/link-interceptor.js"),
-            "\n",
-            include_str!("js/modules/fullscreen-manager.js"),
-            "\n",
-            include_str!("js/init.js"),
-            "\n})();"
-        ));
+    .user_agent(user_agent)
+    .on_new_window(move |new_url, _features| {
+        println!(
+            "[Tauri] Intercepted new window request from secondary window for URL: {}",
+            new_url
+        );
+        let app_c = app_handle.clone();
+        let url_str = new_url.to_string();
+        std::thread::spawn(move || {
+            if let Err(e) = build_new_window(&app_c, url_str) {
+                eprintln!("[Tauri] on_new_window -> build_new_window error: {}", e);
+            }
+        });
+        tauri::webview::NewWindowResponse::Deny
+    })
+    .initialization_script(COMMON_INIT_SCRIPT);
 
     #[cfg(target_os = "windows")]
-    let win_builder = win_builder
-        .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=ParallelDownloading --enable-quic --enable-fast-unload --js-flags=\"--max-old-space-size=512 --optimize-for-size\" --force-gpu-selection=high-performance --force_high_performance_gpu");
+    let win_builder = win_builder.additional_browser_args(WINDOWS_BROWSER_ARGS);
 
     match win_builder.build() {
         Ok(_) => {
@@ -171,11 +244,316 @@ async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), Strin
     }
 }
 
+#[tauri::command]
+async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    build_new_window(&app, url)
+}
+
+
+
+#[tauri::command]
+async fn update_discord_presence(
+    state: tauri::State<'_, discordRPC::DiscordState>,
+    page: discordRPC::AppPage,
+    metadata: Option<discordRPC::PresenceMetadata>,
+    window_label: Option<String>,
+) -> Result<(), String> {
+    state.update(page, metadata, window_label);
+    Ok(())
+}
+
+#[tauri::command]
+async fn clear_discord_presence(
+    state: tauri::State<'_, discordRPC::DiscordState>,
+) -> Result<(), String> {
+    state.clear();
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_discord_rpc_enabled(
+    state: tauri::State<'_, discordRPC::DiscordState>,
+    enabled: bool,
+) -> Result<(), String> {
+    state.set_enabled(enabled);
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_focused_window(
+    state: tauri::State<'_, discordRPC::DiscordState>,
+    label: Option<String>,
+) -> Result<(), String> {
+    state.set_focused_window(label);
+    Ok(())
+}
+
+#[tauri::command]
+async fn close_window_label(app: tauri::AppHandle, label: Option<String>) -> Result<(), String> {
+    let target = label.as_deref().unwrap_or("main");
+    if let Some(win) = app.get_webview_window(target) {
+        win.close()
+            .map_err(|e| format!("[Tauri] Pencere kapatma hatası: {}", e))?;
+        println!("[Tauri] Pencere kapatıldı: {}", target);
+    } else {
+        println!("[Tauri] Kapatılacak pencere bulunamadı: {}", target);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn proxy_request(
+    method: String,
+    url: String,
+    body: Option<String>,
+    headers: Option<std::collections::HashMap<String, String>>,
+) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("OpenAnime-Desktop/1.0")
+        .build()
+        .map_err(|e| format!("Client build error: {}", e))?;
+
+    let method_upper = method.to_uppercase();
+    let mut req = match method_upper.as_str() {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        "PUT" => client.put(&url),
+        "DELETE" => client.delete(&url),
+        "PATCH" => client.patch(&url),
+        _ => client.get(&url),
+    };
+
+    if let Some(headers_map) = headers {
+        for (k, v) in headers_map {
+            let k_lower = k.to_lowercase();
+            if k_lower == "host" || k_lower == "origin" || k_lower == "referer" {
+                continue;
+            }
+            req = req.header(k, v);
+        }
+    }
+
+    if let Some(body_content) = body {
+        if !body_content.is_empty() {
+            req = req.body(body_content);
+        }
+    }
+
+    let response = req.send().await.map_err(|e| format!("Request failed: {}", e))?;
+    let status = response.status();
+    let text = response.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("HTTP error {}: {}", status, text));
+    }
+
+    Ok(text)
+}
+
+
+#[tauri::command]
+async fn fetch_css(url: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("OpenAnime-Desktop/1.0")
+        .build()
+        .map_err(|e| format!("Client build error: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Fetch error: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP error: {}", response.status()));
+    }
+
+    response.text().await.map_err(|e| format!("Read error: {}", e))
+}
+
+#[tauri::command]
+async fn check_connection() -> bool {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build();
+    if let Ok(client) = client {
+        if let Ok(resp) = client.get("https://openani.me/").send().await {
+            let status = resp.status();
+            status.is_success() || status.is_redirection() || status == reqwest::StatusCode::FORBIDDEN
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+async fn go_online(window: tauri::WebviewWindow) -> Result<(), String> {
+    println!("[Tauri] Navigating online to: https://openani.me/");
+    window.navigate("https://openani.me/".parse().unwrap())
+        .map_err(|e| format!("Navigation failed: {}", e))
+}
+
+#[tauri::command]
+async fn go_offline(window: tauri::WebviewWindow) -> Result<(), String> {
+    let url = if cfg!(debug_assertions) {
+        "http://localhost:1420/".to_string()
+    } else {
+        #[cfg(target_os = "linux")]
+        {
+            "http://tauri.localhost/".to_string()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            "tauri://localhost/".to_string()
+        }
+    };
+    println!("[Tauri] Navigating offline to: {}", url);
+    window.navigate(url.parse().map_err(|e| format!("{}", e))?)
+        .map_err(|e| format!("Failed to navigate offline: {}", e))
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct ThemeMeta {
+    name: String,
+    author: String,
+    version: String,
+    description: String,
+    #[serde(rename = "preview_color")]
+    preview_color: String,
+    #[serde(rename = "created_at")]
+    created_at: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct ThemeJson {
+    #[serde(rename = "$schema")]
+    schema: String,
+    meta: ThemeMeta,
+    colors: std::collections::HashMap<String, String>,
+    typography: std::collections::HashMap<String, String>,
+    background: serde_json::Value,
+    effects: serde_json::Value,
+    #[serde(default)]
+    custom_css: String,
+}
+
+#[tauri::command]
+async fn list_themes(app: tauri::AppHandle) -> Result<Vec<ThemeJson>, String> {
+    let local_data = app.path().app_local_data_dir()
+        .map_err(|e| format!("Failed to get app local data dir: {}", e))?;
+    let themes_dir = local_data.join("themes");
+    if !themes_dir.exists() {
+        return Ok(Vec::new());
+    }
+    
+    let mut themes = Vec::new();
+    let entries = std::fs::read_dir(themes_dir)
+        .map_err(|e| format!("Failed to read themes dir: {}", e))?;
+    
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "json") {
+                if let Ok(file_content) = std::fs::read_to_string(&path) {
+                    if let Ok(theme) = serde_json::from_str::<ThemeJson>(&file_content) {
+                        themes.push(theme);
+                    }
+                }
+            }
+        }
+    }
+    
+    themes.sort_by(|a, b| b.meta.created_at.cmp(&a.meta.created_at));
+    Ok(themes)
+}
+
+#[tauri::command]
+async fn save_theme(app: tauri::AppHandle, theme: ThemeJson) -> Result<(), String> {
+    let local_data = app.path().app_local_data_dir()
+        .map_err(|e| format!("Failed to get app local data dir: {}", e))?;
+    let themes_dir = local_data.join("themes");
+    std::fs::create_dir_all(&themes_dir)
+        .map_err(|e| format!("Failed to create themes dir: {}", e))?;
+    
+    let safe_name = theme.meta.name.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect::<String>();
+    let file_path = themes_dir.join(format!("{}.json", safe_name));
+    
+    let content = serde_json::to_string_pretty(&theme)
+        .map_err(|e| format!("Serialization failed: {}", e))?;
+    
+    std::fs::write(file_path, content)
+        .map_err(|e| format!("Failed to write theme file: {}", e))?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_theme(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    let local_data = app.path().app_local_data_dir()
+        .map_err(|e| format!("Failed to get app local data dir: {}", e))?;
+    let themes_dir = local_data.join("themes");
+    
+    let safe_name = name.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect::<String>();
+    let file_path = themes_dir.join(format!("{}.json", safe_name));
+    
+    if file_path.exists() {
+        std::fs::remove_file(file_path)
+            .map_err(|e| format!("Failed to delete theme file: {}", e))?;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn load_theme(app: tauri::AppHandle, name: String) -> Result<ThemeJson, String> {
+    let local_data = app.path().app_local_data_dir()
+        .map_err(|e| format!("Failed to get app local data dir: {}", e))?;
+    let themes_dir = local_data.join("themes");
+    
+    let safe_name = name.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect::<String>();
+    let file_path = themes_dir.join(format!("{}.json", safe_name));
+    
+    if !file_path.exists() {
+        return Err(format!("Theme {} does not exist", name));
+    }
+    
+    let file_content = std::fs::read_to_string(file_path)
+        .map_err(|e| format!("Failed to read theme file: {}", e))?;
+    
+    let theme = serde_json::from_str::<ThemeJson>(&file_content)
+        .map_err(|e| format!("Failed to parse theme: {}", e))?;
+    
+    Ok(theme)
+}
+
+#[tauri::command]
+async fn apply_theme_css(app: tauri::AppHandle, theme_id: String, css: String) -> Result<(), String> {
+    use tauri::Emitter;
+    println!("[Tauri] Emitting theme-apply for theme: {}", theme_id);
+    app.emit("openanime://theme-apply", serde_json::json!({
+        "themeId": theme_id,
+        "css": css
+    })).map_err(|e| format!("Failed to emit event: {}", e))?;
+    Ok(())
+}
+
+
 #[cfg(target_os = "windows")]
 fn setup_windows_gpu_preference() {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_str) = exe_path.to_str() {
-            println!("[Tauri] Setting DirectX GpuPreference to High Performance for: {}", exe_str);
+            println!(
+                "[Tauri] Setting DirectX GpuPreference to High Performance for: {}",
+                exe_str
+            );
             let _ = std::process::Command::new("reg")
                 .args(&[
                     "add",
@@ -199,28 +577,50 @@ pub fn run() {
     {
         setup_windows_gpu_preference();
         let app_id = "com.darkhunter.openanime-desktops";
-        let wide_id: Vec<u16> = app_id.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide_id: Vec<u16> = app_id
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         unsafe {
             let _ = SetCurrentProcessExplicitAppUserModelID(wide_id.as_ptr());
         }
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            #[cfg(target_os = "windows")]
-            let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
-            #[cfg(target_os = "linux")]
-            let user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
-            #[cfg(target_os = "macos")]
-            let user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
-            #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-            let user_agent = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1";
+        .plugin(tauri_plugin_os::init())
+        .manage(discordRPC::DiscordState::new());
 
-            let win_builder = WebviewWindowBuilder::new(
-                app, 
-                "main", 
+    let builder = builder.setup(|app| {
+            let user_agent = platform_user_agent();
+
+            let is_online = tauri::async_runtime::block_on(async {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(3))
+                    .build();
+                if let Ok(client) = client {
+                    if let Ok(resp) = client.get("https://openani.me/").send().await {
+                        let status = resp.status();
+                        status.is_success() || status.is_redirection() || status == reqwest::StatusCode::FORBIDDEN
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            });
+
+            let main_url = if is_online {
                 WebviewUrl::External("https://openani.me/".parse().unwrap())
+            } else {
+                WebviewUrl::default()
+            };
+
+            let app_handle = app.handle().clone();
+            let win_builder = WebviewWindowBuilder::new(
+                app,
+                "main",
+                main_url,
             )
             .title("OpenAnime")
             .inner_size(1280.0, 848.0)
@@ -228,78 +628,104 @@ pub fn run() {
             .center()
             .decorations(false)
             .zoom_hotkeys_enabled(true)
-            .user_agent(user_agent);
-
-            // OpenAnime modülleri - tek IIFE içinde birleştiriliyor (shared scope = .bak mantığı)
-            // concat!() kullanıyoruz çünkü format!() JS'deki {} karakterlerini bozuyor
-            let win_builder = win_builder
-                .initialization_script(concat!(
-                    "(function () {\nif (window.self !== window.top) return;\n",
-                    include_str!("js/modules/tauri-bridge.js"),
-                    "\n",
-                    include_str!("js/modules/webgpu-patcher.js"),
-                    "\n",
-                    include_str!("js/modules/performance-css.js"),
-                    "\n",
-                    include_str!("js/modules/zoom-manager.js"),
-                    "\n",
-                    include_str!("js/modules/window-controls.js"),
-                    "\n",
-                    include_str!("js/modules/keyboard-shortcuts.js"),
-                    "\n",
-                    include_str!("js/modules/link-interceptor.js"),
-                    "\n",
-                    include_str!("js/modules/fullscreen-manager.js"),
-                    "\n",
-                    include_str!("js/init.js"),
-                    "\n})();"
-                ));
+            .user_agent(user_agent)
+            .on_new_window(move |url, _features| {
+                println!(
+                    "[Tauri] Intercepted new window request from main window for URL: {}",
+                    url
+                );
+                let app_c = app_handle.clone();
+                let url_str = url.to_string();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = open_new_window(app_c, url_str).await {
+                        eprintln!("[Tauri] on_new_window -> open_new_window error: {}", e);
+                    }
+                });
+                tauri::webview::NewWindowResponse::Deny
+            })
+            .initialization_script(COMMON_INIT_SCRIPT);
 
             #[cfg(target_os = "windows")]
-            let win_builder = win_builder
-                .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=ParallelDownloading --enable-quic --enable-fast-unload --js-flags=\"--max-old-space-size=512 --optimize-for-size\" --force-gpu-selection=high-performance --force_high_performance_gpu");
+            let win_builder = win_builder.additional_browser_args(WINDOWS_BROWSER_ARGS);
 
             win_builder.build()?;
             Ok(())
         })
         .on_window_event(|window, event| {
+            let app_handle = window.app_handle().clone();
+            let label = window.label().to_string();
+
+            match event {
+                tauri::WindowEvent::Focused(true) => {
+                    let label_c = label.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(state) =
+                            app_handle.try_state::<discordRPC::DiscordState>()
+                        {
+                            state.set_focused_window(Some(label_c));
+                        }
+                    });
+                }
+                _ => {}
+            }
+
             #[cfg(target_os = "windows")]
             {
-                if window.label() == "main" {
-                    if let tauri::WindowEvent::Focused(focused) = event {
-                        let is_focused = *focused;
-                        if let Some(webview_window) = window.app_handle().get_webview_window(window.label()) {
-                            let _ = webview_window.with_webview(move |webview| {
-                                unsafe {
-                                    use webview2_com::Microsoft::Web::WebView2::Win32::{
-                                        ICoreWebView2_19,
-                                        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
-                                        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
-                                    };
-                                    use windows_core::Interface;
-                                    
-                                    let controller = webview.controller();
-                                    if !Interface::as_raw(&controller).is_null() {
-                                        if let Ok(core_webview) = controller.CoreWebView2() {
-                                            if let Ok(webview_19) = core_webview.cast::<ICoreWebView2_19>() {
-                                                let level = if is_focused {
-                                                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
-                                                } else {
-                                                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
-                                                };
-                                                let _ = webview_19.SetMemoryUsageTargetLevel(level);
-                                            }
+                if let tauri::WindowEvent::Focused(focused) = event {
+                    let is_focused = *focused;
+                    if let Some(webview_window) = window
+                        .app_handle()
+                        .get_webview_window(window.label())
+                    {
+                        let _ = webview_window.with_webview(move |webview| {
+                            unsafe {
+                                use webview2_com::Microsoft::Web::WebView2::Win32::{
+                                    ICoreWebView2_19,
+                                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+                                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+                                };
+                                use windows_core::Interface;
+
+                                let controller = webview.controller();
+                                if !Interface::as_raw(&controller).is_null() {
+                                    if let Ok(core_webview) = controller.CoreWebView2() {
+                                        if let Ok(webview_19) =
+                                            core_webview.cast::<ICoreWebView2_19>()
+                                        {
+                                            let level = if is_focused {
+                                                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+                                            } else {
+                                                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+                                            };
+                                            let _ = webview_19
+                                                .SetMemoryUsageTargetLevel(level);
                                         }
                                     }
                                 }
-                            });
-                        }
+                            }
+                        });
                     }
                 }
             }
-        })
-        .invoke_handler(tauri::generate_handler![
-            open_new_window
+        });
+
+        builder.invoke_handler(tauri::generate_handler![
+            open_new_window,
+            update_discord_presence,
+            clear_discord_presence,
+            set_discord_rpc_enabled,
+            set_focused_window,
+            close_window_label,
+            fetch_css,
+            proxy_request,
+            check_connection,
+            go_online,
+            go_offline,
+            list_themes,
+            save_theme,
+            delete_theme,
+            load_theme,
+            apply_theme_css
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
