@@ -99,6 +99,8 @@ mod gpu_switch_macos {
 
 const COMMON_INIT_SCRIPT: &str = concat!(
     "(function () {\nif (window.self !== window.top) {\n  let isBuilder = false;\n  try {\n    isBuilder = window.location.search.includes(\"theme_builder=true\") || sessionStorage.getItem(\"theme_builder_active\") === \"true\";\n  } catch (e) {}\n  if (!isBuilder) return;\n}\n",
+    include_str!("js/modules/linux-polyfills.js"),
+    "\n",
     include_str!("js/modules/tauri-bridge.js"),
     "\n",
     "{\nconst NETWORK_CACHE_CSS = String.raw`",
