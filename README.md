@@ -153,7 +153,7 @@ Uygulamayı üzerinde çalıştığınız yerel sistem için derlemek isterseniz
 
 3. Streaming video oynatma için GStreamer codec'lerinin kurulu olduğunu doğrulayın.
 
-### Arch Linux (AUR)
+### Arch Linux (AUR) (Yakın zamanda eklenilecek)
 ```bash
 yay -S openanime-desktops
 ```
