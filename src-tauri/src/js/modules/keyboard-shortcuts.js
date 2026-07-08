@@ -58,6 +58,42 @@
           window.history.back();
         }
       }
+      if (e.key === "f" || e.key === "F" || e.key === "F11") {
+        if (e.repeat) return;
+        const activeEl = document.activeElement;
+        const isInput =
+          activeEl &&
+          (activeEl.tagName === "INPUT" ||
+            activeEl.tagName === "TEXTAREA" ||
+            activeEl.isContentEditable);
+        if (isInput) return;
+
+        // Player var mı diye SADECE video elementine bakarak kontrol et
+        // (fullscreen-manager.js de aynı basit kontrolü kullanıyor, tutarlılık için aynı mantık)
+        const video = document.querySelector("video");
+        const hasPlayer = !!video;
+
+        if (hasPlayer) {
+          // PLAYER SAYFASI: Bu dosya F/F11'e HİÇ DOKUNMUYOR.
+          // preventDefault/stopPropagation ÇAĞRILMIYOR — event olduğu gibi
+          // player kütüphanesinin (artplayer vb.) kendi F/F11 listener'ına
+          // ulaşacak, o da video.requestFullscreen() çağıracak, bu da
+          // fullscreen-manager.js'in monkey-patch'lediği native pencere
+          // fullscreen mantığını zaten doğru şekilde tetikleyecek.
+          return;
+        }
+
+        // PLAYER DIŞI SAYFA: Pencereyi maximize/unmaximize et.
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        setTimeout(() => {
+          const maxBtn = document.getElementById("tauri-maximize");
+          if (maxBtn) {
+            maxBtn.click();
+          }
+        }, 0);
+      }
     },
     true,
   );

@@ -66,6 +66,7 @@ pub struct PresenceMetadata {
     pub paused: Option<bool>,
     pub anime_slug: Option<String>,
     pub current_time: Option<f64>,
+    pub user_profile_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,6 +156,11 @@ impl DiscordState {
                     (page, metadata, updated, clear, enabled, is_focused_window)
                 };
 
+                let profile_url_owned = metadata.as_ref()
+                    .and_then(|m| m.user_profile_url.as_ref())
+                    .filter(|url| !url.trim().is_empty())
+                    .cloned();
+
                 if !enabled || clear {
                     if !was_clear {
                         if let Some(c) = &mut client {
@@ -202,6 +208,7 @@ impl DiscordState {
                         || curr_m.custom_title != new_m.custom_title
                         || curr_m.paused != new_m.paused
                         || curr_m.anime_slug != new_m.anime_slug
+                        || curr_m.user_profile_url != new_m.user_profile_url
                     {
                         should_update = true;
                     }
@@ -327,7 +334,12 @@ impl DiscordState {
                                             .and_then(|m| m.paused)
                                             .unwrap_or(false);
                                         if is_paused {
-                                            "Animeyi Duraklattı".to_string()
+                                            let current_time_secs = metadata.as_ref()
+                                                .and_then(|m| m.current_time)
+                                                .unwrap_or(0.0) as i64;
+                                            let minutes = current_time_secs / 60;
+                                            let seconds = current_time_secs % 60;
+                                            format!("Animeyi Duraklattı ({:02}:{:02})", minutes, seconds)
                                         } else {
                                             "İzliyor".to_string()
                                         }
@@ -416,40 +428,63 @@ impl DiscordState {
                                     last_sent_start_timestamp = None;
                                 }
 
-                                if let Some(ref slug) = metadata.as_ref().and_then(|m| m.anime_slug.as_ref()) {
-                                    if !slug.trim().is_empty() {
-                                        let clean_slug = slug.trim().trim_matches('/');
-                                        anime_url_str = format!("https://openani.me/anime/{}", clean_slug);
-                                        
-                                        let mut button_vec = vec![];
-                                        button_vec.push(activity::Button::new("Animeye Git", &anime_url_str));
+                                let mut button_vec = vec![];
 
-                                        if page == AppPage::Watch {
-                                            let ep = metadata.as_ref()
-                                                .and_then(|m| m.episode_no.as_deref())
-                                                .unwrap_or("1");
-                                            let ep_url_segment = if ep.starts_with('S') && ep.contains('B') {
-                                                if let Some(b_idx) = ep.find('B') {
-                                                    let s_part = &ep[1..b_idx];
-                                                    let e_part = &ep[b_idx+1..];
-                                                    if let (Ok(s_num), Ok(e_num)) = (s_part.parse::<u32>(), e_part.parse::<u32>()) {
-                                                        format!("{}/{}", s_num, e_num)
-                                                    } else {
-                                                        ep.to_string()
-                                                    }
+                                let has_slug = metadata.as_ref()
+                                    .and_then(|m| m.anime_slug.as_ref())
+                                    .map(|slug| !slug.trim().is_empty())
+                                    .unwrap_or(false);
+
+                                if has_slug {
+                                    let slug = metadata.as_ref().and_then(|m| m.anime_slug.as_ref()).unwrap();
+                                    let clean_slug = slug.trim().trim_matches('/');
+                                    anime_url_str = format!("https://openani.me/anime/{}", clean_slug);
+                                    
+                                    if page == AppPage::Watch {
+                                        let ep = metadata.as_ref()
+                                            .and_then(|m| m.episode_no.as_deref())
+                                            .unwrap_or("1");
+                                        let ep_url_segment = if ep.starts_with('S') && ep.contains('B') {
+                                            if let Some(b_idx) = ep.find('B') {
+                                                let s_part = &ep[1..b_idx];
+                                                let e_part = &ep[b_idx+1..];
+                                                if let (Ok(s_num), Ok(e_num)) = (s_part.parse::<u32>(), e_part.parse::<u32>()) {
+                                                    format!("{}/{}", s_num, e_num)
                                                 } else {
                                                     ep.to_string()
                                                 }
                                             } else {
                                                 ep.to_string()
-                                            };
-                                            let clean_ep = ep_url_segment.trim().trim_matches('/');
-                                            ep_url_str = format!("https://openani.me/anime/{}/{}", clean_slug, clean_ep);
-                                            button_vec.push(activity::Button::new("Bölüme Git", &ep_url_str));
-                                        }
-
-                                        activity = activity.buttons(button_vec.clone());
+                                            }
+                                        } else {
+                                            ep.to_string()
+                                        };
+                                        let clean_ep = ep_url_segment.trim().trim_matches('/');
+                                        ep_url_str = format!("https://openani.me/anime/{}/{}", clean_slug, clean_ep);
                                     }
+                                }
+
+                                if page == AppPage::Watch && has_slug {
+                                    if let Some(ref profile_url) = profile_url_owned {
+                                        button_vec.push(activity::Button::new("Bölüme Git", &ep_url_str));
+                                        button_vec.push(activity::Button::new("Profili Görüntüle", profile_url));
+                                    } else {
+                                        button_vec.push(activity::Button::new("Animeye Git", &anime_url_str));
+                                        button_vec.push(activity::Button::new("Bölüme Git", &ep_url_str));
+                                    }
+                                } else if page == AppPage::Details && has_slug {
+                                    button_vec.push(activity::Button::new("Animeye Git", &anime_url_str));
+                                    if let Some(ref profile_url) = profile_url_owned {
+                                        button_vec.push(activity::Button::new("Profili Görüntüle", profile_url));
+                                    }
+                                } else {
+                                    if let Some(ref profile_url) = profile_url_owned {
+                                        button_vec.push(activity::Button::new("Profili Görüntüle", profile_url));
+                                    }
+                                }
+
+                                if !button_vec.is_empty() {
+                                    activity = activity.buttons(button_vec.clone());
                                 }
                             }
                         }
@@ -506,13 +541,29 @@ impl DiscordState {
                                     })
                                     .unwrap_or(false);
 
+                                let mut fallback_buttons = vec![];
                                 if has_fallback_slug && !fallback_anime_url_owned.is_empty() {
-                                    let mut fallback_buttons = vec![
-                                        activity::Button::new("Animeye Git", &fallback_anime_url_owned)
-                                    ];
-                                    if !fallback_ep_url_owned.is_empty() {
-                                        fallback_buttons.push(activity::Button::new("Bölüme Git", &fallback_ep_url_owned));
+                                    if page == AppPage::Watch {
+                                        if let Some(ref profile_url) = profile_url_owned {
+                                            fallback_buttons.push(activity::Button::new("Bölüme Git", &fallback_ep_url_owned));
+                                            fallback_buttons.push(activity::Button::new("Profili Görüntüle", profile_url));
+                                        } else {
+                                            fallback_buttons.push(activity::Button::new("Animeye Git", &fallback_anime_url_owned));
+                                            fallback_buttons.push(activity::Button::new("Bölüme Git", &fallback_ep_url_owned));
+                                        }
+                                    } else {
+                                        fallback_buttons.push(activity::Button::new("Animeye Git", &fallback_anime_url_owned));
+                                        if let Some(ref profile_url) = profile_url_owned {
+                                            fallback_buttons.push(activity::Button::new("Profili Görüntüle", profile_url));
+                                        }
                                     }
+                                } else {
+                                    if let Some(ref profile_url) = profile_url_owned {
+                                        fallback_buttons.push(activity::Button::new("Profili Görüntüle", profile_url));
+                                    }
+                                }
+
+                                if !fallback_buttons.is_empty() {
                                     safe_activity = safe_activity.buttons(fallback_buttons);
                                 }
 

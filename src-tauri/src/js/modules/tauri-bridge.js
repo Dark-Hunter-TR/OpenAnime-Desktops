@@ -85,6 +85,23 @@ if (!window.__TAURI__) {
     }
   };
 
+  // OS platform detection polyfill (user-agent fallback)
+  const _detectPlatform = () => {
+    const ua = navigator.userAgent || '';
+    if (/windows/i.test(ua)) return 'windows';
+    if (/macintosh|mac os x/i.test(ua)) return 'macos';
+    return 'linux';
+  };
+  const _detectedPlatform = _detectPlatform();
+
+  const osInstance = {
+    platform: () => Promise.resolve(_detectedPlatform),
+    type: () => Promise.resolve(
+      _detectedPlatform === 'windows' ? 'windows_nt' :
+      _detectedPlatform === 'macos' ? 'darwin' : 'linux'
+    ),
+  };
+
   window.__TAURI__ = {
     core: { invoke: tauriInvoke },
     window: { getCurrentWindow: () => currentWindowInstance },
@@ -93,6 +110,38 @@ if (!window.__TAURI__) {
     opener: {
       openUrl: (url) => tauriInvoke('plugin:opener|open', { value: url }),
       open: (url) => tauriInvoke('plugin:opener|open', { value: url })
-    }
+    },
+    os: osInstance
   };
 }
+
+window.__openAnimeIsLoggedIn = function() {
+  try {
+    if (window.location.pathname === '/login' || window.location.pathname.startsWith('/auth')) {
+      return false;
+    }
+    const loginLink = document.querySelector('a[href="/login"]') || 
+                      document.querySelector('a[href^="/auth"]') ||
+                      document.querySelector('a[href*="login"]');
+    if (loginLink) return false;
+
+    const hasLoginButton = Array.from(document.querySelectorAll('a, button, [role="button"]')).some(el => {
+      const txt = el.textContent.trim().toLowerCase();
+      return txt === 'giriş' || txt === 'giriş yap' || txt === 'login' || txt === 'sign in';
+    });
+    if (hasLoginButton) return false;
+
+    const hasLoggedInEl = !!(
+      document.querySelector('a[href="/library"]') ||
+      document.querySelector('a[href="/logout"]') ||
+      document.querySelector('a[href^="/user/"]') ||
+      document.querySelector('.avatar') ||
+      document.querySelector('#account img') ||
+      document.querySelector('img[src*="avatar"]') ||
+      document.querySelector('img[src*="profile"]')
+    );
+    return hasLoggedInEl;
+  } catch (e) {
+    return false;
+  }
+};

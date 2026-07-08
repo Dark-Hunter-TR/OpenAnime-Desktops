@@ -1,5 +1,14 @@
 // === OpenAnime Discord RPC Controller Module ===
 
+function isDiscordRpcEnabled() {
+  const stored = localStorage.getItem("tauri-discord-rpc-enabled");
+  if (stored === null) {
+    localStorage.setItem("tauri-discord-rpc-enabled", "true");
+    return true;
+  }
+  return stored !== "false";
+}
+
 function getWindowLabel() {
   if (window.__TAURI_WINDOW_LABEL__) return window.__TAURI_WINDOW_LABEL__;
   try {
@@ -8,6 +17,74 @@ function getWindowLabel() {
     }
   } catch(e) {}
   return null;
+}
+
+function getUserProfileUrl() {
+  const isLoggedIn = typeof window.__openAnimeIsLoggedIn === 'function' ? window.__openAnimeIsLoggedIn() : false;
+  if (!isLoggedIn) return null;
+
+  // 1. Search in 'a' tags for /profile/ or /user/ followed by a long ID
+  const links = Array.from(document.querySelectorAll('a'));
+  for (const a of links) {
+    const href = a.getAttribute('href') || '';
+    const match = href.match(/\/(profile|user)\/(\d{15,22})/);
+    if (match) {
+      return `https://openani.me/profile/${match[2]}`;
+    }
+  }
+
+  // 2. Search image sources (like avatar images) for 15-22 digit user IDs
+  const images = Array.from(document.querySelectorAll('img'));
+  for (const img of images) {
+    const src = img.getAttribute('src') || '';
+    const match = src.match(/\/avatars\/(\d{15,22})/i) || 
+                  src.match(/\/users?\/(\d{15,22})/i) ||
+                  src.match(/\/(\d{15,22})\b/);
+    if (match) {
+      return `https://openani.me/profile/${match[1]}`;
+    }
+  }
+
+  // 3. Search SvelteKit script tags containing serialized/hydration JSON data
+  const scripts = Array.from(document.querySelectorAll('script'));
+  for (const script of scripts) {
+    const content = script.textContent || '';
+    const match = content.match(/"id"\s*:\s*"(\d{15,22})"/i) ||
+                  content.match(/"user_id"\s*:\s*"(\d{15,22})"/i) ||
+                  content.match(/"userId"\s*:\s*"(\d{15,22})"/i);
+    if (match) {
+      return `https://openani.me/profile/${match[1]}`;
+    }
+  }
+
+  // 4. Search LocalStorage
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const val = localStorage.getItem(localStorage.key(i));
+      if (val) {
+        const match = val.match(/"id"\s*:\s*"(\d{15,22})"/i) ||
+                      val.match(/"user_id"\s*:\s*"(\d{15,22})"/i) ||
+                      val.match(/"userId"\s*:\s*"(\d{15,22})"/i);
+        if (match) {
+          return `https://openani.me/profile/${match[1]}`;
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 5. Search cookies
+  try {
+    const match = document.cookie.match(/"id"\s*:\s*"(\d{15,22})"/i) ||
+                  document.cookie.match(/"user_id"\s*:\s*"(\d{15,22})"/i) ||
+                  document.cookie.match(/"userId"\s*:\s*"(\d{15,22})"/i) ||
+                  document.cookie.match(/userId=(\d{15,22})/i);
+    if (match) {
+      return `https://openani.me/profile/${match[1]}`;
+    }
+  } catch (e) {}
+
+  // Generic fallback if logged in but ID not found
+  return "https://openani.me";
 }
 
 function notifyFocusToRust(label) {
@@ -81,7 +158,7 @@ function attachVideoListeners(video) {
 async function updatePresenceFromDOM() {
   if (!window.__TAURI__ || !window.__TAURI__.core) return;
   
-  const enabled = localStorage.getItem("tauri-discord-rpc-enabled") !== "false";
+  const enabled = isDiscordRpcEnabled();
   if (!enabled) {
     try {
       await window.__TAURI__.core.invoke("clear_discord_presence");
@@ -226,6 +303,14 @@ async function updatePresenceFromDOM() {
       windowTitle = `${metadata.animeName} - ${epStr} İzliyor | OpenAnime`;
     } else if (page === "custom" && metadata) {
       windowTitle = `${metadata.customTitle} | OpenAnime`;
+    }
+
+    const userProfileUrl = getUserProfileUrl();
+    if (userProfileUrl) {
+      if (!metadata) {
+        metadata = {};
+      }
+      metadata.userProfileUrl = userProfileUrl;
     }
 
     await window.__TAURI__.core.invoke("update_discord_presence", { page, metadata, windowLabel: getWindowLabel() });

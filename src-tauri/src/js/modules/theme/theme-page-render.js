@@ -34,7 +34,7 @@ function renderThemePage(container) {
     container.className = "need-more-info svelte-1xx4j76";
     container.setAttribute("data-desktop-theme", "true");
     container.innerHTML = `
-<div class="contain svelte-10oc5q5" style="--s-width: 250px; --s-height: 250px;"><div class="setsuki svelte-10oc5q5"><div class="image-wrapper no-select undefined svelte-zi2j2b loaded" id="image" style="border-radius: var(--fds-overlay-corner-radius); ; aspect-ratio: unset;"><img alt="Hayırr!" src="/setsuki/chibi/crying.png" style="border-radius: var(--fds-overlay-corner-radius);" class="svelte-zi2j2b"></div> <h4 class="text-block type-subtitle svelte-9tjxrp">Hayırr!</h4> <span class="text-block type-body text-tertiary svelte-9tjxrp">Şu anda aktif veya yüklenmiş herhangi bir tema bulunmamaktadır. Uygulama varsayılan görünümünü kullanmaya devam edecek.</span></div></div></div>
+<div class="contain svelte-10oc5q5" style="--s-width: 250px; --s-height: 250px;"><div class="setsuki svelte-10oc5q5"><div class="image-wrapper no-select undefined svelte-zi2j2b loaded" id="image" style="border-radius: var(--fds-overlay-corner-radius); ; aspect-ratio: unset;"><img alt="Hayırr!" src="/setsuki/chibi/crying.png" style="border-radius: var(--fds-overlay-corner-radius);" class="svelte-zi2j2b"></div> <h4 class="text-block type-subtitle svelte-9tjxrp">Hayırr!</h4> <span class="text-block type-body text-tertiary svelte-9tjxrp" style="max-width: none !important; white-space: nowrap !important;">Şu anda aktif veya yüklenmiş herhangi bir özel tema bulunamadı. Yeni temalar yükleyebilir veya varsayılan görünümü kullanmaya devam edebilirsiniz.</span></div></div></div>
     `;
   } catch (e) {
     console.error("[Theme] renderThemePage error:", e);
@@ -105,6 +105,11 @@ function updateSidebarActiveState() {
 
 function setupThemeButton() {
   try {
+    if (window.__openAnimeIsLoggedIn && !window.__openAnimeIsLoggedIn()) {
+      const existingBtn = document.getElementById("tauri-theme-btn");
+      if (existingBtn) existingBtn.remove();
+      return;
+    }
     if (document.getElementById("tauri-theme-btn")) {
       updateSidebarActiveState();
       replaceAndShow();

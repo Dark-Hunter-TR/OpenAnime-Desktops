@@ -85,19 +85,24 @@
       if (shouldMaximize && typeof appWindow.maximize === "function") {
         appWindow.maximize().catch(console.error);
       }
-      window.addEventListener("resize", async () => {
-        try {
-          if (typeof appWindow.isMaximized === "function") {
-            const isMax = await appWindow.isMaximized();
-            localStorage.setItem("tauri-window-maximized", isMax.toString());
-          }
-          applyZoom(getActiveZoom());
-        } catch (err) {}
+      let resizeRaf = null;
+      window.addEventListener("resize", () => {
+        if (resizeRaf) cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(async () => {
+          try {
+            if (typeof appWindow.isMaximized === "function") {
+              const isMax = await appWindow.isMaximized();
+              localStorage.setItem("tauri-window-maximized", isMax.toString());
+            }
+            applyZoom(getActiveZoom());
+          } catch (err) {}
+        });
       });
     } catch (e) {}
   }
 
   function applyZoom(zoom, triggerIndicator = false) {
+
     if (
       window.__TAURI__ &&
       window.__TAURI__.webview &&

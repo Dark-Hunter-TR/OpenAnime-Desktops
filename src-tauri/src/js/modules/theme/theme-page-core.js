@@ -135,6 +135,9 @@
 
   function isThemePageActive() {
     try {
+      if (window.__openAnimeIsLoggedIn && !window.__openAnimeIsLoggedIn()) {
+        return false;
+      }
       return (
         window.location.pathname.includes("/recommendations") &&
         window.location.search.includes("desktop_theme=true")
@@ -192,6 +195,10 @@
       if (!docEl) return;
 
       if (isThemePageActive()) {
+        if (window.__openAnimeIsLoggedIn && !window.__openAnimeIsLoggedIn()) {
+          window.location.href = "/";
+          return;
+        }
         if (!docEl.classList.contains("desktop-theme-active")) {
           docEl.classList.add("desktop-theme-active");
         }

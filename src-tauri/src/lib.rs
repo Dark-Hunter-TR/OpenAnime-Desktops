@@ -3,6 +3,15 @@ use tauri::{WebviewWindowBuilder, WebviewUrl, Manager};
 #[allow(non_snake_case)]
 mod discordRPC;
 
+mod gpu_detector;
+
+#[cfg(target_os = "linux")]
+mod gst_detector;
+#[cfg(target_os = "linux")]
+mod video_decode;
+#[cfg(target_os = "linux")]
+mod native_render;
+
 #[cfg(target_os = "windows")]
 #[link(name = "shell32")]
 extern "system" {
@@ -109,6 +118,8 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     include_str!("js/modules/network-cache.js"),
     "}\n",
     include_str!("js/modules/webgpu-patcher.js"),
+    "\n",
+    include_str!("js/modules/webgpu-bridge.js"),
     "\n",
 
     "{\nconst ZOOM_MANAGER_CSS = String.raw`",
@@ -547,6 +558,81 @@ async fn apply_theme_css(app: tauri::AppHandle, theme_id: String, css: String) -
     Ok(())
 }
 
+#[tauri::command]
+#[allow(unused_variables)]
+async fn webgpu_state_changed(window: tauri::WebviewWindow, active: bool, url: String) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        if active {
+            native_render::inner::start_player(&url, window)?;
+        } else {
+            native_render::inner::stop_player();
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(unused_variables)]
+async fn webgpu_sync_bounds(window: tauri::WebviewWindow, x: i32, y: i32, width: u32, height: u32) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        native_render::inner::sync_bounds(x, y, width, height, window);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn gst_control_play() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        native_render::inner::control_play()?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn gst_control_pause() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        native_render::inner::control_pause()?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(unused_variables)]
+async fn gst_control_seek(time: f64) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        native_render::inner::control_seek(time)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_gpu_report() -> gpu_detector::GpuReport {
+    gpu_detector::detect_gpu()
+}
+
+#[tauri::command]
+async fn get_gst_report() -> serde_json::Value {
+    #[cfg(target_os = "linux")]
+    {
+        let report = gst_detector::detect_gstreamer();
+        serde_json::to_value(&report).unwrap_or(serde_json::Value::Null)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        serde_json::json!({
+            "gstreamer_installed": true,
+            "missing_elements": [],
+            "recommended_command": "",
+            "recommended_packages": ""
+        })
+    }
+}
+
 
 #[cfg(target_os = "windows")]
 fn setup_windows_gpu_preference() {
@@ -727,7 +813,14 @@ pub fn run() {
             save_theme,
             delete_theme,
             load_theme,
-            apply_theme_css
+            apply_theme_css,
+            webgpu_state_changed,
+            webgpu_sync_bounds,
+            gst_control_play,
+            gst_control_pause,
+            gst_control_seek,
+            get_gpu_report,
+            get_gst_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

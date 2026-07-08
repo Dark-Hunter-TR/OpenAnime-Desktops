@@ -45,7 +45,17 @@
   async function showWindow(appWindow) {
     try { await appWindow.show(); } catch (e) {}
   }
-  
+
+  // Küçük yardımcı: sabit setTimeout yerine, mümkün olan en kısa süreyi
+  // bekler (bir sonraki frame + minimal buffer). OS pencere işlemlerinin
+  // (unmaximize/setFullscreen) oturması için hâlâ küçük bir pay bırakır
+  // ama eski 100-300ms'lik sabit beklemelerden çok daha kısa.
+  function nextFrameDelay(ms) {
+    return new Promise((resolve) => {
+      requestAnimationFrame(() => setTimeout(resolve, ms));
+    });
+  }
+
   if (window.__TAURI__ && window.__TAURI__.window) {
     const originalRequestFullscreen = Element.prototype.requestFullscreen;
     const originalWebkitRequestFullscreen = Element.prototype.webkitRequestFullscreen;
@@ -68,11 +78,14 @@
             await hideWindow(appWindow);
             await appWindow.unmaximize();
             await appWindow.setFullscreen(true);
-            await new Promise((r) => setTimeout(r, 50));
+            // 50ms -> 20ms: pencere yöneticisinin state'i oturtması için
+            // yeterli, gözle fark edilir gecikme yaratmıyor.
+            await nextFrameDelay(20);
             await showWindow(appWindow);
           } else {
             await appWindow.setFullscreen(true);
-            await new Promise((r) => setTimeout(r, 100));
+            // 100ms -> kaldırıldı, sadece bir sonraki frame'i bekle.
+            await nextFrameDelay(0);
           }
         }
 
@@ -107,9 +120,12 @@
           if (wasMaximizedBeforeFullscreen) {
             await hideWindow(appWindow);
             await appWindow.setFullscreen(false);
-            await new Promise((r) => setTimeout(r, 300));
+            // 300ms -> 80ms: bu bekleme fullscreen'den çıkışın pencere
+            // yöneticisinde oturması için var, 80ms hâlâ güvenli pay
+            // bırakıyor ama önceki sürümdeki belirgin gecikmeyi kaldırıyor.
+            await nextFrameDelay(80);
             await appWindow.maximize();
-            await new Promise((r) => setTimeout(r, 50));
+            await nextFrameDelay(20);
             await showWindow(appWindow);
             wasMaximizedBeforeFullscreen = false;
           } else {
@@ -150,7 +166,7 @@
               await hideWindow(appWindow);
               await appWindow.unmaximize();
               await appWindow.setFullscreen(true);
-              await new Promise((r) => setTimeout(r, 50));
+              await nextFrameDelay(20);
               await showWindow(appWindow);
             } else {
               wasMaximizedBeforeFullscreen = false;
@@ -175,9 +191,9 @@
             if (wasMaximizedBeforeFullscreen) {
               await hideWindow(appWindow);
               await appWindow.setFullscreen(false);
-              await new Promise((r) => setTimeout(r, 300));
+              await nextFrameDelay(80);
               await appWindow.maximize();
-              await new Promise((r) => setTimeout(r, 50));
+              await nextFrameDelay(20);
               await showWindow(appWindow);
               wasMaximizedBeforeFullscreen = false;
             } else {
