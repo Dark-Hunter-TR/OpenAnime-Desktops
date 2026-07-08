@@ -28,7 +28,7 @@ pub mod inner {
                 .map_err(|e| format!("Failed to create playbin3: {}", e))?;
 
             // Create our video sink bin: videoconvert -> appsink
-            let bin = gstreamer::parse_bin_from_description(
+            let bin = gstreamer::parse::bin_from_description(
                 "videoconvert ! video/x-raw,format=RGBA ! appsink name=sink sync=true",
                 true,
             )
