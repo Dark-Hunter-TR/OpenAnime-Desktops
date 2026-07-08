@@ -1,6 +1,7 @@
 // === OpenAnime - Linux WebGPU & Player IPC Bridge ===
 (function () {
   const isLinux = navigator.userAgent.toLowerCase().includes("linux");
+  if (!isLinux) return;
 
   let currentVideoUrl = "";
   let isWebGpuEnabled = false;

@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 pub mod inner {
     use gstreamer::prelude::*;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, Condvar};
     use std::thread;
     use std::time::Duration;
 
@@ -11,9 +11,15 @@ pub mod inner {
         pub data: Vec<u8>,
     }
 
+    pub struct FrameSignal {
+        pub frame: Mutex<Option<DecodedFrame>>,
+        pub condvar: Condvar,
+        pub is_running: Mutex<bool>,
+    }
+
     pub struct GstPlayer {
         playbin: gstreamer::Element,
-        latest_frame: Arc<Mutex<Option<DecodedFrame>>>,
+        frame_signal: Arc<FrameSignal>,
         is_playing: Arc<Mutex<bool>>,
     }
 
@@ -27,9 +33,9 @@ pub mod inner {
                 .build()
                 .map_err(|e| format!("Failed to create playbin3: {}", e))?;
 
-            // Create our video sink bin: videoconvert -> appsink
+            // Optimization: Parallelize YUV->RGBA conversion with videoconvert using 4 threads
             let bin = gstreamer::parse::bin_from_description(
-                "videoconvert ! video/x-raw,format=RGBA ! appsink name=sink sync=true",
+                "videoconvert n-threads=4 ! video/x-raw,format=RGBA ! appsink name=sink sync=true",
                 true,
             )
             .map_err(|e| format!("Failed to parse video sink description: {}", e))?;
@@ -44,8 +50,12 @@ pub mod inner {
                 .dynamic_cast::<gstreamer_app::AppSink>()
                 .map_err(|_| "Failed to cast element to AppSink")?;
 
-            let latest_frame = Arc::new(Mutex::new(None));
-            let latest_frame_clone = latest_frame.clone();
+            let frame_signal = Arc::new(FrameSignal {
+                frame: Mutex::new(None),
+                condvar: Condvar::new(),
+                is_running: Mutex::new(true),
+            });
+            let frame_signal_clone = frame_signal.clone();
 
             // Configure appsink callbacks to intercept decoded RGBA frames
             appsink.set_callbacks(
@@ -61,20 +71,21 @@ pub mod inner {
                         let height = structure.get::<i32>("height").map_err(|_| gstreamer::FlowError::Error)? as u32;
 
                         if let Ok(map) = buffer.map_readable() {
-                            let mut frame_guard = latest_frame_clone.lock().unwrap();
-                            *frame_guard = Some(DecodedFrame {
+                            let mut guard = frame_signal_clone.frame.lock().unwrap();
+                            *guard = Some(DecodedFrame {
                                 width,
                                 height,
                                 data: map.to_vec(),
                             });
+                            frame_signal_clone.condvar.notify_one();
                         }
 
                         Ok(gstreamer::FlowSuccess::Ok)
-                    })
-                    .build(),
+                     })
+                     .build(),
             );
 
-            // Spawn a background thread to periodically query playbin position and sync it back to Javascript
+            // Position synchronization thread
             let playbin_clone = playbin.clone();
             let is_playing = Arc::new(Mutex::new(true));
             let is_playing_clone = is_playing.clone();
@@ -99,6 +110,36 @@ pub mod inner {
                 }
             });
 
+            // GStreamer Pipeline Bus Message Monitoring
+            let bus = playbin.bus().ok_or("Failed to get pipeline bus")?;
+            let is_playing_bus_clone = is_playing.clone();
+            let frame_signal_bus_clone = frame_signal.clone();
+
+            thread::spawn(move || {
+                for msg in bus.iter_timed(gstreamer::ClockTime::NONE) {
+                    use gstreamer::MessageView;
+                    match msg.view() {
+                        MessageView::Error(err) => {
+                            eprintln!("[GStreamer Error] {}", err.error());
+                            break;
+                        }
+                        MessageView::Eos(_) => {
+                            println!("[GStreamer] End of Stream reached.");
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                
+                // Signal termination on error or end of stream
+                if let Ok(mut playing) = is_playing_bus_clone.lock() {
+                    *playing = false;
+                }
+                let mut running = frame_signal_bus_clone.is_running.lock().unwrap();
+                *running = false;
+                frame_signal_bus_clone.condvar.notify_all();
+            });
+
             // Start playing the stream
             playbin
                 .set_state(gstreamer::State::Playing)
@@ -106,7 +147,7 @@ pub mod inner {
 
             Ok(Self {
                 playbin,
-                latest_frame,
+                frame_signal,
                 is_playing,
             })
         }
@@ -136,19 +177,21 @@ pub mod inner {
             Ok(())
         }
 
-        pub fn get_latest_frame(&self) -> Option<DecodedFrame> {
-            let mut guard = self.latest_frame.lock().unwrap();
-            guard.take()
+        pub fn get_frame_signal(&self) -> Arc<FrameSignal> {
+            self.frame_signal.clone()
         }
     }
 
     impl Drop for GstPlayer {
         fn drop(&mut self) {
-            // Signal position sync thread to terminate
             if let Ok(mut playing) = self.is_playing.lock() {
                 *playing = false;
             }
-            // Stop and release GStreamer playbin pipeline
+            {
+                let mut running = self.frame_signal.is_running.lock().unwrap();
+                *running = false;
+                self.frame_signal.condvar.notify_all();
+            }
             let _ = self.playbin.set_state(gstreamer::State::Null);
         }
     }

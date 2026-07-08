@@ -66,7 +66,7 @@ pub mod inner {
                 .await
                 .map_err(|e| format!("Failed to create wgpu device: {}", e))?;
 
-            // Get surface capability capabilities
+            // Get surface capabilities
             let surface_caps = surface.get_capabilities(&adapter);
             let surface_format = surface_caps
                 .formats
@@ -75,12 +75,19 @@ pub mod inner {
                 .find(|f| f.is_srgb())
                 .unwrap_or(surface_caps.formats[0]);
 
+            // Optimization: Query and use low-latency mailbox (triple-buffering) present mode if supported
+            let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                wgpu::PresentMode::Mailbox
+            } else {
+                wgpu::PresentMode::Fifo
+            };
+
             let config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: surface_format,
                 width,
                 height,
-                present_mode: wgpu::PresentMode::Fifo,
+                present_mode,
                 alpha_mode: surface_caps.alpha_modes[0],
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
@@ -362,44 +369,34 @@ pub mod inner {
         manager.render_state = Some(render_state_shared.clone());
         manager.player = Some(player);
 
-        // 5. Spawn background render thread
-        let latest_frame = manager.player.as_ref().unwrap().get_latest_frame(); // warmup
-        let is_running = Arc::new(Mutex::new(true));
-        let is_running_clone = is_running.clone();
-        
-        let player_ref = manager.player.as_ref().unwrap();
-        let latest_frame_mutex = Arc::new(Mutex::new(latest_frame));
-        
-        // We poll the latest decoded GStreamer frame and draw it using wgpu
+        // 5. Spawn background render thread with Condvar synchronization
+        let frame_signal = manager.player.as_ref().unwrap().get_frame_signal();
         let rs_ref = render_state_shared.clone();
-        
-        // Simple helper to fetch frames
-        struct FramePoller {
-            gst_player: *const GstPlayer,
-        }
-        unsafe impl Send for FramePoller {}
-        
-        let poller = FramePoller { gst_player: player_ref as *const GstPlayer };
 
         thread::spawn(move || {
-            let poll = poller;
             loop {
-                {
-                    let running = is_running_clone.lock().unwrap();
-                    if !*running {
-                        break;
+                // Wait for the next decoded frame using condition variable
+                let frame = {
+                    let mut guard = frame_signal.frame.lock().unwrap();
+                    loop {
+                        {
+                            let running = frame_signal.is_running.lock().unwrap();
+                            if !*running {
+                                return;
+                            }
+                        }
+                        if guard.is_some() {
+                            break;
+                        }
+                        guard = frame_signal.condvar.wait(guard).unwrap();
                     }
-                }
+                    guard.take().unwrap()
+                };
 
-                // Safely pull latest GStreamer frame
-                let frame_opt = unsafe { (&*poll.gst_player).get_latest_frame() };
-                if let Some(frame) = frame_opt {
-                    let mut rs = rs_ref.lock().unwrap();
-                    rs.update_video_texture(frame.width, frame.height, &frame.data);
-                    let _ = rs.render();
-                }
-
-                thread::sleep(Duration::from_millis(15)); // target ~60 FPS
+                // Render the frame immediately
+                let mut rs = rs_ref.lock().unwrap();
+                rs.update_video_texture(frame.width, frame.height, &frame.data);
+                let _ = rs.render();
             }
         });
 
