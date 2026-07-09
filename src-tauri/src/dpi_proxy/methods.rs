@@ -37,6 +37,7 @@ pub struct DpiMethod {
 
 fn make_methods() -> Vec<DpiMethod> {
     vec![
+        DpiMethod { id: 0, name: "Direct (Bypass Yok)".into(), description: "DPI bypass tekniklerini uygulamadan doğrudan bağlantı kurar".into(), http_host_case: false, http_host_mixedcase: false, http_host_removespace: false, http_fragment_size: 0, https_fragment_size: 0, fragment_by_sni: false, reverse_fragment: false },
         DpiMethod { id: 1, name: "Host Case Change".into(), description: "Host: → hoSt: (en hafif)".into(), http_host_case: true, http_host_mixedcase: false, http_host_removespace: false, http_fragment_size: 0, https_fragment_size: 0, fragment_by_sni: false, reverse_fragment: false },
         DpiMethod { id: 2, name: "HTTP Fragment 2".into(), description: "Sadece HTTP'yi 2 parçaya böl".into(), http_host_case: false, http_host_mixedcase: false, http_host_removespace: false, http_fragment_size: 2, https_fragment_size: 0, fragment_by_sni: false, reverse_fragment: false },
         DpiMethod { id: 3, name: "HTTPS Fragment 2".into(), description: "Sadece TLS'yi 2 parçaya böl".into(), http_host_case: false, http_host_mixedcase: false, http_host_removespace: false, http_fragment_size: 0, https_fragment_size: 2, fragment_by_sni: false, reverse_fragment: false },
@@ -55,5 +56,5 @@ pub fn get_method_by_id(id: u32) -> Option<&'static DpiMethod> {
 }
 
 pub fn default_method_order() -> Vec<u32> {
-    ALL_METHODS.iter().map(|m| m.id).collect()
+    ALL_METHODS.iter().filter(|m| m.id != 0).map(|m| m.id).collect()
 }

@@ -4,31 +4,34 @@
 use std::time::Duration;
 use std::net::IpAddr;
 
-/// Cloudflare DNS-over-HTTPS (DoH) JSON API kullanarak DNS çözer.
+/// Cloudflare/Google DNS-over-HTTPS (DoH) JSON API kullanarak DNS çözer.
 /// Bu sayede servis sağlayıcının DNS engellemeleri (DNS poisoning) aşılır.
 pub async fn resolve_dns_doh(domain: &str) -> Option<IpAddr> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(2))
         .no_proxy()
         .build()
         .ok()?;
 
-    // Cloudflare DoH JSON API (1.1.1.1)
-    let url = format!("https://1.1.1.1/dns-query?name={}&type=A", domain);
-    let resp = client.get(&url)
-        .header("accept", "application/dns-json")
-        .send()
-        .await
-        .ok()?;
+    let urls = vec![
+        format!("https://1.1.1.1/dns-query?name={}&type=A", domain),
+        format!("https://dns.google/resolve?name={}&type=A", domain),
+        format!("https://1.0.0.1/dns-query?name={}&type=A", domain),
+        format!("https://8.8.8.8/resolve?name={}&type=A", domain),
+    ];
 
-    if resp.status().is_success() {
-        if let Ok(text) = resp.text().await {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(answers) = json.get("Answer").and_then(|a| a.as_array()) {
-                    for answer in answers {
-                        if let Some(data) = answer.get("data").and_then(|d| d.as_str()) {
-                            if let Ok(ip) = data.parse::<IpAddr>() {
-                                return Some(ip);
+    for url in urls {
+        if let Ok(resp) = client.get(&url).header("accept", "application/dns-json").send().await {
+            if resp.status().is_success() {
+                if let Ok(text) = resp.text().await {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if let Some(answers) = json.get("Answer").and_then(|a| a.as_array()) {
+                            for answer in answers {
+                                if let Some(data) = answer.get("data").and_then(|d| d.as_str()) {
+                                    if let Ok(ip) = data.parse::<IpAddr>() {
+                                        return Some(ip);
+                                    }
+                                }
                             }
                         }
                     }

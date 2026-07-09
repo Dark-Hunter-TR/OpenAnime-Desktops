@@ -44,7 +44,7 @@ pub enum ConnectionResult {
 pub struct DpiProxyManager {
     pub settings: Mutex<GoodbyeSettings>,
     pub proxy_running: Arc<Mutex<bool>>,
-    pub current_method: Mutex<Option<DpiMethod>>,
+    pub current_method: Arc<Mutex<Option<DpiMethod>>>,
     pub connection_stage: Mutex<String>,
 }
 
@@ -66,75 +66,34 @@ impl DpiProxyManager {
         Self {
             settings: Mutex::new(settings),
             proxy_running: Arc::new(Mutex::new(false)),
-            current_method: Mutex::new(None),
+            current_method: Arc::new(Mutex::new(None)),
             connection_stage: Mutex::new("idle".to_string()),
         }
     }
 
     /// Proxy'yi başlat (arkaplan task'i)
     pub async fn start_proxy(&self, app: &tauri::AppHandle, method_id: u32) -> Result<(), String> {
-        // Zaten çalışıyorsa durdur
-        {
-            let mut running = self.proxy_running.lock().await;
-            if *running {
-                let prev_method = self.current_method.lock().await.take();
-                let prev_name = prev_method
-                    .as_ref()
-                    .map(|m| format!("#{} - {}", m.id, m.name))
-                    .unwrap_or_else(|| "bilinmiyor".to_string());
-                println!(
-                    "[DPI Proxy] Proxy zaten çalışıyor ({}). Eski proxy durduruluyor...",
-                    prev_name
-                );
-                *running = false;
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                println!("[DPI Proxy] Eski proxy durduruldu, yeni proxy başlatılacak.");
-            } else {
-                println!("[DPI Proxy] Proxy şu an çalışmıyor, başlatılıyor...");
-            }
-        }
-
         let method = methods::get_method_by_id(method_id)
             .ok_or_else(|| format!("Yöntem bulunamadı: {}", method_id))?;
 
         println!(
-            "[DPI Proxy] Proxy başlatılıyor... yöntem #{}: {}",
+            "[DPI Proxy] Proxy yöntemi güncelleniyor: #{} ({})",
             method_id, method.name
         );
-        println!(
-            "[DPI Proxy]   HTTP  -> fragment: {}, host_case: {}, mixedcase: {}, removespace: {}",
-            method.http_fragment_size,
-            method.http_host_case,
-            method.http_host_mixedcase,
-            method.http_host_removespace
-        );
-        println!(
-            "[DPI Proxy]   HTTPS -> fragment: {}, bypass_sni: {}, reverse: {}",
-            method.https_fragment_size, method.fragment_by_sni, method.reverse_fragment
-        );
 
-        // method'ı owned hale getir (static'ten clone)
-        let method_owned = method.clone();
+        // Update the active method in the shared Arc
+        *self.current_method.lock().await = Some(method.clone());
 
-        *self.current_method.lock().await = Some(method_owned.clone());
-        *self.proxy_running.lock().await = true;
-
-        println!("[DPI Proxy] Proxy durumu 'running=true' olarak ayarlandı.");
-
-        // Arkaplanda proxy task'ini başlat
-        let running = self.proxy_running.clone();
-        let method_for_spawn = method_owned.clone();
-        tokio::spawn(async move {
-            println!(
-                "[DPI Proxy] Arkaplan task'i başlatıldı (yöntem: #{} - {})",
-                method_for_spawn.id, method_for_spawn.name
-            );
-            tcp_forward::start_proxy_internal(method_for_spawn, running).await;
-            println!("[DPI Proxy] Arkaplan task'i sonlandı.");
-        });
-
-        // Proxy'nin başlaması için kısa bekle
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Ensure the background listener loop is running
+        let mut running = self.proxy_running.lock().await;
+        if !*running {
+            *running = true;
+            let running_clone = self.proxy_running.clone();
+            let current_method_clone = self.current_method.clone();
+            tokio::spawn(async move {
+                tcp_forward::start_proxy_internal(current_method_clone, running_clone).await;
+            });
+        }
 
         // Ayarları güncelle
         let mut settings = self.settings.lock().await;
@@ -143,29 +102,23 @@ impl DpiProxyManager {
         settings.save(app);
 
         println!(
-            "[DPI Proxy] ✅ Proxy başlatıldı (yöntem #{}: {})",
-            method_id, method.name
+            "[DPI Proxy] ✅ Proxy yöntemi başarıyla uygulandı (#{}).",
+            method_id
         );
         Ok(())
     }
 
-    /// Proxy'yi durdur
-    /// Proxy'nin şu anda çalışıp çalışmadığını döndürür (async olmayan, hızlı kontrol)
-    #[allow(dead_code)]
-    pub fn is_running(&self) -> bool {
-        self.proxy_running.try_lock().map(|g| *g).unwrap_or(false)
-    }
-
+    /// Proxy'yi durdur (Direct moduna geçer)
     pub async fn stop_proxy(&self, app: &tauri::AppHandle) {
-        println!("[DPI Proxy] Proxy durduruluyor...");
-        *self.proxy_running.lock().await = false;
+        println!("[DPI Proxy] Proxy bypass kapatılıyor (Direct moda geçiliyor)...");
         *self.current_method.lock().await = None;
 
         let mut settings = self.settings.lock().await;
         settings.is_active = false;
+        settings.active_method_id = Some(0); // 0 means Direct
         settings.save(app);
 
-        println!("[DPI Proxy] Proxy durduruldu.");
+        println!("[DPI Proxy] Proxy bypass durduruldu (Direct mode aktif).");
     }
 
     /// Detaylı bağlantı kontrolü
@@ -268,12 +221,12 @@ impl DpiProxyManager {
             current
                 .as_ref()
                 .map(|m| m.name.clone())
-                .unwrap_or_else(|| "—".to_string())
+                .unwrap_or_else(|| "Direct (Bypass Yok)".to_string())
         };
 
         let settings = self.settings.lock().await;
         DpiStatus {
-            proxy_running: *self.proxy_running.lock().await,
+            proxy_running: settings.is_active,
             active_method_id: settings.active_method_id,
             active_method_name: method_name,
             is_blocking_detected: settings.is_blocking_detected,
