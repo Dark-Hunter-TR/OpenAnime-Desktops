@@ -874,7 +874,7 @@ pub fn run() {
             Err(e) => {
                 eprintln!("[Setup] ❌ ANA PENCERE OLUŞTURULAMADI: {}", e);
                 eprintln!("===== OPENANIME SETUP HATA =====");
-                Err(e)
+                Err(Box::new(e))
             }
         }
     })
