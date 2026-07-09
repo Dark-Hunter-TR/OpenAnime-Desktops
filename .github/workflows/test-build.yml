@@ -39,6 +39,8 @@ jobs:
           node-version: lts/*
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          cache: true
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -92,6 +94,8 @@ jobs:
           node-version: lts/*
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          cache: true
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -154,6 +158,8 @@ jobs:
           node-version: lts/*
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          cache: true
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -213,6 +219,20 @@ jobs:
       - name: Install ARM64 cross-compilation deps
         run: |
           sudo dpkg --add-architecture arm64
+
+          # Mevcut x86 repolarını amd64'e kısıtla
+          sudo sed -i 's/^deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
+          sudo find /etc/apt/sources.list.d/ -name '*.list' -exec sed -i 's/^deb http/deb [arch=amd64] http/g' {} \; 2>/dev/null || true
+
+          # ARM64 repolarını ports.ubuntu.com'dan ekle
+          UBUNTU_CODENAME=$(lsb_release -cs)
+          sudo tee /etc/apt/sources.list.d/arm64.list > /dev/null << EOL
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME} main universe multiverse restricted
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-updates main universe multiverse restricted
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-backports main universe multiverse restricted
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-security main universe multiverse restricted
+EOL
+
           sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
@@ -234,6 +254,8 @@ jobs:
           node-version: lts/*
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          cache: true
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
