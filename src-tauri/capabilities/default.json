@@ -33,6 +33,7 @@
     "allow-fetch-css",
     "allow-themes",
     "os:default",
-    "allow-dpi-proxy"
+    "allow-dpi-proxy",
+    "allow-session-log"
   ]
 }
