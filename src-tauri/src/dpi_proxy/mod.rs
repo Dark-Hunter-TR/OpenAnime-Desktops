@@ -3,6 +3,7 @@
 
 mod http_mod;
 pub mod methods;
+pub mod remote_proxy;
 pub mod settings;
 mod tcp_forward;
 mod tls_detect;
@@ -24,6 +25,7 @@ pub struct DpiStatus {
     pub is_blocking_detected: bool,
     pub blocked_reason: String,
     pub system_goodbye_running: bool,
+    pub connection_stage: String,
 }
 
 /// check_connection()'un detaylı sonucu
@@ -43,6 +45,7 @@ pub struct DpiProxyManager {
     pub settings: Mutex<GoodbyeSettings>,
     pub proxy_running: Arc<Mutex<bool>>,
     pub current_method: Mutex<Option<DpiMethod>>,
+    pub connection_stage: Mutex<String>,
 }
 
 impl DpiProxyManager {
@@ -64,6 +67,7 @@ impl DpiProxyManager {
             settings: Mutex::new(settings),
             proxy_running: Arc::new(Mutex::new(false)),
             current_method: Mutex::new(None),
+            connection_stage: Mutex::new("idle".to_string()),
         }
     }
 
@@ -165,8 +169,8 @@ impl DpiProxyManager {
     }
 
     /// Detaylı bağlantı kontrolü
-    pub async fn check_connection_detailed(&self) -> ConnectionResult {
-        check_openanime_connection().await
+    pub async fn check_connection_detailed(&self, use_proxy: bool) -> ConnectionResult {
+        check_openanime_connection(use_proxy).await
     }
 
     /// Tüm yöntemleri dene ve çalışanı bul
@@ -212,9 +216,9 @@ impl DpiProxyManager {
                 continue;
             }
 
-            tokio::time::sleep(Duration::from_secs(3)).await;
-
-            let result = self.check_connection_detailed().await;
+            // start_proxy inside already sleeps 100ms, no need to wait 3 seconds.
+            // We check the connection immediately through the local proxy.
+            let result = self.check_connection_detailed(true).await;
             let mut settings = self.settings.lock().await;
 
             match result {
@@ -238,6 +242,25 @@ impl DpiProxyManager {
         None
     }
 
+    /// Uzak proxy fallback adımını dener
+    pub async fn try_remote_proxy_fallback(&self, _app: &tauri::AppHandle) -> Result<(), String> {
+        println!("[DPI Proxy] Uzak proxy fallback deneniyor...");
+        *self.connection_stage.lock().await = "trying_proxy".to_string();
+        
+        match remote_proxy::try_remote_proxy_connection().await {
+            Ok(_) => {
+                println!("[DPI Proxy] ✅ Uzak proxy fallback başarılı!");
+                *self.connection_stage.lock().await = "success".to_string();
+                Ok(())
+            }
+            Err(e) => {
+                println!("[DPI Proxy] ❌ Uzak proxy fallback başarısız: {}", e);
+                *self.connection_stage.lock().await = "failed".to_string();
+                Err(e)
+            }
+        }
+    }
+
     /// Mevcut durumu döndür (frontend için)
     pub async fn get_status(&self) -> DpiStatus {
         let method_name = {
@@ -256,6 +279,7 @@ impl DpiProxyManager {
             is_blocking_detected: settings.is_blocking_detected,
             blocked_reason: settings.blocked_reason.clone(),
             system_goodbye_running: settings.system_goodbye_running,
+            connection_stage: self.connection_stage.lock().await.clone(),
         }
     }
 
@@ -298,9 +322,12 @@ pub async fn dpi_get_status(app: tauri::AppHandle) -> Result<DpiStatus, String> 
 }
 
 #[tauri::command]
-pub async fn dpi_check_connection(app: tauri::AppHandle) -> Result<ConnectionResult, String> {
+pub async fn dpi_check_connection(
+    app: tauri::AppHandle,
+    use_proxy: Option<bool>,
+) -> Result<ConnectionResult, String> {
     let state = app.state::<DpiProxyManager>();
-    Ok(state.check_connection_detailed().await)
+    Ok(state.check_connection_detailed(use_proxy.unwrap_or(false)).await)
 }
 
 #[tauri::command]
@@ -319,14 +346,30 @@ pub async fn dpi_get_methods() -> Result<Vec<DpiMethod>, String> {
 // ===== İç Yardımcılar =====
 
 /// Detaylı bağlantı kontrolü — hata tipini analiz eder
-async fn check_openanime_connection() -> ConnectionResult {
-    let client = reqwest::Client::builder()
+async fn check_openanime_connection(use_proxy: bool) -> ConnectionResult {
+    let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .danger_accept_invalid_certs(false)
-        .build();
+        .danger_accept_invalid_certs(false);
 
-    let client = match client {
+    // Bypassing system DNS using Cloudflare DoH (DNS-over-HTTPS)
+    if let Some(ip) = remote_proxy::resolve_dns_doh("openani.me").await {
+        println!("[DPI Proxy] DNS Bypass (DoH): openani.me resolved to {}", ip);
+        let socket_addr = std::net::SocketAddr::new(ip, 443);
+        builder = builder.resolve("openani.me", socket_addr);
+    } else {
+        println!("[DPI Proxy] Warning: Cloudflare DoH failed, falling back to system DNS");
+    }
+
+    if use_proxy {
+        if let Ok(proxy) = reqwest::Proxy::all("http://127.0.0.1:1453") {
+            builder = builder.proxy(proxy);
+        }
+    } else {
+        builder = builder.no_proxy();
+    }
+
+    let client = match builder.build() {
         Ok(c) => c,
         Err(_) => return ConnectionResult::NetworkUnreachable,
     };
