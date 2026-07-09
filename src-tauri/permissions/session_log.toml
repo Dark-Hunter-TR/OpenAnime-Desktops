@@ -1,0 +1,5 @@
+[[permission]]
+identifier = "allow-session-log"
+title = "Oturum Logu"
+description = "Oturum log dosyasını frontend'den okumaya izin verir"
+commands.allow = ["get_session_log"]
