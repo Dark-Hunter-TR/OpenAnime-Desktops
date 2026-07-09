@@ -15,18 +15,16 @@ const PROXY_ADDR: &str = "127.0.0.1:1453";
 const FRAGMENT_DELAY: Duration = Duration::from_millis(2);
 
 /// Proxy sunucusunu başlat — arkaplanda çalışır
-pub async fn start_proxy_internal(method: DpiMethod, running: Arc<Mutex<bool>>) {
+pub async fn start_proxy_internal(
+    current_method: Arc<Mutex<Option<DpiMethod>>>,
+    running: Arc<Mutex<bool>>,
+) {
     println!("[DPI Proxy] === TCP Proxy Başlatılıyor ===");
     println!("[DPI Proxy] Adres: {}", PROXY_ADDR);
-    println!("[DPI Proxy] Yöntem: #{} - {}", method.id, method.name);
-    println!("[DPI Proxy] HTTP host_case: {}, mixedcase: {}, removespace: {}",
-        method.http_host_case, method.http_host_mixedcase, method.http_host_removespace);
-    println!("[DPI Proxy] HTTP fragment: {}, HTTPS fragment: {}, reverse: {}, sni: {}",
-        method.http_fragment_size, method.https_fragment_size, method.reverse_fragment, method.fragment_by_sni);
 
     let listener = match TcpListener::bind(PROXY_ADDR).await {
         Ok(l) => {
-            println!("[DPI Proxy] ✅ HTTP proxy başlatıldı: {} (yöntem: {})", PROXY_ADDR, method.name);
+            println!("[DPI Proxy] ✅ HTTP proxy başlatıldı: {}", PROXY_ADDR);
             l
         }
         Err(e) => {
@@ -44,11 +42,21 @@ pub async fn start_proxy_internal(method: DpiMethod, running: Arc<Mutex<bool>>) 
         let accept = tokio::time::timeout(Duration::from_secs(1), listener.accept()).await;
         match accept {
             Ok(Ok((client, addr))) => {
-                println!("[DPI Proxy] Yeni bağlantı: {}", addr);
-                let method = method.clone();
+                let current_method = current_method.clone();
                 tokio::spawn(async move {
+                    let method = {
+                        let guard = current_method.lock().await;
+                        guard.clone().unwrap_or_else(|| {
+                            super::methods::get_method_by_id(0).unwrap().clone()
+                        })
+                    };
+
                     if let Err(e) = handle_http_proxy(client, method).await {
-                        eprintln!("[DPI Proxy] Bağlantı hatası ({}): {}", addr, e);
+                        // Avoid spamming canvas connection reset errors which are expected
+                        let is_canvas = e.contains("canvas");
+                        if !is_canvas {
+                            eprintln!("[DPI Proxy] Bağlantı hatası ({}): {}", addr, e);
+                        }
                     }
                 });
             }
