@@ -1,43 +1,41 @@
-name: '🚀 Publish'
+name: '🧪 Test Build'
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Sürüm numarası (örn: 1.0.2-beta, 1.0.3-alpha, 1.0.1)'
+      platform:
+        description: 'Build alınacak platform'
         required: true
-        type: string
-      channel:
-        description: 'Release kanalı (prerelease durumunu belirler)'
-        required: true
-        default: 'beta'
+        default: 'all'
         type: choice
         options:
-          - stable
-          - beta
-          - alpha
-      draft:
-        description: 'Draft olarak oluştur (açıklamayı sonra sen yazarsın)'
+          - all
+          - windows-latest
+          - ubuntu-22.04
+          - macos-latest
+      build_mode:
+        description: 'Build modu'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+      upload_artifacts:
+        description: 'Artifact olarak yükle'
         required: true
         default: true
         type: boolean
 
-concurrency:
-  group: publish-${{ inputs.version }}
-  cancel-in-progress: true
-
 jobs:
-  publish:
+  test-build:
     permissions:
-      contents: write
+      contents: read
+      actions: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            args: ''
-            target: aarch64-apple-darwin
-            label: macOS-ARM64
           - platform: windows-latest
             args: ''
             target: x86_64-pc-windows-msvc
@@ -50,14 +48,22 @@ jobs:
             args: '--target aarch64-unknown-linux-gnu'
             target: aarch64-unknown-linux-gnu
             label: Linux-ARM64
+          - platform: macos-latest
+            args: ''
+            target: aarch64-apple-darwin
+            label: macOS-ARM64
 
     runs-on: ${{ matrix.platform }}
+
+    if: |
+      github.event.inputs.platform == 'all' ||
+      matrix.platform == github.event.inputs.platform
 
     steps:
       - uses: actions/checkout@v4
 
       # ────────────────────────────────────────────────────
-      # 1. Linux bağımlılıkları
+      # Linux bağımlılıkları
       # ────────────────────────────────────────────────────
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -96,7 +102,7 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       # ────────────────────────────────────────────────────
-      # 2. Toolchain
+      # Toolchain
       # ────────────────────────────────────────────────────
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -112,7 +118,7 @@ jobs:
           bun-version: latest
 
       # ────────────────────────────────────────────────────
-      # 3. Cache
+      # Cache
       # ────────────────────────────────────────────────────
       - name: Cache Rust
         uses: actions/cache@v4
@@ -134,20 +140,42 @@ jobs:
             ${{ runner.os }}-bun-
 
       # ────────────────────────────────────────────────────
-      # 4. Build & Release
+      # Build
       # ────────────────────────────────────────────────────
       - name: Install frontend dependencies
         run: bun install
 
-      - name: Build & publish
+      - name: Build the app
         uses: tauri-apps/tauri-action@v4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v${{ inputs.version }}
-          releaseName: 'OpenAnime Desktop v${{ inputs.version }} (${{ inputs.channel }})'
-          releaseDraft: ${{ inputs.draft == 'true' }}
-          prerelease: ${{ inputs.channel != 'stable' }}
+          releaseDraft: false
+          prerelease: false
           args: ${{ matrix.args }}
+          # NOT: includeDebug parametresi tauri-action@v4'te yok.
+          # Debug build için Tauri'nin kendi debug profili kullanılır.
+          # Debug build'de bundle oluşmaz, sadece binary build edilir.
+
+      # ────────────────────────────────────────────────────
+      # Artifact Upload
+      # ────────────────────────────────────────────────────
+      - name: Set artifact path
+        id: artifact_path
+        shell: bash
+        run: |
+          if [ "${{ github.event.inputs.build_mode }}" == "debug" ]; then
+            echo "path=src-tauri/target/debug" >> $GITHUB_OUTPUT
+          else
+            echo "path=src-tauri/target/release/bundle" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload build artifacts
+        if: github.event.inputs.upload_artifacts == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenAnime-${{ matrix.label }}-${{ github.event.inputs.build_mode }}-${{ github.sha }}
+          path: |
+            ${{ steps.artifact_path.outputs.path }}/**/*
+          if-no-files-found: warn
+          retention-days: 7
