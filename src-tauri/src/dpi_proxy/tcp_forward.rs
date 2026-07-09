@@ -62,6 +62,20 @@ pub async fn start_proxy_internal(method: DpiMethod, running: Arc<Mutex<bool>>) 
     println!("[DPI Proxy] Proxy sonlandı.");
 }
 
+/// DNS engellemelerini aşmak için hedef adresi Cloudflare DoH ile çözer
+async fn resolve_target_doh(target: &str) -> String {
+    let host = target.split(':').next().unwrap_or(target);
+    if host == "openani.me" || host.ends_with(".openani.me") {
+        if let Some(ip) = super::remote_proxy::resolve_dns_doh(host).await {
+            let port = target.split(':').nth(1).unwrap_or("443");
+            let new_target = format!("{}:{}", ip, port);
+            println!("[DPI Proxy] DNS Bypass (DoH): {} -> {}", target, new_target);
+            return new_target;
+        }
+    }
+    target.to_string()
+}
+
 /// HTTP Proxy girişi — CONNECT veya direkt HTTP isteklerini yönetir
 async fn handle_http_proxy(mut client: TcpStream, method: DpiMethod) -> Result<(), String> {
     let mut buf = vec![0u8; 4096];
@@ -120,10 +134,12 @@ async fn handle_connect(
 
     println!("[DPI Proxy] CONNECT {} (yöntem: #{}, {})", target, method.id, method.name);
 
+    let connect_target = resolve_target_doh(target).await;
+
     // Hedefe bağlan
-    let mut server = match TcpStream::connect(target).await {
+    let mut server = match TcpStream::connect(&connect_target).await {
         Ok(s) => {
-            println!("[DPI Proxy]   ✅ Hedefe bağlanıldı: {}", target);
+            println!("[DPI Proxy]   ✅ Hedefe bağlanıldı: {}", connect_target);
             s
         }
         Err(e) => {
@@ -132,8 +148,8 @@ async fn handle_connect(
                 println!("[DPI Proxy]   ⚠️ Canvas domain bağlantı hatası (beklenen): {} - {}", target, e);
                 return Ok(());
             }
-            eprintln!("[DPI Proxy]   ❌ Hedefe bağlanılamadı ({}): {}", target, e);
-            return Err(format!("Hedefe bağlanılamadı ({}): {}", target, e));
+            eprintln!("[DPI Proxy]   ❌ Hedefe bağlanılamadı ({}): {}", connect_target, e);
+            return Err(format!("Hedefe bağlanılamadı ({}): {}", connect_target, e));
         }
     };
 
@@ -193,15 +209,17 @@ async fn handle_http_request(
 
     println!("[DPI Proxy] HTTP {} -> {} (hedef: {})", parts[0], url_str, target);
 
+    let connect_target = resolve_target_doh(&target).await;
+
     // Hedefe bağlan
-    let mut server = match TcpStream::connect(&target).await {
+    let mut server = match TcpStream::connect(&connect_target).await {
         Ok(s) => {
-            println!("[DPI Proxy]   ✅ HTTP hedefe bağlanıldı: {}", target);
+            println!("[DPI Proxy]   ✅ HTTP hedefe bağlanıldı: {}", connect_target);
             s
         }
         Err(e) => {
-            eprintln!("[DPI Proxy]   ❌ HTTP hedefe bağlanılamadı ({}): {}", target, e);
-            return Err(format!("HTTP hedefe bağlanılamadı ({}): {}", target, e));
+            eprintln!("[DPI Proxy]   ❌ HTTP hedefe bağlanılamadı ({}): {}", connect_target, e);
+            return Err(format!("HTTP hedefe bağlanılamadı ({}): {}", connect_target, e));
         }
     };
 
@@ -335,13 +353,37 @@ async fn handle_tls_tunnel(
     Ok(())
 }
 
-/// Çift yönlü TCP kopyalama
+/// Asenkron veri kopyalama işlemi sırasında inaktivite (veri akışı olmaması) durumunu izler
+async fn copy_with_timeout(
+    mut reader: impl tokio::io::AsyncRead + Unpin,
+    mut writer: impl tokio::io::AsyncWrite + Unpin,
+    timeout_dur: Duration,
+) -> Result<(), std::io::Error> {
+    let mut buf = vec![0u8; 8192];
+    loop {
+        let n = match tokio::time::timeout(timeout_dur, reader.read(&mut buf)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "inactivity timeout")),
+        };
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n]).await?;
+    }
+    writer.flush().await?;
+    Ok(())
+}
+
+/// Çift yönlü TCP kopyalama - inaktivite zaman aşımı ile
 async fn bidirectional_copy(mut client: TcpStream, mut server: TcpStream) {
     let (mut cr, mut cw) = client.split();
     let (mut sr, mut sw) = server.split();
 
+    let timeout_dur = Duration::from_secs(30);
+
     tokio::select! {
-        _ = tokio::io::copy(&mut cr, &mut sw) => {},
-        _ = tokio::io::copy(&mut sr, &mut cw) => {},
+        _ = copy_with_timeout(&mut cr, &mut sw, timeout_dur) => {},
+        _ = copy_with_timeout(&mut sr, &mut cw, timeout_dur) => {},
     }
 }

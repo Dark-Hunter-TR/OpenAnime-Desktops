@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::SystemTime;
+use tauri::Manager;
 
 // ===== Global Static Logger =====
 // Her yerden `log!("mesaj")` ile erişilebilir
@@ -207,11 +208,10 @@ fn format_timestamp_compact(unix_secs: u64) -> String {
 }
 
 fn format_timestamp_ms(unix_secs: u64, millis: u32) -> String {
-    let (days, time) = to_local(unix_secs);
+    let (_, time) = to_local(unix_secs);
     let hours = time / 3600;
     let minutes = (time % 3600) / 60;
     let seconds = time % 60;
-    let (y, m, d) = days_to_ymd(days);
     format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
 }
 
@@ -234,7 +234,7 @@ fn days_to_ymd(days: i64) -> (i64, u32, u32) {
     let mut m = 0;
     for (i, &md) in month_days.iter().enumerate() {
         if remaining < md {
-            m = i + 1;
+            m = (i + 1) as u32;
             break;
         }
         remaining -= md;

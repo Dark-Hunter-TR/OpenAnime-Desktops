@@ -764,7 +764,7 @@ pub fn run() {
 
     let builder = builder.setup(|app| {
         // Logger'ı en başta başlat
-        logger::init(app);
+        logger::init(app.handle());
         log!("===== OPENANIME SETUP BAŞLADI =====");
         log!("[Setup] Build modu: {}", if cfg!(debug_assertions) { "DEBUG" } else { "RELEASE" });
         log!("[Setup] Platform: {}", std::env::consts::OS);
@@ -775,44 +775,92 @@ pub fn run() {
         app.manage(dpi_manager);
         let user_agent = platform_user_agent();
 
-        // DPI proxy'yi en baştan başlat (arkaplan)
-        // NOT: reqwest (WinHTTP) DPI'yi bypass ettiği için bağlantı
-        // kontrolü yapmıyoruz, direkt proxy başlatıp --proxy-server ile
-        // pencereyi açıyoruz.
+        // DPI proxy'yi en baştan başlat (arkaplan) - Windows için 3 adımlı bağlantı doğrulama akışı
+        #[cfg(target_os = "windows")]
         let proxy_ok = tauri::async_runtime::block_on(async {
             let dpi = app.state::<dpi_proxy::DpiProxyManager>();
-            // Kayıtlı yöntem varsa kullan, yoksa #1
-            let method_id = {
-                let settings = dpi.settings.lock().await;
-                settings.active_method_id.unwrap_or(1)
-            };
-            log!("[Setup] DPI proxy başlatılıyor (yöntem #{})...", method_id);
-            let result = dpi.start_proxy(&app_handle, method_id).await;
-            match &result {
-                Ok(_) => {
-                    log!("[Setup] ✅ Yöntem #{} başarıyla başlatıldı", method_id);
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    true
+            
+            // ADIM 1: Önce DPI'sız/proxy'siz gerçek bağlantıyı test et
+            {
+                let mut stage = dpi.connection_stage.lock().await;
+                *stage = "checking_direct".to_string();
+            }
+            log!("[Setup] Adım 1: Doğrudan bağlantı test ediliyor...");
+            
+            let direct_check = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                dpi.check_connection_detailed(false)
+            ).await;
+            
+            match direct_check {
+                Ok(dpi_proxy::ConnectionResult::Ok) => {
+                    log!("[Setup] Doğrudan bağlantı başarılı, DPI proxy atlanıyor.");
+                    let mut stage = dpi.connection_stage.lock().await;
+                    *stage = "success".to_string();
+                    false // Proxy aktif değil, base browser args kullanılacak
                 }
-                Err(e) => {
-                    log!("[Setup] ❌ Yöntem #{} başarısız: {}", method_id, e);
-                    // Yöntem 1 fallback
-                    log!("[Setup] Fallback: yöntem #1 deneniyor...");
-                    let result2 = dpi.start_proxy(&app_handle, 1).await;
-                    match &result2 {
-                        Ok(_) => {
-                            log!("[Setup] ✅ Fallback yöntem #1 başarılı");
-                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                            true
+                _ => {
+                    // ADIM 2: DPI proxy ile dene
+                    log!("[Setup] Doğrudan bağlantı başarısız veya zaman aşımı. Adım 2: DPI proxy deneniyor...");
+                    {
+                        let mut stage = dpi.connection_stage.lock().await;
+                        *stage = "trying_dpi".to_string();
+                    }
+                    
+                    let method_id = {
+                        let settings = dpi.settings.lock().await;
+                        settings.active_method_id.unwrap_or(1)
+                    };
+                    
+                    let start_res = dpi.start_proxy(&app_handle, method_id).await;
+                    let mut is_working = false;
+                    if start_res.is_ok() {
+                        // Proxy üzerinden doğrula
+                        let proxy_check = tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            dpi.check_connection_detailed(true)
+                        ).await;
+                        if let Ok(dpi_proxy::ConnectionResult::Ok) = proxy_check {
+                            log!("[Setup] DPI proxy (yöntem #{}) başarılı!", method_id);
+                            is_working = true;
                         }
-                        Err(e2) => {
-                            log!("[Setup] ❌ Fallback de başarısız: {}", e2);
-                            false
+                    }
+                    
+                    if !is_working {
+                        // Eğer aktif metot çalışmadıysa, tüm metotları sırayla test et
+                        log!("[Setup] Aktif yöntem çalışmadı, tüm yöntemler test ediliyor...");
+                        if let Some(working_id) = dpi.test_all_methods(&app_handle).await {
+                            log!("[Setup] Çalışan yöntem bulundu ve başlatıldı: #{}", working_id);
+                            is_working = true;
+                        }
+                    }
+                    
+                    if is_working {
+                        let mut stage = dpi.connection_stage.lock().await;
+                        *stage = "success".to_string();
+                        true // Proxy aktif ve başarılı
+                    } else {
+                        // ADIM 3: Proxy Fallback
+                        log!("[Setup] DPI proxy başarısız. Adım 3: Uzak proxy fallback deneniyor...");
+                        match dpi.try_remote_proxy_fallback(&app_handle).await {
+                            Ok(_) => {
+                                log!("[Setup] Uzak proxy fallback başarılı.");
+                                true // fallback başarılı
+                            }
+                            Err(_) => {
+                                log!("[Setup] Tüm bağlantı adımları başarısız oldu. Çevrimdışı moda düşülüyor.");
+                                let mut stage = dpi.connection_stage.lock().await;
+                                *stage = "failed".to_string();
+                                false
+                            }
                         }
                     }
                 }
             }
         });
+
+        #[cfg(not(target_os = "windows"))]
+        let proxy_ok = false;
 
         #[allow(unused_variables)]
         let (browser_args, proxy_status_msg) = if proxy_ok {
@@ -868,7 +916,7 @@ pub fn run() {
 
         log!("[Setup] Pencere build ediliyor...");
         match win_builder.build() {
-            Ok(window) => {
+            Ok(_window) => {
                 log!("[Setup] ✅ Ana pencere başarıyla oluşturuldu (label: main)");
                 log!("[Setup] WebView URL: https://openani.me/");
                 log!("===== OPENANIME SETUP TAMAM =====");
