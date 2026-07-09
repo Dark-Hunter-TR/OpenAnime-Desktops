@@ -762,6 +762,10 @@ pub fn run() {
     // .manage()'i setup'tan sonra kullanacağız
 
     let builder = builder.setup(|app| {
+        println!("===== OPENANIME SETUP BAŞLADI =====");
+        println!("[Setup] Build modu: {}", if cfg!(debug_assertions) { "DEBUG" } else { "RELEASE" });
+        println!("[Setup] Platform: {}", std::env::consts::OS);
+
         // DPI Proxy manager'ı başlat
         let app_handle = app.handle().clone();
         let dpi_manager = dpi_proxy::DpiProxyManager::new(&app_handle);
@@ -780,37 +784,52 @@ pub fn run() {
                 settings.active_method_id.unwrap_or(1)
             };
             println!("[Setup] DPI proxy başlatılıyor (yöntem #{})...", method_id);
-            if dpi.start_proxy(&app_handle, method_id).await.is_ok() {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                true
-            } else {
-                // Yöntem 1 fallback
-                println!("[Setup] Fallback: yöntem #1 deneniyor...");
-                if dpi.start_proxy(&app_handle, 1).await.is_ok() {
+            let result = dpi.start_proxy(&app_handle, method_id).await;
+            match &result {
+                Ok(_) => {
+                    println!("[Setup] ✅ Yöntem #{} başarıyla başlatıldı", method_id);
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     true
-                } else {
-                    false
+                }
+                Err(e) => {
+                    println!("[Setup] ❌ Yöntem #{} başarısız: {}", method_id, e);
+                    // Yöntem 1 fallback
+                    println!("[Setup] Fallback: yöntem #1 deneniyor...");
+                    let result2 = dpi.start_proxy(&app_handle, 1).await;
+                    match &result2 {
+                        Ok(_) => {
+                            println!("[Setup] ✅ Fallback yöntem #1 başarılı");
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                            true
+                        }
+                        Err(e2) => {
+                            println!("[Setup] ❌ Fallback de başarısız: {}", e2);
+                            false
+                        }
+                    }
                 }
             }
         });
 
         #[allow(unused_variables)]
-        let browser_args = if proxy_ok {
-            println!("[Setup] ✅ Proxy çalışıyor, --proxy-server ile açılıyor");
+        let (browser_args, proxy_status_msg) = if proxy_ok {
+            println!("[Setup] ✅ Proxy çalışıyor, --proxy-server ile pencere açılıyor");
             #[cfg(target_os = "windows")]
-            { WINDOWS_PROXY_ARGS }
+            { (WINDOWS_PROXY_ARGS, "Proxy AKTİF (--proxy-server ile)") }
             #[cfg(not(target_os = "windows"))]
-            { "" }
+            { ("", "Proxy AKTİF") }
         } else {
-            println!("[Setup] ❌ Proxy başlatılamadı, normal açılıyor");
+            println!("[Setup] ❌ Proxy başlatılamadı, normal modda açılıyor");
             #[cfg(target_os = "windows")]
-            { WINDOWS_BASE_ARGS }
+            { (WINDOWS_BASE_ARGS, "Proxy DEVADIŞI (normal mod)") }
             #[cfg(not(target_os = "windows"))]
-            { "" }
+            { ("", "Proxy DEVADIŞI") }
         };
+        println!("[Setup] WebView modu: {}", proxy_status_msg);
 
         let main_url = WebviewUrl::External("https://openani.me/".parse().unwrap());
+        println!("[Setup] Ana URL: https://openani.me/");
+        println!("[Setup] Pencere oluşturuluyor (1280x848, decorations: false)...");
 
         let app_handle = app.handle().clone();
         let win_builder = WebviewWindowBuilder::new(
@@ -827,14 +846,14 @@ pub fn run() {
         .user_agent(user_agent)
         .on_new_window(move |url, _features| {
             println!(
-                "[Tauri] Intercepted new window request from main window for URL: {}",
+                "[Tauri] Yeni pencere isteği (main penceresinden): {}",
                 url
             );
             let app_c = app_handle.clone();
             let url_str = url.to_string();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = open_new_window(app_c, url_str).await {
-                    eprintln!("[Tauri] on_new_window -> open_new_window error: {}", e);
+                    eprintln!("[Tauri] Yeni pencere açma hatası: {}", e);
                 }
             });
             tauri::webview::NewWindowResponse::Deny
@@ -844,8 +863,20 @@ pub fn run() {
         #[cfg(target_os = "windows")]
         let win_builder = win_builder.additional_browser_args(browser_args);
 
-        win_builder.build()?;
-        Ok(())
+        println!("[Setup] Pencere build ediliyor...");
+        match win_builder.build() {
+            Ok(window) => {
+                println!("[Setup] ✅ Ana pencere başarıyla oluşturuldu (label: main)");
+                println!("[Setup] WebView URL: https://openani.me/");
+                println!("===== OPENANIME SETUP TAMAM =====");
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("[Setup] ❌ ANA PENCERE OLUŞTURULAMADI: {}", e);
+                eprintln!("===== OPENANIME SETUP HATA =====");
+                Err(e)
+            }
+        }
     })
         .on_window_event(|window, event| {
             let app_handle = window.app_handle().clone();
