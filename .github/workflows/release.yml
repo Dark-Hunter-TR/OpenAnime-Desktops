@@ -63,8 +63,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get remove -y 'libunwind-1[0-9]-dev' || true
-          sudo apt-get install -y libunwind-dev
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends libunwind-dev
+          sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             build-essential \
             curl \
@@ -110,7 +110,7 @@ jobs:
           done | sudo tee /etc/apt/sources.list.d/arm64.list > /dev/null
 
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y -o DPkg::options::="--force-overwrite" \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
             libwebkit2gtk-4.1-dev:arm64 \
@@ -149,6 +149,15 @@ jobs:
       # ────────────────────────────────────────────────────
       # 3. Cache
       # ────────────────────────────────────────────────────
+      - name: Cache Tauri bundler (NSIS, Wix etc.)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\tauri
+          key: ${{ runner.os }}-tauri-bundler-${{ hashFiles('src-tauri/tauri.conf.json') }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-bundler-
+
       - name: Cache Rust
         uses: actions/cache@v6
         with:
