@@ -11,7 +11,7 @@ on:
         options:
           - all
           - windows-latest
-          - ubuntu-22.04
+          - ubuntu-24.04
           - macos-latest
       build_mode:
         description: 'Build modu'
@@ -133,8 +133,8 @@ jobs:
           retention-days: 7
 
   linux-x64:
-    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ubuntu-22.04'
-    runs-on: ubuntu-22.04
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ubuntu-24.04'
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Install Linux dependencies
@@ -195,8 +195,8 @@ jobs:
           retention-days: 7
 
   linux-arm64:
-    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ubuntu-22.04'
-    runs-on: ubuntu-22.04
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ubuntu-24.04'
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Install Linux dependencies

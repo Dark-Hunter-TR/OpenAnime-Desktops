@@ -36,6 +36,7 @@ extern "system" {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod gpu_switch_macos {
     use std::sync::Mutex;
 
@@ -794,7 +795,8 @@ pub fn run() {
             }
         });
 
-        let _browser_args = if proxy_ok {
+        #[allow(unused_variables)]
+        let browser_args = if proxy_ok {
             println!("[Setup] ✅ Proxy çalışıyor, --proxy-server ile açılıyor");
             #[cfg(target_os = "windows")]
             { WINDOWS_PROXY_ARGS }
