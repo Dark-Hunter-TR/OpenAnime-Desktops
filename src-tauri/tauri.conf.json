@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenAnime",
+  "version": "1.0.2-beta-02",
+  "identifier": "com.darkhunter.openanime-desktops",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bunx svelte-kit sync && bun run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "rpm", "appimage", "nsis", "dmg"],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "languages": ["Turkish"],
+        "template": "./nsis/installer.nsi"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libappindicator3-1",
+          "gstreamer1.0-tools",
+          "gstreamer1.0-plugins-base",
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-plugins-bad",
+          "gstreamer1.0-plugins-ugly",
+          "gstreamer1.0-libav"
+        ],
+        "recommends": [
+          "mesa-va-drivers"
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZCMDZGNTEzMDRBRTgzNTAKUldSUWc2NEVFL1VHKzZvUHduZmducXJnS3RyeGwzcWEweURBaWxDWjJLOTJnMG9uRmlpRWZOTFkK",
+      "endpoints": [
+        "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

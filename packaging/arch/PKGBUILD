@@ -1,0 +1,44 @@
+# Maintainer: darkhunter
+pkgname=openanime-desktops
+pkgver=1.0.2_beta
+_pkgver=1.0.2-beta
+pkgrel=1
+pkgdesc="OpenAnime masaüstü istemcisi — Tauri v2 + Rust + Svelte v5"
+arch=('x86_64')
+url="https://github.com/Dark-Hunter-TR/OpenAnime-Desktops"
+license=('MIT')
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libappindicator-gtk3'
+    'librsvg'
+    'gstreamer'
+    'gst-plugins-base'
+    'gst-plugins-good'
+    'gst-plugins-bad'
+    'gst-plugins-ugly'
+    'gst-libav'
+)
+optdepends=(
+    'libva-mesa-driver: Intel/AMD donanım video decode'
+    'nvidia-utils: NVIDIA donanım video decode'
+)
+makedepends=('rust' 'cargo' 'nodejs' 'bun' 'base-devel' 'xdotool')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/archive/refs/tags/v$_pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "OpenAnime-Desktops-$_pkgver"
+    bun install
+    bun run tauri build --bundles deb
+}
+
+package() {
+    cd "OpenAnime-Desktops-$_pkgver"
+    local _deb=$(find src-tauri/target/release/bundle/deb -name '*.deb' | head -1)
+    if [[ -n "$_deb" ]]; then
+        bsdtar -xf "$_deb" -C "$srcdir"
+        bsdtar -xf "$srcdir/data.tar."* -C "$pkgdir"
+    fi
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

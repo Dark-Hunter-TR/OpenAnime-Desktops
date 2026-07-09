@@ -1,0 +1,48 @@
+[package]
+name = "openanime"
+version = "1.0.2-beta-02"
+description = "OpenAnime"
+authors = [".dark_hunter"]
+edition = "2021"
+
+[lib]
+name = "openanime_desktops_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["native-tls-vendored"] }
+tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2.4.1"
+discord-rich-presence = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
+regex = "1.10"
+rfd = "0.15"
+url = "2.5"
+percent-encoding = "2.3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = "22.1.0"
+gpu-allocator = "=0.28.0"
+gstreamer = "0.22"
+gstreamer-app = "0.22"
+gstreamer-video = "0.22"
+raw-window-handle = "0.6.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

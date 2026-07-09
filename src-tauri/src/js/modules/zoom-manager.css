@@ -1,0 +1,15 @@
+#tauri-zoom-indicator {
+  position: fixed !important; left: 50% !important;
+  z-index: 999999999 !important;
+  background-color: rgba(0,0,0,0.6) !important; backdrop-filter: blur(8px) !important;
+  border-style: solid !important; border-color: rgba(255,255,255,0.2) !important;
+  color: #fff !important;
+  display: flex !important; align-items: center !important; justify-content: center !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  user-select: none !important; pointer-events: none !important;
+  opacity: 0 !important; transition: opacity 0.15s ease-in-out !important;
+  transform: translateX(-50%) !important;
+}
+#tauri-zoom-indicator.visible { opacity: 1 !important; }

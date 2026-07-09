@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "allow-discord-rpc"
+description = "Allows invoking Discord RPC commands"
+
+[permission.commands]
+allow = [
+  "update_discord_presence",
+  "clear_discord_presence",
+  "set_discord_rpc_enabled"
+]
