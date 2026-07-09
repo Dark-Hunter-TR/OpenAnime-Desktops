@@ -93,12 +93,9 @@ jobs:
 
           # ARM64 repolarını ports.ubuntu.com'dan ekle
           UBUNTU_CODENAME=$(lsb_release -cs)
-          sudo tee /etc/apt/sources.list.d/arm64.list > /dev/null << EOL
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME} main universe multiverse restricted
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-updates main universe multiverse restricted
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-backports main universe multiverse restricted
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports ${UBUNTU_CODENAME}-security main universe multiverse restricted
-EOL
+          for suite in "$UBUNTU_CODENAME" "$UBUNTU_CODENAME-updates" "$UBUNTU_CODENAME-backports" "$UBUNTU_CODENAME-security"; do
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $suite main universe multiverse restricted"
+          done | sudo tee /etc/apt/sources.list.d/arm64.list > /dev/null
 
           sudo apt-get update
           sudo apt-get install -y \
