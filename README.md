@@ -1,185 +1,240 @@
-# ⚡ OpenAnime Desktop (Windows, macOS & Linux)
+<div align="center">
 
-<p align="center">
-  <img src="src-tauri/icons/icon.png" alt="OpenAnime Logo" width="128" height="128" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(255, 152, 0, 0.25);" />
-</p>
+<img src="https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/raw/main/src-tauri/icons/icon.png" alt="OpenAnime Desktop Logo" width="120" />
 
-<p align="center">
-  Tauri v2, Rust ve Svelte v5 ile geliştirilmiş; <b>Windows</b>, <b>macOS</b> ve <b>Linux</b> işletim sistemlerinde çalışan ultra hafif, yüksek performanslı ve WebGPU optimize edilmiş modern OpenAnime masaüstü uygulaması.
-</p>
+# ⚡ OpenAnime Desktop
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Windows-Supported-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Badge" />
-  <img src="https://img.shields.io/badge/macOS-Supported-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS Badge" />
-  <img src="https://img.shields.io/badge/Linux-Supported-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux Badge" />
-  <img src="https://img.shields.io/badge/Tauri-v2-FFC107?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri Badge" />
-  <img src="https://img.shields.io/badge/Rust-Stable-black?style=for-the-badge&logo=rust&logoColor=white" alt="Rust Badge" />
-  <img src="https://img.shields.io/badge/Svelte-v5-FF3E00?style=for-the-badge&logo=svelte&logoColor=white" alt="Svelte Badge" />
-  <img src="https://img.shields.io/badge/WebGPU-Enabled-4CAF50?style=for-the-badge&logo=webgpu&logoColor=white" alt="WebGPU Badge" />
-</p>
+**[OpenAnime](https://openani.me) platformu için geliştirilmiş, donanım hızlandırmalı, ultra hafif masaüstü istemcisi.**
+
+Tauri v2 · Rust · Svelte v5 · WebGPU
+
+![Windows](https://img.shields.io/badge/Windows-Supported-0078D4?style=for-the-badge&logo=windows&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS-Supported-000000?style=for-the-badge&logo=apple&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-Deneysel-FCC624?style=for-the-badge&logo=linux&logoColor=black)
+![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+
+</div>
 
 ---
 
 ## 📌 Proje Hakkında
 
-Bu uygulama, **[OpenAnime](https://openani.me)** platformu için geliştirilmiş modern bir masaüstü istemcisidir. **Sitenin kurucularının bilgisi ve haberi dahilinde kişisel olarak hazırlanmıştır.** 
+Bu depo, **[OpenAnime](https://openani.me)** platformu için geliştirilmiş, resmî olmayan ama sitenin kurucularının bilgisi ve onayı dahilinde hazırlanmış bir masaüstü istemcisidir.
 
-Sitenin orijinal/resmi Windows uygulaması da mevcuttur ve [resmi indirme sayfasından](https://ors.openani.me/en) edinilebilir. Resmi sitede şu an için yalnızca Windows sürümü sunulmaktadır. Geliştirdiğimiz bu alternatif sürüm ise hem **Windows** hem de **macOS** işletim sistemlerinde sorunsuz çalışmaktadır (özellikle Mac kullanıcıları için harika bir alternatiftir).
+OpenAnime'ın resmî masaüstü uygulaması yalnızca **Windows** için sunulmaktadır ([resmî indirme sayfası](https://ors.openani.me/tr)). Bu proje ise aynı web deneyimini; **Tauri v2 (Rust)** çekirdeği üzerine inşa edilmiş, donanım hızlandırmalı bir kabuk (shell) içine alarak **Windows** ve **macOS**'ta native bir uygulama haline getirir, **Linux** desteği ise aktif geliştirme aşamasındadır.
 
-Dileyen resmi uygulamayı, dileyen bu alternatifi, dileyen de tarayıcı üzerinden web sürümünü kullanabilir. Sürümler arasında içerik veya işlevsel olarak bir fark yoktur; ancak bu istemci donanım hızlandırma, pencere yönetimi ve özel kısayollarla çok daha entegre bir deneyim sunar.
+Web, resmî Windows uygulaması veya bu istemci — içerik ve işlevsellik olarak aralarında fark yoktur. Bu proje; donanım anahtarlama (GPU switching), çerçevesiz pencere yönetimi, özel klavye kısayolları ve Discord Zengin Varlık (Rich Presence) entegrasyonu gibi ekstra bir katman sunar.
+
+> ⚠️ Bu proje topluluk tarafından geliştirilmektedir, OpenAnime'ın resmî bir ürünü değildir.
+
+---
+
+## 🧠 Mimari Genel Bakış
+
+Proje, **arayüz (frontend)** ve **native çekirdek (backend)** olarak iki katmandan oluşur:
+
+```
+┌─────────────────────────────────────────────┐
+│               Tauri Shell (Rust)             │
+│  src-tauri/  → pencere yönetimi, GPU         │
+│  anahtarlama, sistem entegrasyonu, IPC       │
+│  komutları, Discord RPC, packaging           │
+└───────────────────┬───────────────────────────┘
+                    │ IPC (invoke/emit)
+┌───────────────────▼───────────────────────────┐
+│           SvelteKit Arayüzü (src/)            │
+│  openani.me içeriğini render eden webview +   │
+│  özel titlebar, kısayollar, zoom yönetimi,    │
+│  harici link filtreleme                      │
+└─────────────────────────────────────────────────┘
+```
+
+- **`src-tauri/`** — Rust ile yazılmış native katman. Pencere oluşturma, iGPU/dGPU anahtarlama mantığı, sistem tepsisi/IPC komutları, uygulama içi güncelleme ve platforma özel derleme (packaging) yapılandırmaları burada yer alır.
+- **`src/`** — SvelteKit tabanlı arayüz katmanı. OpenAnime web sitesini bir webview içinde barındırırken; özel pencere kontrolleri, klavye kısayolları, zoom yönetimi ve harici bağlantı yönlendirme gibi "yerlileştirme" (native-like) katmanlarını ekler.
+- **`static/`** — Statik varlıklar (ikonlar, ön yükleme/splash ekranları vb.).
+- **`.github/workflows/`** — Windows ve macOS için otomatik derleme/yayınlama (CI/CD) iş akışları.
 
 ---
 
 ## 🌟 Öne Çıkan Özellikler
 
-### 🚀 Gelişmiş Donanım ve GPU Optimizasyonu
-*   **Akıllı Ekran Kartı Seçimi (Smart GPU Switch):** Video oynatıcı veya anime izleme sayfası aktif olduğunda sistem otomatik olarak harici/yüksek performanslı ekran kartını (**NVIDIA dGPU / AMD dGPU**) tetikler. Katalogda dolaşırken ise entegre kartı (**Intel/AMD iGPU**) kullanarak pil ömrünü korur ve fan sesini en aza indirger.
-*   **WebGPU & Donanım Hızlandırma:** Video ve render katmanlarında GPU kompozisyonu (`will-change: transform`) zorlanarak 4K / 60 FPS gibi yüksek kaliteli yayınların sıfır takılmayla oynatılması sağlanır.
-*   **Düşük Kaynak Tüketimi:** Electron tabanlı diğer masaüstü uygulamalarının aksine diskte 10 MB'tan az yer kaplar ve son derece düşük RAM tüketir.
+### 🚀 Donanım ve GPU Optimizasyonu
 
-### 🎨 Çerçevesiz (Frameless) Tasarım & Akıllı Arayüz
-*   **Minimalist Tasarım:** Pencere kenarlıkları kaldırılmış çerçevesiz modern arayüz.
-*   **Özel Pencere Kontrolleri:** Sayfa sağ üstüne entegre edilen macOS stili Kapat/Küçült/Büyüt butonları, sayfa yakınlaştırma seviyesinden etkilenmeden her zaman stabil boyutta ve tıklanabilir kalır.
-*   **Ekran Ortalaması:** Uygulama ilk açıldığında ekranınızın sınırlarını tespit ederek kendisini tam ortaya konumlandırır.
-*   **Pencere Hafızası:** Uygulamayı kapatıp açtığınızda son pencere boyutu ve ekranı kaplama (Maximized) durumu hafızada tutulur.
+- **Akıllı Ekran Kartı Seçimi:** Video oynatıcı aktifken sistem otomatik olarak harici/yüksek performanslı GPU'yu (NVIDIA/AMD dGPU) devreye sokar; katalog gezinirken entegre GPU'ya (iGPU) geçerek pil ömrünü ve fan gürültüsünü optimize eder.
+- **WebGPU Hızlandırma:** Video ve render katmanlarında GPU kompozisyonu zorlanarak 4K/60 FPS yayınların takılmadan oynatılması hedeflenir.
+- **Düşük Kaynak Tüketimi:** Electron tabanlı alternatiflerin aksine diskte 10 MB'tan az yer kaplar, düşük RAM ayak izine sahiptir.
+
+### 🎨 Çerçevesiz Tasarım & Özel Arayüz
+
+- Pencere kenarlıkları kaldırılmış, minimalist çerçevesiz (frameless) tasarım.
+- Fluent System Icons (fluenticons.co) kullanılarak Tauri'nin pencere API'si üzerine inşa edilmiş özel Kapat/Küçült/Büyüt kontrolleri — zoom seviyesinden etkilenmeden her zaman stabil ve tıklanabilir kalır.
+- İlk açılışta ekran sınırlarına göre otomatik ortalama.
+- Pencere boyutu ve maksimize durumu oturumlar arası hafızada tutulur.
 
 ### 🌐 Akıllı Tarayıcı ve Bağlantı Yönetimi
-*   **Harici Bağlantı Filtresi:** OpenAnime dışındaki tüm harici linkler (Discord davetleri, sosyal medya vb.) işletim sisteminizin varsayılan tarayıcısında (Chrome/Edge/Safari) güvenli bir şekilde açılır.
-*   **Gelişmiş Geri/İleri Navigasyonu:** Fare üzerindeki 4. ve 5. butonlar (Geri/İleri tuşları), `Backspace` tuşu veya `Alt + Sol/Sağ Yön Tuşları` ile tarayıcı geçmişinde kolayca gezinebilirsiniz.
 
-### 🔍 Dinamik Yakınlaştırma (Dinamik Zoom)
-*   `Ctrl + Sol Click` ile yeni pencere açma, `Ctrl + Fare Tekerleği` veya `Ctrl + +` / `Ctrl + -` kısayollarıyla sayfayı %30 ile %200 arasında yakınlaştırıp uzaklaştırabilirsiniz.
-*   Yakınlaştırma seviyeniz otomatik olarak kaydedilir ve sonraki açılışlarda korunur.
+- OpenAnime dışındaki tüm harici bağlantılar (Discord davetleri, sosyal medya vb.) sistemin varsayılan tarayıcısında güvenli şekilde açılır.
+- Fare 4./5. tuşları, `Backspace` veya `Alt + Sol/Sağ Yön Tuşları` ile gelişmiş geri/ileri navigasyonu.
+
+### 🔍 Dinamik Yakınlaştırma
+
+- `Ctrl + Fare Tekerleği` veya `Ctrl + +/-` ile %30–%200 arası sayfa yakınlaştırma (ekran boyutuna göre otomatik sınırlandırılır); seviye oturumlar arası korunur.
+
+### 🎮 Discord Zengin Varlık (Rich Presence)
+
+Resmî OpenAnime uygulamasındaki temel RPC entegrasyonunun kat kat ötesinde, gerçek zamanlı ve detaylı bir Discord Rich Presence deneyimi sunulur:
+
+- **Bulunulan sayfa bilgisi:** Kullanıcının o an uygulamada tam olarak ne yaptığı (ör. bir anime izleniyor, katalogda geziniyor vb.) Discord profilinde anlık olarak yansıtılır.
+- **Anime adı ve kapak görseli:** İzlenen animenin ismi ve kapak fotoğrafı RPC kartında gösterilir.
+- **Canlı zaman takibi:** Videonun şu an kaçıncı dakika/saniyesinde olunduğu ve toplam süre (dakika:saniye formatında) gerçek zamanlı güncellenir.
+- **Duraklatma sayacı:** Video duraklatıldığında, ne kadar süredir duraklatılmış olduğunu gösteren ayrı bir sayaç devreye girer — kullanıcı videoyu durdurup sohbete daldığında bile Discord'daki durum bunu şeffafça yansıtır.
+- **"Profile Git" butonu:** Kullanıcı OpenAnime hesabına giriş yapmışsa, RPC kartına tıklanabilir bir **"Profile Git"** butonu eklenir; giriş yapılmamışsa bu buton gösterilmez.
+
+### 🎨 Tema Sistemi (Deneysel)
+
+> 🧪 Bu özellik şu anda **deneysel geliştirme aşamasındadır**, henüz kararlı sürümde yer almamaktadır.
+
+OpenAnime topluluğu, siteye özel temalar (custom tema) geliştiren üyelere sahip. Bu doğrultuda uygulamaya, bu temaları doğrudan içeriden keşfedip yükleyebileceğiniz bir **Tema Sayfası** ekleniyor:
+
+- Üyelerin GitHub reposu üzerinden paylaştığı temalar, doğrudan uygulama içinden taranıp tek tıkla yüklenebilecek.
+- Temalar bir **GitHub reposu** yapısında barındırılacak (repo yıldız sayısı gibi metrikler kullanılabilecek).
+- Tema Sayfası'nda temalar şu kategorilere göre sıralanabilecek:
+  - ⭐ **Yıldız sayısına göre** (en çok yıldız alanlar)
+  - 📅 **Aylık en çok indirilenler**
+  - ❤️ **En çok sevilenler**
+
+Bu özellik geliştirme aşamasında olduğundan, arayüz ve işlevsellik detayları ilerleyen sürümlerde değişebilir.
+
+### 📡 Bağlantı ve Bakım Tespiti
+
+- **Otomatik çevrimdışı modu:** İnternet bağlantısı koptuğunda uygulama bunu anında algılar ve otomatik olarak çevrimdışı moduna geçer.
+- **Sunucu erişilebilirlik kontrolü:** OpenAnime sunucularına ulaşılamadığında veya bir bakım/kesinti durumu tespit edildiğinde, kullanıcıyı boş bir hata ekranıyla baş başa bırakmak yerine bilgilendirici bir durum sayfası gösterilir.
+- Bu sayfa; sorunu açıklayan bir mesajın yanında **"Tekrar Dene"** (bağlantıyı yeniden dener) ve **"Sunucu Durumunu Kontrol Et"** (sunucu tarafındaki genel duruma bakar) aksiyonlarını sunar.
+
+### 🛡️ GoodbyeDPI Entegrasyonu (DPI Engelleme Aşımı)
+
+- ISS (internet servis sağlayıcısı) kaynaklı DPI (Deep Packet Inspection) engellemeleri nedeniyle siteye normal şekilde bağlanılamadığında, uygulama otomatik olarak **[GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI)** ile devreye girip bağlantıyı bu şekilde kurmayı dener.
+- Bu mekanizma sessizce arka planda çalışır; kullanıcının manuel bir işlem yapmasına gerek kalmaz.
+- Uygulama kapatıldığında GoodbyeDPI süreci de otomatik olarak sonlandırılır — sistemde arkada çalışan bir DPI aşım süreci bırakılmaz.
+
+> GoodbyeDPI Windows'a özgü bir araç olduğundan bu entegrasyon şu an için **Windows** derlemesinde etkindir.
+
+---
+
+## 🖥️ Platform Desteği
+
+| Platform | Durum | Notlar |
+| --- | --- | --- |
+| 🪟 **Windows** | ✅ Tam destek | `.exe` / `.msi` çıktıları, GitHub Actions ile otomatik derlenir |
+| 🍎 **macOS** | ✅ Tam destek | `.dmg` / `.app` çıktıları, Apple Silicon dahil |
+| 🐧 **Linux** | 🧪 Aktif geliştirme | Aşağıdaki "Linux Desteği" bölümüne bakınız |
+
+### 🐧 Linux Desteği (Deneysel)
+
+Linux desteği, Tauri'nin bu platformda **webkit2gtk** kullanmasından kaynaklanan mimari kısıtlar nedeniyle ayrı bir mühendislik çabası gerektiriyor:
+
+- **WebGPU kısıtı:** webkit2gtk henüz production-ready bir WebGPU implementasyonu sunmadığından, Windows/macOS'taki WebGPU hızlandırmalı render yolu Linux'ta doğrudan kullanılamıyor.
+- **Yayın stratejisi:** Bu nedenle Linux sürümünde video akışı webview içinde HLS.js/dash.js ile karşılanıyor; yerel dosya oynatma (local file playback) şimdilik Linux'ta devre dışı bırakıldı.
+- **Yol haritası:** Uzun vadede webview'dan bağımsız, **wgpu (Vulkan) + GStreamer** tabanlı native bir render/oynatma hattı planlanıyor.
+- **Paketleme hedefleri:** AppImage, AUR (PKGBUILD) ve `.deb` paketleri desteklenmesi hedefleniyor.
+
+> Linux tarafında katkı/test isteyenler için Issues sekmesi açıktır; webkit2gtk kaynaklı davranış farkları (ör. splash ekranı, tam ekran yönetimi) bilinen konular arasındadır.
 
 ---
 
 ## ⌨️ Kısayollar ve Kontroller
 
 | Kısayol | İşlev |
-| :--- | :--- |
-| `Ctrl + Shift + I` | Geliştirici Araçları'nı (DevTools) açar (Yalnızca Geliştirici modunda çalışır) |
+| --- | --- |
+| `Ctrl + Shift + I` | Geliştirici Araçları'nı (DevTools) açar *(yalnızca geliştirici modunda)* |
 | `F5` veya `Ctrl + R` | Sayfayı yeniler |
-| `Ctrl` + `+` veya `=` | Sayfayı yakınlaştırır |
-| `Ctrl` + `-` | Sayfayı uzaklaştırır |
+| `Ctrl` + `+` / `=` | Yakınlaştırır |
+| `Ctrl` + `-` | Uzaklaştırır |
 | `Ctrl` + `0` | Yakınlaştırmayı sıfırlar (%100) |
-| `Alt` + `Sol Yön Tuşu` / `Backspace` | Geri git |
-| `Alt` + `Sağ Yön Tuşu` | İleri git |
-| `Ctrl` + `Sol Click` | Yeni Pencere Açma
+| `Alt` + `←` / `Backspace` | Geri git |
+| `Alt` + `→` | İleri git |
+| `Ctrl` + Sol Tık | Yeni pencere aç |
 
 ---
 
 ## 🛠️ Kurulum ve Kaynaktan Derleme
 
-Projeyi yerel bilgisayarınızda çalıştırmak ve derlemek için aşağıdaki adımları takip edebilirsiniz. Projede paket yöneticisi olarak **Bun** veya **NPM** (Node.js) kullanabilirsiniz.
-
 ### 1. Ön Gereksinimler
-Sisteminizde **Rust** (Tauri için) ve paket yöneticiniz (**Bun** veya **Node.js/NPM**) kurulu olmalıdır:
-*   [Rust Kurulum Rehberi](https://www.rust-lang.org/tools/install)
-*   [Bun Kurulum Rehberi](https://bun.sh/) veya [Node.js Kurulumu](https://nodejs.org/)
+
+- [Rust](https://www.rust-lang.org/tools/install) (Tauri için)
+- [Bun](https://bun.sh/) *(önerilen)* veya [Node.js/NPM](https://nodejs.org/)
+- **Linux'ta ek olarak:** `webkit2gtk`, `libgtk-3-dev` ve dağıtımınıza uygun Tauri sistem bağımlılıkları ([Tauri Linux önkoşulları](https://v2.tauri.app/start/prerequisites/))
 
 ### 2. Depoyu Klonlayın ve Çalıştırın
-```bash
-# Projeyi bilgisayarınıza indirin
-git clone <depo-adresi>
-cd <depo-dizini>
 
-# Gerekli kütüphaneleri yükleyin (Bun veya NPM ile)
+```bash
+git clone https://github.com/Dark-Hunter-TR/OpenAnime-Desktops.git
+cd OpenAnime-Desktops
+
+# Bağımlılıkları yükleyin
 bun install
 # veya
 npm install
 
-# Geliştirici modunda yerel olarak başlatın (Bun veya NPM ile)
+# Geliştirici modunda başlatın
 bun run dev
 # veya
 npm run dev
 ```
 
-### 3. Yerel Olarak Paketleme (Build)
-Uygulamayı üzerinde çalıştığınız yerel sistem için derlemek isterseniz aşağıdaki komutları kullanabilirsiniz:
+### 3. Yerel Paketleme (Build)
 
-* **Windows Üzerinde (Yerel Derleme):**
-  ```bash
-  bun run tauri build    # Veya: npm run tauri build
-  ```
-  *(Çıktı olarak `.exe` veya `.msi` oluşturur)*
+```bash
+bun run tauri build    # veya: npm run tauri build
+```
 
-* **macOS Üzerinde (Yerel Derleme):**
-  Yerel macOS build almak için bir Mac bilgisayara ve **Xcode Command Line Tools** yüklü olmasına ihtiyaç vardır:
-  ```bash
-  bun run tauri build    # Veya: npm run tauri build
-  ```
-  *(Çıktı olarak `.dmg` veya `.app` oluşturur)*
-
-* **Linux Üzerinde (Yerel Derleme):**
-
-  **Debian/Ubuntu:**
-  ```bash
-  sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-    libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-    gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly gstreamer1.0-libav
-  bun run tauri build
-  ```
-
-  **Arch Linux:**
-  ```bash
-  sudo pacman -S webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg \
-    gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
-    gst-plugins-ugly gst-libav base-devel xdotool
-  bun run tauri build
-  ```
+| Platform | Gereksinim | Çıktı |
+| --- | --- | --- |
+| Windows | — | `.exe` / `.msi` |
+| macOS | Xcode Command Line Tools yüklü bir Mac | `.dmg` / `.app` |
+| Linux | `webkit2gtk` + build araçları | `AppImage` / `.deb` *(deneysel)* |
 
 ---
 
-## 🐧 Linux Kurulum
+## ☁️ CI/CD — Otomatik Bulut Derleme
 
-> ⚠️ **Beta Sürüm Uyarısı:** Linux desteği yeni eklenmiştir ve **beta** aşamasındadır. 
-> Dağıtıma/masaüstü ortamına göre beklenmedik hatalar, eksik özellikler veya kararsızlıklar 
-> yaşanabilir. Karşılaştığınız sorunları OpenAnime Discord sunucusu üzerinden **#destek** 
-> kanalına yazarak veya doğrudan DM atarak bildirebilirsiniz.
+Yerel olarak her platforma erişiminiz yoksa, `.github/workflows/` altında tanımlı GitHub Actions iş akışlarını kullanabilirsiniz. Bir sürüm etiketi (tag) push edildiğinde, GitHub'ın bulut runner'ları (Windows, macOS, Linux) paketleri sizin yerinize otomatik derler:
 
-### AppImage (Tüm Dağıtımlar — Önerilen)
-1. [Releases](https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases) sayfasından `.AppImage` dosyasını indirin
-2. Çalıştırılabilir yapın:
-   ```bash
-   chmod +x OpenAnime_*.AppImage
-   ./OpenAnime_*.AppImage
-   ```
-
-> **Not:** AppImage bazı dağıtımlarda ek bağımlılık gerektirebilir:
-> - **Ubuntu 22.04+:** `sudo apt install libfuse2`
-> - **Arch:** `fuse2` paketi (genelde base'de mevcut)
-
-3. Streaming video oynatma için GStreamer codec'lerinin kurulu olduğunu doğrulayın.
-
-### Arch Linux (AUR) (Yakın zamanda eklenilecek)
 ```bash
-yay -S openanime-desktops
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
-### Debian/Ubuntu (.deb)
-```bash
-sudo dpkg -i openanime_*.deb
-sudo apt install -f  # eksik bağımlılıkları çözer
-```
+Derleme tamamlandığında kurulum dosyaları, deponun **Releases** sekmesinde otomatik olarak yayınlanır.
 
 ---
 
-## ☁️ CI/CD Otomatik Bulut Derleme (Önerilen Yöntem)
+## 🗺️ Yol Haritası
 
-Eğer yerel olarak macOS/Linux sisteminiz yoksa veya paketleme işlemleriyle uğraşmak istemiyorsanız, projede tanımlı olan **GitHub Actions** iş akışını kullanabilirsiniz. Bu, paketleri derlemenin en pratik ve standart yoludur.
+- [ ] **Tema Sistemi:** GitHub reposu tabanlı, topluluk temalarının keşfedilip yüklenebildiği bir Tema Sayfası (yıldız/aylık en çok indirilen/en çok sevilen sıralamalarıyla)
+- [ ] Linux için native `wgpu` (Vulkan) + GStreamer render/oynatma hattı
+- [ ] AUR (PKGBUILD) ve `.deb` resmî paket dağıtımı
+- [ ] iGPU/dGPU otomatik anahtarlamanın Linux karşılığı
+- [ ] Genel kararlılık ve hata düzeltmeleri (özellik eklemelerinden önceliklendirilir)
 
-Sürüm etiketi (Tag) oluşturup GitHub'a gönderdiğinizde, GitHub bulut sunucuları (macOS, Windows ve Linux runner'lar) sizin yerinize paketleri otomatik derler:
+Güncel görevler ve bilinen sorunlar için [Issues](https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/issues) sekmesine göz atabilirsiniz.
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+---
 
-Derleme bittiğinde, GitHub deponuzun **Releases** sekmesinde Windows (`.exe` / `.msi`), macOS (`.dmg` / `.app`) ve Linux (`.AppImage` / `.deb` / `.rpm`) kurulum dosyaları otomatik olarak yayınlanıp indirilmeye hazır hale gelir.
+## 🤝 Katkıda Bulunma
+
+Katkılar memnuniyetle karşılanır! Bir issue açmadan önce mevcut Issues listesini kontrol etmeniz, pull request göndermeden önce de değişikliklerinizi `bun run dev` ile yerel olarak test etmeniz önerilir.
 
 ---
 
 ## 📄 Lisans
-Bu proje **MIT Lisansı** altında lisanslanmıştır.
+
+Bu proje **MIT Lisansı** altında lisanslanmıştır. Detaylar için [LICENSE](./LICENSE) dosyasına bakınız.
+
+---
+
+<div align="center">
+
+Resmî OpenAnime uygulaması için: **[ors.openani.me](https://ors.openani.me/tr)** · Web sürümü için: **[openani.me](https://openani.me)**
+
+</div>
