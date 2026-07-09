@@ -63,7 +63,7 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
       - name: Build
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -114,7 +114,7 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
       - name: Build
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -176,7 +176,7 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
       - name: Build
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -246,7 +246,7 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
       - name: Build (ARM64 cross-compile)
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
