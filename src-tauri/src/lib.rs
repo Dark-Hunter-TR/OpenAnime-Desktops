@@ -1,4 +1,20 @@
+#![allow(linker_messages)]
+
 use tauri::{WebviewWindowBuilder, WebviewUrl, Manager};
+use std::sync::Mutex;
+
+/// Zoom seviyesini tüm pencereler arasında paylaşmak için state
+pub struct ZoomState {
+    pub level: Mutex<f64>,
+}
+
+impl Default for ZoomState {
+    fn default() -> Self {
+        Self { level: Mutex::new(1.0) }
+    }
+}
+
+mod dpi_proxy;
 
 #[allow(non_snake_case)]
 mod discordRPC;
@@ -178,7 +194,11 @@ const COMMON_INIT_SCRIPT: &str = concat!(
 );
 
 #[cfg(target_os = "windows")]
-pub const WINDOWS_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=2048\" --force-gpu-selection=high-performance --force_high_performance_gpu";
+pub const WINDOWS_BASE_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=2048\" --force-gpu-selection=high-performance --force_high_performance_gpu";
+
+/// Proxy aktifken kullanılacak browser args
+#[cfg(target_os = "windows")]
+pub const WINDOWS_PROXY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=2048\" --force-gpu-selection=high-performance --force_high_performance_gpu --proxy-server=http://127.0.0.1:1453";
 
 fn platform_user_agent() -> &'static str {
     #[cfg(target_os = "windows")]
@@ -245,7 +265,18 @@ fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
     .initialization_script(COMMON_INIT_SCRIPT);
 
     #[cfg(target_os = "windows")]
-    let win_builder = win_builder.additional_browser_args(WINDOWS_BROWSER_ARGS);
+    let win_builder = {
+        let proxy_active = app
+            .try_state::<dpi_proxy::DpiProxyManager>()
+            .map(|dpi| dpi.is_running())
+            .unwrap_or(false);
+        if proxy_active {
+            println!("[Tauri] Yeni pencere proxy ile açılıyor");
+            win_builder.additional_browser_args(WINDOWS_PROXY_ARGS)
+        } else {
+            win_builder.additional_browser_args(WINDOWS_BASE_ARGS)
+        }
+    };
 
     match win_builder.build() {
         Ok(_) => {
@@ -265,7 +296,33 @@ async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), Strin
     build_new_window(&app, url)
 }
 
+#[tauri::command]
+fn set_zoom_level(state: tauri::State<'_, ZoomState>, level: f64) -> Result<(), String> {
+    let mut zoom = state.level.lock().map_err(|e| e.to_string())?;
+    *zoom = level;
+    println!("[Tauri] Zoom seviyesi kaydedildi: {:.0}%", level * 100.0);
+    Ok(())
+}
 
+#[tauri::command]
+fn get_zoom_level(state: tauri::State<'_, ZoomState>) -> Result<f64, String> {
+    let zoom = state.level.lock().map_err(|e| e.to_string())?;
+    Ok(*zoom)
+}
+
+#[tauri::command]
+async fn reopen_with_proxy(app: tauri::AppHandle) -> Result<(), String> {
+    println!("[Tauri] reopen_with_proxy çağrıldı.");
+    // Sadece proxy'yi başlat. Pencere açma/kapatma yapmıyoruz çünkü
+    // bu Tauri'yi çökertiyor. Proxy en baştan başlatılıp pencere
+    // direkt --proxy-server ile açılmalı.
+    let dpi = app.state::<dpi_proxy::DpiProxyManager>();
+    if let Err(e) = dpi.start_proxy(&app, 1).await {
+        eprintln!("[Tauri] Proxy #1 başlatılamadı: {}", e);
+    }
+    println!("[Tauri] Proxy başlatıldı. (not: WebView proxy kullanmıyor olabilir)");
+    Ok(())
+}
 
 #[tauri::command]
 async fn update_discord_presence(
@@ -697,68 +754,97 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(discordRPC::DiscordState::new())
-        .manage(updater::UpdaterState::new());
+        .manage(updater::UpdaterState::new())
+        .manage(ZoomState::default());
+
+    // DPI Proxy manager'ı oluştur (setup'tan önce olmalı)
+    // .manage()'i setup'tan sonra kullanacağız
 
     let builder = builder.setup(|app| {
-            let user_agent = platform_user_agent();
+        // DPI Proxy manager'ı başlat
+        let app_handle = app.handle().clone();
+        let dpi_manager = dpi_proxy::DpiProxyManager::new(&app_handle);
+        app.manage(dpi_manager);
+        let user_agent = platform_user_agent();
 
-            let is_online = tauri::async_runtime::block_on(async {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(3))
-                    .build();
-                if let Ok(client) = client {
-                    if let Ok(resp) = client.get("https://openani.me/").send().await {
-                        let status = resp.status();
-                        status.is_success() || status.is_redirection() || status == reqwest::StatusCode::FORBIDDEN
-                    } else {
-                        false
-                    }
+        // DPI proxy'yi en baştan başlat (arkaplan)
+        // NOT: reqwest (WinHTTP) DPI'yi bypass ettiği için bağlantı
+        // kontrolü yapmıyoruz, direkt proxy başlatıp --proxy-server ile
+        // pencereyi açıyoruz.
+        let proxy_ok = tauri::async_runtime::block_on(async {
+            let dpi = app.state::<dpi_proxy::DpiProxyManager>();
+            // Kayıtlı yöntem varsa kullan, yoksa #1
+            let method_id = {
+                let settings = dpi.settings.lock().await;
+                settings.active_method_id.unwrap_or(1)
+            };
+            println!("[Setup] DPI proxy başlatılıyor (yöntem #{})...", method_id);
+            if dpi.start_proxy(&app_handle, method_id).await.is_ok() {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                true
+            } else {
+                // Yöntem 1 fallback
+                println!("[Setup] Fallback: yöntem #1 deneniyor...");
+                if dpi.start_proxy(&app_handle, 1).await.is_ok() {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    true
                 } else {
                     false
                 }
-            });
+            }
+        });
 
-            let main_url = if is_online {
-                WebviewUrl::External("https://openani.me/".parse().unwrap())
-            } else {
-                WebviewUrl::default()
-            };
-
-            let app_handle = app.handle().clone();
-            let win_builder = WebviewWindowBuilder::new(
-                app,
-                "main",
-                main_url,
-            )
-            .title("OpenAnime")
-            .inner_size(1280.0, 848.0)
-            .min_inner_size(800.0, 500.0)
-            .center()
-            .decorations(false)
-            .zoom_hotkeys_enabled(true)
-            .user_agent(user_agent)
-            .on_new_window(move |url, _features| {
-                println!(
-                    "[Tauri] Intercepted new window request from main window for URL: {}",
-                    url
-                );
-                let app_c = app_handle.clone();
-                let url_str = url.to_string();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = open_new_window(app_c, url_str).await {
-                        eprintln!("[Tauri] on_new_window -> open_new_window error: {}", e);
-                    }
-                });
-                tauri::webview::NewWindowResponse::Deny
-            })
-            .initialization_script(COMMON_INIT_SCRIPT);
-
+        let browser_args = if proxy_ok {
+            println!("[Setup] ✅ Proxy çalışıyor, --proxy-server ile açılıyor");
             #[cfg(target_os = "windows")]
-            let win_builder = win_builder.additional_browser_args(WINDOWS_BROWSER_ARGS);
+            { WINDOWS_PROXY_ARGS }
+            #[cfg(not(target_os = "windows"))]
+            { "" }
+        } else {
+            println!("[Setup] ❌ Proxy başlatılamadı, normal açılıyor");
+            #[cfg(target_os = "windows")]
+            { WINDOWS_BASE_ARGS }
+            #[cfg(not(target_os = "windows"))]
+            { "" }
+        };
 
-            win_builder.build()?;
-            Ok(())
+        let main_url = WebviewUrl::External("https://openani.me/".parse().unwrap());
+
+        let app_handle = app.handle().clone();
+        let win_builder = WebviewWindowBuilder::new(
+            app,
+            "main",
+            main_url,
+        )
+        .title("OpenAnime")
+        .inner_size(1280.0, 848.0)
+        .min_inner_size(800.0, 500.0)
+        .center()
+        .decorations(false)
+        .zoom_hotkeys_enabled(true)
+        .user_agent(user_agent)
+        .on_new_window(move |url, _features| {
+            println!(
+                "[Tauri] Intercepted new window request from main window for URL: {}",
+                url
+            );
+            let app_c = app_handle.clone();
+            let url_str = url.to_string();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = open_new_window(app_c, url_str).await {
+                    eprintln!("[Tauri] on_new_window -> open_new_window error: {}", e);
+                }
+            });
+            tauri::webview::NewWindowResponse::Deny
         })
+        .initialization_script(COMMON_INIT_SCRIPT);
+
+        #[cfg(target_os = "windows")]
+        let win_builder = win_builder.additional_browser_args(browser_args);
+
+        win_builder.build()?;
+        Ok(())
+    })
         .on_window_event(|window, event| {
             let app_handle = window.app_handle().clone();
             let label = window.label().to_string();
@@ -844,7 +930,18 @@ pub fn run() {
             updater::get_app_version,
             updater::check_for_updates,
             updater::start_update_download,
-            updater::debug_log
+            updater::debug_log,
+            // DPI Proxy komutları
+            reopen_with_proxy,
+            set_zoom_level,
+            get_zoom_level,
+            dpi_proxy::dpi_start_proxy,
+            dpi_proxy::dpi_stop_proxy,
+            dpi_proxy::dpi_test_methods,
+            dpi_proxy::dpi_get_status,
+            dpi_proxy::dpi_check_connection,
+            dpi_proxy::dpi_reset_settings,
+            dpi_proxy::dpi_get_methods
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

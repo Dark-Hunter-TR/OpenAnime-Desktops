@@ -351,6 +351,12 @@
           "markdownDescription": "Allows invoking Discord RPC commands"
         },
         {
+          "description": "DPI atlatma proxy'sini yönetme komutlarına izin verir",
+          "type": "string",
+          "const": "allow-dpi-proxy",
+          "markdownDescription": "DPI atlatma proxy'sini yönetme komutlarına izin verir"
+        },
+        {
           "description": "Allows the frontend to invoke the fetch_css command",
           "type": "string",
           "const": "allow-fetch-css",

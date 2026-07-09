@@ -32,6 +32,7 @@
     "allow-open-theme-window",
     "allow-fetch-css",
     "allow-themes",
-    "os:default"
+    "os:default",
+    "allow-dpi-proxy"
   ]
 }

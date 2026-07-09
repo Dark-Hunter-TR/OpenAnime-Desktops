@@ -87,16 +87,42 @@
     console.warn(`[Recovery] Max retry aşıldı (label: ${label})`);
 
     if (!label || label === "main") {
-      console.warn("[Recovery] Main window connection lost → going offline.");
+      console.warn("[Recovery] Main window connection lost → DPI proxy ile yeniden başlatılıyor...");
+      // DPI proxy'yi başlat ve pencereyi --proxy-server ile yeniden oluştur
       try {
         if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-          window.__TAURI__.core.invoke("go_offline").catch((e) => {
-            console.error("[Recovery] Failed to invoke go_offline:", e);
+          // once settings'te kayıtlı yöntem varsa onu test et
+          window.__TAURI__.core.invoke("dpi_get_status").then(function(status) {
+            if (status && status.active_method_id !== null) {
+              // Önceden çalışan yöntem var → direkt proxy'li pencereyi aç
+              window.__TAURI__.core.invoke("reopen_with_proxy");
+            } else {
+              // Önce tüm yöntemleri test et, sonra proxy'li pencereyi aç
+              window.__TAURI__.core.invoke("dpi_test_methods").then(function(result) {
+                if (result !== null) {
+                  console.log("[Recovery-DPI] ✅ Çalışan yöntem:", result);
+                } else {
+                  console.warn("[Recovery-DPI] ❌ Hiçbir yöntem çalışmadı");
+                }
+                // Yine de proxy'li pencereyi dene
+                window.__TAURI__.core.invoke("reopen_with_proxy");
+              }).catch(function() {
+                window.__TAURI__.core.invoke("reopen_with_proxy");
+              });
+            }
+          }).catch(function() {
+            window.__TAURI__.core.invoke("reopen_with_proxy");
           });
           return;
         }
       } catch (e) {
-        console.error("[Recovery] Error invoking go_offline:", e);
+        console.error("[Recovery] DPI proxy hatası:", e);
+        // Fallback: offline'a git
+        try {
+          if (window.__TAURI__.core) {
+            window.__TAURI__.core.invoke("go_offline");
+          }
+        } catch(e2) {}
       }
     }
 
@@ -145,6 +171,8 @@
     );
 
     if (retryCount > MAX_RETRIES) {
+      console.warn("[Recovery] Max retry aşıldı, DPI atlatma deneniyor...");
+      tryDpiBypass();
       closeWindow();
       return;
     }
@@ -175,11 +203,48 @@
     }, delayMs);
   }
 
+  // === DPI Proxy Entegrasyonu ===
+  // Sayfa yüklenemeyince DPI atlatma proxy'sini otomatik dener
+  let dpiTried = false;
+
+  function getDpiStatus() {
+    try {
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        window.__TAURI__.core.invoke("dpi_get_status").then(function(s) {
+          if (s && s.proxy_running) {
+            console.log("[Recovery-DPI] Proxy çalışıyor, yöntem:", s.active_method_name);
+          }
+        }).catch(function(){});
+      }
+    } catch(e) {}
+  }
+
+  function tryDpiBypass() {
+    if (dpiTried) return;
+    dpiTried = true;
+    console.log("[Recovery-DPI] Bağlantı sorunu tespit edildi, DPI atlatma deneniyor...");
+    try {
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        window.__TAURI__.core.invoke("dpi_test_methods").then(function(result) {
+          if (result !== null) {
+            console.log("[Recovery-DPI] ✅ Çalışan yöntem bulundu:", result);
+          } else {
+            console.warn("[Recovery-DPI] ❌ Hiçbir yöntem çalışmadı");
+          }
+        }).catch(function(e) {
+          console.error("[Recovery-DPI] Hata:", e);
+        });
+      }
+    } catch(e) {}
+  }
+
+  // evaluatePage başarısız olduğunda DPI'yi dene
   function startWatch() {
     retryCount = 0;
     isRetrying = false;
     clearTimeout(checkTimer);
     scheduleCheck(INITIAL_CHECK_MS);
+    getDpiStatus();
   }
 
   if (document.readyState === "complete") {

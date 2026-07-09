@@ -1,0 +1,15 @@
+[[permission]]
+identifier = "allow-dpi-proxy"
+description = "DPI atlatma proxy'sini yönetme komutlarına izin verir"
+
+[permission.commands]
+allow = [
+    "reopen_with_proxy",
+    "dpi_start_proxy",
+    "dpi_stop_proxy",
+    "dpi_test_methods",
+    "dpi_get_status",
+    "dpi_check_connection",
+    "dpi_reset_settings",
+    "dpi_get_methods"
+]

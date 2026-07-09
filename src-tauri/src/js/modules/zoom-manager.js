@@ -55,6 +55,16 @@
           }
         }
       }
+    } else {
+      // localStorage'da zoom yoksa (yeni origin), Rust backend'den al
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        window.__TAURI__.core.invoke("get_zoom_level").then(function(level) {
+          if (level && !isNaN(level) && level >= minZoom && level <= 2.0) {
+            currentZoom = level;
+            applyZoom(currentZoom);
+          }
+        }).catch(function() {});
+      }
     }
   } catch (e) {}
 
@@ -172,6 +182,11 @@
       localStorage.setItem("tauri-zoom-screen-h", window.screen.height.toString());
       localStorage.setItem("tauri-zoom-dpr", (window.devicePixelRatio || 1).toString());
     } catch (err) {}
+
+    // Zoom seviyesini Rust backend'e bildir (yeni pencereler için)
+    if (window.__TAURI__ && window.__TAURI__.core) {
+      window.__TAURI__.core.invoke("set_zoom_level", { level: newZoom }).catch(function() {});
+    }
   }
 
   var zoomIndicatorTimeout = null;
