@@ -73,8 +73,20 @@ impl DpiProxyManager {
         {
             let mut running = self.proxy_running.lock().await;
             if *running {
+                let prev_method = self.current_method.lock().await.take();
+                let prev_name = prev_method
+                    .as_ref()
+                    .map(|m| format!("#{} - {}", m.id, m.name))
+                    .unwrap_or_else(|| "bilinmiyor".to_string());
+                println!(
+                    "[DPI Proxy] Proxy zaten çalışıyor ({}). Eski proxy durduruluyor...",
+                    prev_name
+                );
                 *running = false;
                 tokio::time::sleep(Duration::from_millis(200)).await;
+                println!("[DPI Proxy] Eski proxy durduruldu, yeni proxy başlatılacak.");
+            } else {
+                println!("[DPI Proxy] Proxy şu an çalışmıyor, başlatılıyor...");
             }
         }
 
@@ -85,6 +97,17 @@ impl DpiProxyManager {
             "[DPI Proxy] Proxy başlatılıyor... yöntem #{}: {}",
             method_id, method.name
         );
+        println!(
+            "[DPI Proxy]   HTTP  -> fragment: {}, host_case: {}, mixedcase: {}, removespace: {}",
+            method.http_fragment_size,
+            method.http_host_case,
+            method.http_host_mixedcase,
+            method.http_host_removespace
+        );
+        println!(
+            "[DPI Proxy]   HTTPS -> fragment: {}, bypass_sni: {}, reverse: {}",
+            method.https_fragment_size, method.fragment_by_sni, method.reverse_fragment
+        );
 
         // method'ı owned hale getir (static'ten clone)
         let method_owned = method.clone();
@@ -92,10 +115,18 @@ impl DpiProxyManager {
         *self.current_method.lock().await = Some(method_owned.clone());
         *self.proxy_running.lock().await = true;
 
+        println!("[DPI Proxy] Proxy durumu 'running=true' olarak ayarlandı.");
+
         // Arkaplanda proxy task'ini başlat
         let running = self.proxy_running.clone();
+        let method_for_spawn = method_owned.clone();
         tokio::spawn(async move {
-            tcp_forward::start_proxy_internal(method_owned, running).await;
+            println!(
+                "[DPI Proxy] Arkaplan task'i başlatıldı (yöntem: #{} - {})",
+                method_for_spawn.id, method_for_spawn.name
+            );
+            tcp_forward::start_proxy_internal(method_for_spawn, running).await;
+            println!("[DPI Proxy] Arkaplan task'i sonlandı.");
         });
 
         // Proxy'nin başlaması için kısa bekle
@@ -104,9 +135,13 @@ impl DpiProxyManager {
         // Ayarları güncelle
         let mut settings = self.settings.lock().await;
         settings.is_active = true;
+        settings.active_method_id = Some(method_id);
         settings.save(app);
 
-        println!("[DPI Proxy] Proxy başlatıldı.");
+        println!(
+            "[DPI Proxy] ✅ Proxy başlatıldı (yöntem #{}: {})",
+            method_id, method.name
+        );
         Ok(())
     }
 
