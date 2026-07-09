@@ -71,7 +71,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ''
+          args: --verbose
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
@@ -126,7 +126,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ''
+          args: --verbose
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
@@ -190,7 +190,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ''
+          args: --verbose
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
@@ -286,7 +286,7 @@ EOL
         with:
           releaseDraft: false
           prerelease: false
-          args: '--target aarch64-unknown-linux-gnu'
+          args: --target aarch64-unknown-linux-gnu --verbose
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7

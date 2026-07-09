@@ -177,4 +177,4 @@ EOL
           releaseName: 'OpenAnime Desktop v${{ inputs.version }} (${{ inputs.channel }})'
           releaseDraft: ${{ inputs.draft == 'true' }}
           prerelease: ${{ inputs.channel != 'stable' }}
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --verbose
