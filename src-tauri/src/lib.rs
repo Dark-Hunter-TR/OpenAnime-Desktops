@@ -4,6 +4,7 @@ use tauri::{WebviewWindowBuilder, WebviewUrl, Manager};
 mod discordRPC;
 
 mod gpu_detector;
+mod updater;
 
 #[cfg(target_os = "linux")]
 mod gst_detector;
@@ -146,6 +147,8 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     include_str!("js/modules/discord/poster-fetcher.js"),
     "\n",
     include_str!("js/modules/discord/settings-ui.js"),
+    "\n",
+    include_str!("js/modules/updater-ui.js"),
     "\n",
     include_str!("js/modules/discord/discord-rpc.js"),
     "\n}\n",
@@ -390,7 +393,17 @@ async fn check_connection() -> bool {
         .timeout(std::time::Duration::from_secs(3))
         .build();
     if let Ok(client) = client {
-        if let Ok(resp) = client.get("https://openani.me/").send().await {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let url = format!("https://openani.me/?nocache={}", now);
+        
+        let req = client.get(&url)
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache");
+
+        if let Ok(resp) = req.send().await {
             let status = resp.status();
             status.is_success() || status.is_redirection() || status == reqwest::StatusCode::FORBIDDEN
         } else {
@@ -403,8 +416,13 @@ async fn check_connection() -> bool {
 
 #[tauri::command]
 async fn go_online(window: tauri::WebviewWindow) -> Result<(), String> {
-    println!("[Tauri] Navigating online to: https://openani.me/");
-    window.navigate("https://openani.me/".parse().unwrap())
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let url_str = format!("https://openani.me/?nocache={}", now);
+    println!("[Tauri] Navigating online to: {}", url_str);
+    window.navigate(url_str.parse().unwrap())
         .map_err(|e| format!("Navigation failed: {}", e))
 }
 
@@ -677,7 +695,9 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
-        .manage(discordRPC::DiscordState::new());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(discordRPC::DiscordState::new())
+        .manage(updater::UpdaterState::new());
 
     let builder = builder.setup(|app| {
             let user_agent = platform_user_agent();
@@ -820,7 +840,11 @@ pub fn run() {
             gst_control_pause,
             gst_control_seek,
             get_gpu_report,
-            get_gst_report
+            get_gst_report,
+            updater::get_app_version,
+            updater::check_for_updates,
+            updater::start_update_download,
+            updater::debug_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

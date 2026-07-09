@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { invoke } from '@tauri-apps/api/core';
+  import { openUrl } from '@tauri-apps/plugin-opener';
 
   const isThemeWindow = $derived($page.url.searchParams.has('theme_builder'));
 
@@ -21,6 +22,14 @@
       isChecking = false;
     }
   }
+
+  async function openStatusPage() {
+    try {
+      await openUrl('https://status.openani.me');
+    } catch (e) {
+      console.error("[App] Failed to open status page:", e);
+    }
+  }
 </script>
 
 {#if isThemeWindow}
@@ -33,14 +42,28 @@
       </div>
       <h4 class="text-block type-subtitle">Hayır!!</h4>
       <span class="text-block type-body text-tertiary">Sunucuya ulaşılamıyor veya bağlantı zaman aşımına uğradı. İnternet bağlantınızı kontrol edip tekrar deneyin.</span>
-      <button class="theme-btn-custom primary" onclick={retryLoad} disabled={isChecking}>
-        {isChecking ? 'Kontrol Ediliyor...' : 'Tekrar Dene'}
-      </button>
+      <div class="button-group">
+        <button class="theme-btn-custom primary" onclick={retryLoad} disabled={isChecking}>
+          {isChecking ? 'Kontrol Ediliyor...' : 'Tekrar Dene'}
+        </button>
+        <button class="theme-btn-custom secondary" onclick={openStatusPage}>
+          Sunucu Durumunu Kontrol Et
+        </button>
+      </div>
     </div>
   </div>
 {/if}
 
 <style>
+  :global(html), :global(body) {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #141821;
+    overflow: hidden;
+  }
+
   :root {
     --fds-accent-default: #5865f2;
     --fds-text-primary: #ffffff;
@@ -139,6 +162,31 @@
 
   .theme-btn-custom.primary:active {
     transform: translateY(0);
+  }
+
+  .theme-btn-custom.secondary {
+    background: transparent;
+    color: var(--fds-text-tertiary);
+    border: 1px solid rgba(155, 163, 180, 0.3);
+  }
+
+  .theme-btn-custom.secondary:hover {
+    color: var(--fds-text-primary);
+    border-color: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.05);
+    transform: translateY(-1px);
+  }
+
+  .theme-btn-custom.secondary:active {
+    transform: translateY(0);
+  }
+
+  .button-group {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
   }
 
   .theme-btn-custom:disabled {

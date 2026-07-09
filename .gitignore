@@ -5,3 +5,10 @@ build/
 target/
 *.log
 init.js.bak/
+
+# Signing keys - NEVER commit to public repos
+tauri-signer.key
+tauri-signer.key.pub
+
+# Agent config
+.agents/

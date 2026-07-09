@@ -70,27 +70,32 @@ function injectDiscordRpcSetting() {
 
   const expanderHash = getSvelteClass(cardEl) || "svelte-1b1dfzj";
 
-  const refControlEl = cardEl.querySelector('.expander-control');
-  const refStatusSpan = refControlEl
-    ? Array.from(refControlEl.querySelectorAll('span.text-block')).find(s =>
-        s.textContent.trim() === 'Etkin' || s.textContent.trim() === 'Devre Dışı'
-      )
-    : null;
-  const statusSpanClasses = refStatusSpan
-    ? Array.from(refStatusSpan.classList).join(" ")
-    : `text-block type-body ${getSvelteClass(cardEl.querySelector('.text-block')) || "svelte-9tjxrp"}`;
+  // Svelte hash cache kontrolü
+  let hashes = window.__tauriSettingsHashes;
+  if (!hashes) {
+    const refControlEl = cardEl.querySelector('.expander-control');
+    const refStatusSpan = refControlEl
+      ? Array.from(refControlEl.querySelectorAll('span.text-block')).find(s =>
+          s.textContent.trim() === 'Etkin' || s.textContent.trim() === 'Devre Dışı'
+        )
+      : null;
+    const statusSpanClasses = refStatusSpan
+      ? Array.from(refStatusSpan.classList).join(" ")
+      : `text-block type-body ${getSvelteClass(cardEl.querySelector('.text-block')) || "svelte-9tjxrp"}`;
 
-  const hashes = {
-    headerHash: getSvelteClass(cardEl.querySelector('.expander-header')) || "svelte-1b1dfzj",
-    iconHash: getSvelteClass(cardEl.querySelector('.expander-icon')) || "svelte-1b1dfzj",
-    headerTitleHash: getSvelteClass(cardEl.querySelector('.expander-header-title')) || "svelte-1b1dfzj",
-    itemHeaderHash: getSvelteClass(cardEl.querySelector('.item-header')) || "svelte-ndcra2",
-    controlHash: getSvelteClass(cardEl.querySelector('.expander-control')) || "svelte-ndcra2",
-    textBlockHash: getSvelteClass(cardEl.querySelector('.text-block')) || "svelte-9tjxrp",
-    toggleContainerHash: getSvelteClass(cardEl.querySelector('.toggle-switch-container')) || "svelte-wpiyrh",
-    toggleInputHash: getSvelteClass(cardEl.querySelector('.toggle-switch')) || "svelte-wpiyrh",
-    statusSpanClasses
-  };
+    hashes = {
+      headerHash: getSvelteClass(cardEl.querySelector('.expander-header')) || "svelte-1b1dfzj",
+      iconHash: getSvelteClass(cardEl.querySelector('.expander-icon')) || "svelte-1b1dfzj",
+      headerTitleHash: getSvelteClass(cardEl.querySelector('.expander-header-title')) || "svelte-1b1dfzj",
+      itemHeaderHash: getSvelteClass(cardEl.querySelector('.item-header')) || "svelte-ndcra2",
+      controlHash: getSvelteClass(cardEl.querySelector('.expander-control')) || "svelte-ndcra2",
+      textBlockHash: getSvelteClass(cardEl.querySelector('.text-block')) || "svelte-9tjxrp",
+      toggleContainerHash: getSvelteClass(cardEl.querySelector('.toggle-switch-container')) || "svelte-wpiyrh",
+      toggleInputHash: getSvelteClass(cardEl.querySelector('.toggle-switch')) || "svelte-wpiyrh",
+      statusSpanClasses
+    };
+    window.__tauriSettingsHashes = hashes;
+  }
 
   const newCard = document.createElement("div");
   newCard.id = "tauri-discord-rpc-setting";
@@ -139,7 +144,15 @@ function tryInjectSettings() {
   if (window.location.pathname.includes("/settings")) {
     startSettingsObserver();
     injectDiscordRpcSetting();
-    setTimeout(injectDiscordRpcSetting, 600);
+    if (typeof injectUpdaterSetting === "function") {
+      injectUpdaterSetting();
+    }
+    setTimeout(() => {
+      injectDiscordRpcSetting();
+      if (typeof injectUpdaterSetting === "function") {
+        injectUpdaterSetting();
+      }
+    }, 600);
   }
 }
 
@@ -152,9 +165,18 @@ function startSettingsObserver() {
   if (settingsObserver) return;
 
   settingsObserver = new MutationObserver(() => {
-    if (document.getElementById("tauri-discord-rpc-setting")) return;
+    const hasRpc = !!document.getElementById("tauri-discord-rpc-setting");
+    const hasUpdater = !!document.getElementById("tauri-updater-settings-card");
+
+    if (hasRpc && hasUpdater) return;
+
     if (window.location.pathname.includes("/settings")) {
-      injectDiscordRpcSetting();
+      if (!hasRpc) {
+        injectDiscordRpcSetting();
+      }
+      if (!hasUpdater && typeof injectUpdaterSetting === "function") {
+        injectUpdaterSetting();
+      }
     }
   });
 
@@ -165,5 +187,8 @@ function startSettingsObserver() {
 
   if (window.location.pathname.includes("/settings")) {
     injectDiscordRpcSetting();
+    if (typeof injectUpdaterSetting === "function") {
+      injectUpdaterSetting();
+    }
   }
 }

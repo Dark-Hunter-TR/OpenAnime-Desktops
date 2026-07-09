@@ -4,6 +4,16 @@
 // lib.rs'deki tek IIFE wrapper sayesinde shared scope'ta mevcuttur.
 
 {
+  // URL cleanup for nocache parameter
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("nocache")) {
+      url.searchParams.delete("nocache");
+      const newUrl = url.pathname + url.search + url.hash;
+      window.history.replaceState({}, document.title, newUrl);
+    }
+  } catch (e) {}
+
   var observerStarted = false;
 
 
