@@ -12,3 +12,7 @@ tauri-signer.key.pub
 
 # Agent config
 .agents/
+bun.lock
+bun.lock
+src-tauri/gen/schemas/desktop-schema.json
+src-tauri/gen/schemas/windows-schema.json
