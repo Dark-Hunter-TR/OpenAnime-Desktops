@@ -25,7 +25,7 @@
     ],
     "windows": {
       "nsis": {
-        "languages": ["Turkish", "English"],
+        "languages": ["Turkish"],
         "template": "./nsis/installer.nsi"
       }
     },
