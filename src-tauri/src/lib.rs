@@ -794,7 +794,7 @@ pub fn run() {
             }
         });
 
-        let browser_args = if proxy_ok {
+        let _browser_args = if proxy_ok {
             println!("[Setup] ✅ Proxy çalışıyor, --proxy-server ile açılıyor");
             #[cfg(target_os = "windows")]
             { WINDOWS_PROXY_ARGS }

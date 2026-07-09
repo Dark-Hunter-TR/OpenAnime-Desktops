@@ -112,6 +112,7 @@ impl DpiProxyManager {
 
     /// Proxy'yi durdur
     /// Proxy'nin şu anda çalışıp çalışmadığını döndürür (async olmayan, hızlı kontrol)
+    #[allow(dead_code)]
     pub fn is_running(&self) -> bool {
         self.proxy_running.try_lock().map(|g| *g).unwrap_or(false)
     }

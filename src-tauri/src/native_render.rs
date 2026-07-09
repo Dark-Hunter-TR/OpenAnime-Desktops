@@ -2,7 +2,6 @@
 pub mod inner {
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use std::time::Duration;
     use tauri::{Manager, WebviewWindow, WebviewWindowBuilder, WebviewUrl};
     // use wgpu::util::DeviceExt;
     use crate::video_decode::inner::GstPlayer;
