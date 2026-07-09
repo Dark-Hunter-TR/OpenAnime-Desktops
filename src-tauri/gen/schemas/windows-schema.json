@@ -375,6 +375,12 @@
           "markdownDescription": "Allows invoking the open_theme_window command"
         },
         {
+          "description": "Oturum log dosyasını frontend'den okumaya izin verir",
+          "type": "string",
+          "const": "allow-session-log",
+          "markdownDescription": "Oturum log dosyasını frontend'den okumaya izin verir"
+        },
+        {
           "description": "Tema oluşturucu Svelte penceresini açma komutuna izin verir",
           "type": "string",
           "const": "allow-theme-builder",
