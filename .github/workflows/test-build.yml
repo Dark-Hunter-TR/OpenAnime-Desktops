@@ -75,13 +75,13 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: Windows-x64
-          path: src-tauri/target/release/bundle
+          name: Windows-x64-${{ github.event.inputs.build_mode }}
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
@@ -126,13 +126,13 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: macOS-ARM64
-          path: src-tauri/target/release/bundle
+          name: macOS-ARM64-${{ github.event.inputs.build_mode }}
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
@@ -188,13 +188,13 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: Linux-x64
-          path: src-tauri/target/release/bundle
+          name: Linux-x64-${{ github.event.inputs.build_mode }}
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
@@ -294,12 +294,12 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: --target aarch64-unknown-linux-gnu --verbose
+          args: --target aarch64-unknown-linux-gnu ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: Linux-ARM64
-          path: src-tauri/target/release/bundle
+          name: Linux-ARM64-${{ github.event.inputs.build_mode }}
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
