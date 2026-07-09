@@ -26,7 +26,6 @@ on:
         required: true
         default: true
         type: boolean
-
 jobs:
   windows:
     if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows-latest'

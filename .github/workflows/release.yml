@@ -21,7 +21,6 @@ on:
         required: true
         default: true
         type: boolean
-
 concurrency:
   group: publish-${{ inputs.version }}
   cancel-in-progress: true
