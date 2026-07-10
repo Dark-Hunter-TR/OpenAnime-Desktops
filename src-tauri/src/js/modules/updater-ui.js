@@ -231,38 +231,6 @@ function openDropdownMenu(wrapper) {
 // Tek Birleştirilmiş Kart: Güncelleme Ayarları (Otomatik Güncelleme + Kanal Dropdown + Manuel Güncelleme Denetleyici)
 function buildSettingsCardHTML(hashes, dropdownHashes, isEnabled, activeChannel, currentVer) {
   const chanDisplay = activeChannel.charAt(0).toUpperCase() + activeChannel.slice(1);
-
-  // Site native expander'ının DOM yapısını birebir kopyala:
-  // Klas: "expander direction-down space-between svelte-X" role="region"
-  //   <h>
-  //     <div class="expander-header svelte-X" role="button" aria-expanded="false" tabindex="-1">
-  //       <div class="expander-icon svelte-X"><svg>...</svg></div>
-  //       <span class="expander-header-title svelte-X">
-  //         <div class="item-header svelte-Y">
-  //           <span class="text-block type-body svelte-Z">Başlık</span>
-  //           <span class="text-block type-caption text-secondary svelte-Z">Açıklama</span>
-  //         </div>
-  //         <div class="expander-control svelte-Y">
-  //           ... toggle/combo-box veya chevron ...
-  //         </div>
-  //       </span>
-  //     </div>
-  //   </h>
-  // Site native expander'ının DOM yapısını birebir kopyala:
-  // <h>
-  //   <div class="expander-header svelte-X" role="button" aria-expanded="false" tabindex="-1">
-  //     <div class="expander-icon svelte-X"><svg>...</svg></div>
-  //     <span class="expander-header-title svelte-X">
-  //       <div class="item-header svelte-Y">
-  //         <span class="text-block type-body svelte-Z">Başlık</span>
-  //         <span class="text-block type-caption text-secondary svelte-Z">Açıklama</span>
-  //       </div>
-  //       <div class="expander-control svelte-Y">
-  //         ... toggle/combo-box veya chevron ...
-  //       </div>
-  //     </span>
-  //   </div>
-  // </h>
   return `
     <h>
       <div role="button" id="tauri-updater-settings-header" class="expander-header ${hashes.headerHash}" aria-expanded="false" tabindex="-1">
@@ -478,6 +446,21 @@ function injectUpdaterSetting() {
   }
 }
 
+function findScrollParent(node) {
+  if (!node) return document.documentElement;
+  let parent = node.parentNode;
+  while (parent && parent !== document.body && parent !== document.documentElement) {
+    if (parent.scrollHeight > parent.clientHeight) {
+      const style = window.getComputedStyle(parent);
+      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+        return parent;
+      }
+    }
+    parent = parent.parentNode;
+  }
+  return document.documentElement;
+}
+
 function bindSettingsCardEvents(card, hashes) {
   const header = card.querySelector("#tauri-updater-settings-header");
   const content = card.querySelector("#tauri-updater-settings-content");
@@ -542,11 +525,44 @@ function bindSettingsCardEvents(card, hashes) {
       const targetHeight = content.scrollHeight;
       content.style.setProperty("height", `${targetHeight}px`, "important");
 
+      // Dynamic real-time auto-scroll during the transition to prevent any scroll lock
+      const scrollParent = findScrollParent(card);
+      if (scrollParent) {
+        let startTime = null;
+        const duration = 250; // duration of CSS transition in ms
+        
+        function scrollStep(timestamp) {
+          if (!startTime) startTime = timestamp;
+          const elapsed = timestamp - startTime;
+          
+          const cardRect = card.getBoundingClientRect();
+          const parentRect = (scrollParent === document.documentElement || scrollParent === document.body)
+            ? { bottom: window.innerHeight }
+            : scrollParent.getBoundingClientRect();
+            
+          if (cardRect.bottom > parentRect.bottom) {
+            const diff = cardRect.bottom - parentRect.bottom;
+            if (scrollParent === document.documentElement || scrollParent === document.body) {
+              window.scrollBy(0, diff);
+            } else {
+              scrollParent.scrollTop += diff;
+            }
+          }
+          
+          if (elapsed < duration && card.classList.contains("expanded")) {
+            requestAnimationFrame(scrollStep);
+          }
+        }
+        requestAnimationFrame(scrollStep);
+      }
+
       // Animasyon bittiğinde height auto yap ki dropdown menüler taşabilsin (overflow)
       setTimeout(() => {
         if (card.classList.contains("expanded")) {
           content.style.setProperty("height", "auto", "important");
           content.style.setProperty("overflow", "visible", "important");
+          // Final adjustment to ensure it is fully in view
+          card.scrollIntoView({ behavior: "smooth", block: "nearest" });
         }
       }, 250);
     }
