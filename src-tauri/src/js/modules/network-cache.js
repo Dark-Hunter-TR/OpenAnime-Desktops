@@ -37,7 +37,15 @@
     /[?&](t|ts|time|nocache|v)=/i,
   ];
 
-  const CACHEABLE_HOSTS = ["openani.me", "www.openani.me", "cdn.openani.me"];
+  // Cache kapsamındaki hostlar:
+  // openani.me — site altyapısı
+  // yeshi.eu.org, zyapbot.eu.org — anime kapak/postör CDN'leri
+  // NOT: img tag'iyle yüklenen görseller fetch interceptor'dan geçmez.
+  // Bunların cache'i için ayrıca MutationObserver + proxy gerekir (bkz. image-cache.js)
+  const CACHEABLE_HOSTS = [
+    "openani.me", "www.openani.me", "cdn.openani.me",
+    "yeshi.eu.org", "zyapbot.eu.org",
+  ];
 
   function isStaticAsset(url) {
     try {
