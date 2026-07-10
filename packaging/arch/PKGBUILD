@@ -1,4 +1,5 @@
 # Maintainer: darkhunter
+# Binary PKGBUILD — GitHub Releases'den hazır .deb indirir, derleme yapmaz
 pkgname=openanime-desktops
 pkgver=1.0.2_beta
 _pkgver=1.0.2-beta
@@ -23,22 +24,23 @@ optdepends=(
     'libva-mesa-driver: Intel/AMD donanım video decode'
     'nvidia-utils: NVIDIA donanım video decode'
 )
-makedepends=('rust' 'cargo' 'nodejs' 'bun' 'base-devel' 'xdotool')
-source=("$pkgname-$pkgver.tar.gz::https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/archive/refs/tags/v$_pkgver.tar.gz")
+# Derleme gerekmez — direkt binary indir
+makedepends=()
+# GitHub Releases'den hazır .deb binary'si
+source=("$pkgname-$pkgver.deb::https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v$_pkgver/openanime_$_pkgver\_amd64.deb")
 sha256sums=('SKIP')
 
+# Binary olduğu için build() boş — derleme yok
 build() {
-    cd "OpenAnime-Desktops-$_pkgver"
-    bun install
-    bun run tauri build --bundles deb
+    true
 }
 
 package() {
-    cd "OpenAnime-Desktops-$_pkgver"
-    local _deb=$(find src-tauri/target/release/bundle/deb -name '*.deb' | head -1)
-    if [[ -n "$_deb" ]]; then
-        bsdtar -xf "$_deb" -C "$srcdir"
-        bsdtar -xf "$srcdir/data.tar."* -C "$pkgdir"
-    fi
-    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    # .deb içinden dosyaları ayıkla
+    bsdtar -xf "$srcdir/$pkgname-$pkgver.deb" -C "$srcdir"
+    bsdtar -xf "$srcdir/data.tar."* -C "$pkgdir"
+
+    # Lisansı koy
+    install -Dm644 "$srcdir/usr/share/licenses/openanime-desktops/LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
 }

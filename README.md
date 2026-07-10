@@ -156,42 +156,61 @@ macOS 12+ — Apple Silicon (M1/M2/M3/M4) ve Intel x86_64
 ### 🐧 Linux
 
 ```
-Ubuntu 24.04+ / Debian 12+ / Fedora 40+ / Arch Linux — x86_64 ve ARM64 (aarch64)
+Ubuntu 24.04+ / Debian 12+ / Fedora 40+ / Arch Linux (CachyOS, Manjaro, EndeavourOS) — x86_64
 ```
 
-Aşağıda her paket formatı için boyut karşılaştırması ve kurulum adımları yer alıyor. Temel fark: **AppImage** her şeyi içinde taşır (büyük boyut), **.deb/.rpm/AUR** bağımlılıkları sistemle paylaşır (küçük boyut), **Flatpak** runtime paylaşır (orta boyut + sandbox).
+#### ⚡ Tek Komutla Kurulum (Önerilen)
 
-| Format | İndirme Boyutu | Diskte Kapladığı | Bağımlılıklar |
-|--------|----------------|-------------------|---------------|
-| **AppImage** | ~80–200 MB | ~200 MB | Hepsi içinde (kendi kendine yeter) |
-| **.deb / .rpm** | ~15 MB | ~90 MB | Sistem paket yöneticisinden |
-| **AUR (kaynaktan)** | ~1 MB (PKGBUILD) | ~200 MB + derleme | Derleme anında çözülür |
-| **AUR (binary)** | ~15 MB | ~90 MB | Sistem paket yöneticisinden |
-| **Flatpak** | ~60 MB | ~250 MB (runtime paylaşılır) | Flatpak runtime ile |
+Dağıtımınızı otomatik algılar, uygun yöntemle kurar:
+
+```bash
+bash <(curl -s https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/install.sh)
+```
+
+| Dağıtım | Yöntem | İndirme |
+|---------|--------|---------|
+| **CachyOS / Arch / Manjaro / EndeavourOS** | Repodaki PKGBUILD ile binary kurulum | **~15 MB** |
+| **Ubuntu / Debian / Mint / Pop!_OS** | `.deb` indir + `dpkg -i` | **~15 MB** |
+| **Fedora / RHEL** | `.rpm` indir + `dnf install` | **~15 MB** |
+| **Diğer (NixOS, Void, Solus, Gentoo)** | `.deb` içinden binary çıkar, olmazsa AppImage | **~15–120 MB** |
+
+Kullanıcı kurulumu (`--user`) için: `bash install.sh --user`
 
 ---
 
-#### 🏃 AppImage (Taşınabilir — Hiçbir Şey Kurmadan Çalıştır)
-
-Hiçbir bağımlılık gerekmez. İndir, çalıştır:
+#### 🏃 AppImage (Taşınabilir — Her Dağıtımda Çalışır)
 
 ```bash
-# 1. İndir
 wget https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/OpenAnime_*.AppImage
-
-# 2. Çalıştırma izni ver
 chmod +x OpenAnime_*.AppImage
-
-# 3. Çalıştır
 ./OpenAnime_*.AppImage
 ```
 
-| Mimariler | Mevcut mu? |
-|-----------|------------|
+| Mimariler | Durum |
+|-----------|-------|
 | `x86_64` | ✅ Evet |
 | `aarch64` (ARM64) | ✅ Evet |
 
-> **Not:** AppImage, tüm bağımlılıkları içinde barındırdığı için dosya boyutu büyüktür (~80–200 MB). Ancak hiçbir sistem değişikliği gerektirmez — USB'den bile çalıştırabilirsiniz.
+> **Not:** AppImage tüm bağımlılıkları içinde taşır (~200 MB). En kolay ama en büyük yöntemdir.
+
+---
+
+#### 🗿 CachyOS / Arch Linux (Repodan Binary)
+
+AUR'a gitmez, doğrudan bu repodaki [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) ile kurulum:
+
+```bash
+git clone https://github.com/Dark-Hunter-TR/OpenAnime-Desktops.git
+cd OpenAnime-Desktops/packaging/arch
+makepkg -si    # 5 saniye, derleme yok!
+```
+
+`PKGBUILD`, GitHub Releases'den hazır `.deb` binary'sini indirir, sisteme uygulama olarak kurar. `pacman -R openanime-desktops` ile kaldırılır.
+
+| Mimariler | Durum |
+|-----------|-------|
+| `x86_64` | ✅ Evet |
+| `aarch64` | 🔜 Planlanıyor |
 
 ---
 
@@ -200,15 +219,10 @@ chmod +x OpenAnime_*.AppImage
 ```bash
 wget https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/openanime_*.deb
 sudo dpkg -i openanime_*.deb
-sudo apt-get install -f   # eksik bağımlılıkları tamamlar
+sudo apt-get install -f
 ```
 
 Bağımlılıklar: `libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libappindicator3-1`, `gstreamer1.0-*`
-
-| Mimariler | Mevcut mu? |
-|-----------|------------|
-| `amd64` (x86_64) | ✅ Evet |
-| `arm64` | ✅ Evet |
 
 ---
 
@@ -218,65 +232,31 @@ Bağımlılıklar: `libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libappindicator3-1`, `g
 sudo dnf install https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/openanime_*.rpm
 ```
 
-| Mimariler | Mevcut mu? |
-|-----------|------------|
-| `x86_64` | ✅ Evet |
-| `aarch64` | ✅ Evet |
-
 ---
 
-#### 🗿 Arch Linux (AUR)
-
-Kendi AUR paketimiz üzerinden kaynaktan derleme:
+#### 🧊 Flatpak (Deneysel — Altyapı Kuruluyor)
 
 ```bash
-# yay ile:
-yay -S openanime-desktops
-
-# paru ile:
-paru -S openanime-desktops
+# Kendi Flatpak repomuzdan (hazır değil, çalışmaz)
+# flatpak remote-add --if-not-exists openanime https://flatpak.darkhunter.dev/openanime.flatpakrepo
+# flatpak install openanime com.darkhunter.openanime-desktops
 ```
 
-| Mimariler | Mevcut mu? |
-|-----------|------------|
-| `x86_64` | ✅ Evet |
-| `aarch64` | 🔜 Planlanıyor |
-
-> AUR, kaynaktan derlediği için yeni sürümler GitHub release ile aynı anda güncellenir. `PKGBUILD` dosyamız: [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD)
+> Flatpak altyapısı kurulum aşamasındadır. Şimdilik `install.sh` veya AppImage kullanın.
 
 ---
 
-#### 🧊 Flatpak (Kendi Repomuzdan)
-
-Flatpak, GNOME Runtime ile sandbox ortamında çalışır. Tüm bağımlılıklar Flatpak runtime ile paylaşıldığı için indirme boyutu düşüktür.
-
-Kendi Flatpak repomuzu ekleyip kurulum:
-
-```bash
-# 1. Flatpak repomuzu ekle
-flatpak remote-add --if-not-exists openanime \
-  https://flatpak.darkhunter.dev/openanime.flatpakrepo
-
-# 2. Kur
-flatpak install openanime com.darkhunter.openanime-desktops
-
-# 3. Çalıştır
-flatpak run com.darkhunter.openanime-desktops
-```
-
-> Flatpak repo'muz, her release sonrası CI tarafından otomatik güncellenir. Flathub'a göndermiyoruz — kendi sunucumuzdan dağıtıyoruz.
-
----
-
-#### 💡 Linux İçin Hızlı Seçim
+#### 💡 Hızlı Seçim
 
 | İhtiyacınız | Şunu Kullanın |
 |-------------|---------------|
-| "Hiçbir şey kurmak istemiyorum, çalıştırayım" | **AppImage** (tüm dağıtımlarda çalışır) |
-| Sistem paket yöneticimle yönetmek istiyorum | **`.deb`** (Debian/Ubuntu), **`.rpm`** (Fedora) |
-| Arch Linux kullanıyorum, AUR'dan yönetmek istiyorum | **AUR** (`yay -S openanime-desktops`) |
-| Sandbox güvenliği istiyorum, otomatik güncelleme olsun | **Flatpak** (kendi repomuz) |
-| ARM64 (Raspberry Pi, Apple Silicon VM) | **AppImage** (aarch64) veya **`.deb`** (arm64) |
+| "Tek komutla kur" | **`install.sh`** (otomatik algılama) |
+| "Hiçbir şey kurmak istemiyorum" | **AppImage** (çalıştır ve kullan) |
+| CachyOS / Arch kullanıyorum | **`makepkg -si`** (binary, 5 sn) |
+| Debian / Ubuntu | **`.deb`** (sistem paket yöneticisi) |
+| Fedora / RHEL | **`.rpm`** (sistem paket yöneticisi) |
+| Sandbox güvenliği | **Flatpak** *(hazır değil)* |
+| ARM64 (Raspberry Pi) | **AppImage** (aarch64) veya **`.deb`** (arm64) |
 
 ---
 
@@ -286,7 +266,7 @@ flatpak run com.darkhunter.openanime-desktops
 | --- | --- | --- | --- |
 | 🪟 **Windows** | ✅ Tam destek | `.exe` (NSIS) | GitHub Actions ile otomatik derlenir |
 | 🍎 **macOS** | ✅ Tam destek | `.dmg` | Apple Silicon + Intel, evrensel binary |
-| 🐧 **Linux** | 🧪 Aktif geliştirme | `AppImage`, `.deb`, `.rpm`, AUR, Flatpak *(yakında)* | Aşağıdaki "Linux Desteği" bölümüne bakınız |
+| 🐧 **Linux** | 🧪 Aktif geliştirme | `AppImage`, `.deb`, `.rpm`, `PKGBUILD` (binary), `install.sh` | Aşağıdaki "Linux Desteği" bölümüne bakınız |
 
 ### 🐧 Linux Desteği (Deneysel)
 
@@ -372,7 +352,9 @@ Derleme tamamlandığında kurulum dosyaları, deponun **Releases** sekmesinde o
 
 - [ ] **Tema Sistemi:** GitHub reposu tabanlı, topluluk temalarının keşfedilip yüklenebildiği bir Tema Sayfası (yıldız/aylık en çok indirilen/en çok sevilen sıralamalarıyla)
 - [ ] Linux için native `wgpu` (Vulkan) + GStreamer render/oynatma hattı
-- [x] AUR (PKGBUILD) ve `.deb`/`.rpm` resmî paket dağıtımı
+- [x] `.deb`/`.rpm`/AppImage resmî paket dağıtımı (GitHub Actions CI)
+- [x] Linux tek komut kurulum scripti (`install.sh`)
+- [x] Arch tabanlı dağıtımlar için binary PKGBUILD (kaynaktan değil)
 - [ ] Kendi Flatpak repo'muzun CI entegrasyonu
 - [ ] iGPU/dGPU otomatik anahtarlamanın Linux karşılığı
 - [ ] Genel kararlılık ve hata düzeltmeleri (özellik eklemelerinden önceliklendirilir)
