@@ -28,7 +28,32 @@
           active: shouldBeActive,
           url: currentVideoUrl,
           paused: isPaused
-        }).catch((err) => console.error("[WebGPU Bridge] Tauri invoke failed:", err));
+        }).catch((err) => {
+          console.error("[WebGPU Bridge] Tauri invoke failed, falling back to HTML5:", err);
+          is4kActive = false;
+          updateNativeState();
+          // Restore video element
+          const videoEl = document.querySelector("video");
+          if (videoEl) {
+            videoEl.style.opacity = "1";
+            videoEl.muted = false;
+          }
+
+          // If GStreamer components are missing, ask the user if they want to install them automatically
+          if (err && (err.includes("GStreamer components missing") || err.includes("appsink") || err.includes("autoaudiosink"))) {
+            setTimeout(() => {
+              if (window.confirm("OpenAnime: Video oynatımı için gerekli GStreamer bileşenleri sisteminizde eksik. Otomatik olarak kurmak ister misiniz? (Root şifresi gerektirecektir)")) {
+                window.__TAURI__.core.invoke("install_missing_gstreamer")
+                  .then(() => {
+                    alert("Kurulum tamamlandı. Arayüzü yenilemek veya videoyu yeniden açmak yerel oynatıcıyı aktif edecektir.");
+                  })
+                  .catch((installErr) => {
+                    alert("Kurulum başarısız oldu veya iptal edildi: " + installErr);
+                  });
+              }
+            }, 100);
+          }
+        });
       }
       // Update DOM visibility immediately based on state
       observePlayerControls();

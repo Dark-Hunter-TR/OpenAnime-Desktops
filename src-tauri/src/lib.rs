@@ -702,6 +702,18 @@ async fn webgpu_state_changed(window: tauri::WebviewWindow, active: bool, url: S
     {
         use tauri::Emitter;
         if active {
+            // Check if GStreamer and all required elements are installed on the system
+            let report = gst_detector::detect_gstreamer();
+            if !report.gstreamer_installed {
+                let err_msg = format!(
+                    "GStreamer components missing: {:?}",
+                    report.missing_elements
+                );
+                eprintln!("[WebGPU Bridge] start_player aborted: {}", err_msg);
+                let _ = window.emit("openanime://gst-fallback", err_msg.clone());
+                return Err(err_msg);
+            }
+
             let start_paused = paused.unwrap_or(false);
             if let Err(e) = native_render::inner::start_player(&url, window.clone(), start_paused).await {
                 eprintln!("[WebGPU Bridge] start_player failed: {}", e);
@@ -776,6 +788,46 @@ async fn get_gst_report() -> serde_json::Value {
         })
     }
 }
+
+#[tauri::command]
+async fn install_missing_gstreamer() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let report = gst_detector::detect_gstreamer();
+        if report.gstreamer_installed {
+            return Ok(());
+        }
+
+        let cmd_str = report.recommended_command;
+        if cmd_str.is_empty() {
+            return Err("No recommended command found for this distribution.".to_string());
+        }
+
+        // Convert the command to run with pkexec so the user gets a graphical password dialog.
+        // E.g., "sudo apt update && sudo apt install -y ..." -> "pkexec sh -c 'apt update && apt install -y ...'"
+        let raw_cmd = cmd_str.replace("sudo ", "");
+        println!("[Tauri GStreamer Installer] Executing: pkexec sh -c \"{}\"", raw_cmd);
+
+        let status = std::process::Command::new("pkexec")
+            .arg("sh")
+            .arg("-c")
+            .arg(&raw_cmd)
+            .status()
+            .map_err(|e| format!("Failed to launch pkexec: {}", e))?;
+
+        if status.success() {
+            println!("[Tauri GStreamer Installer] GStreamer plugins installed successfully.");
+            Ok(())
+        } else {
+            Err("Installation failed or cancelled.".to_string())
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(())
+    }
+}
+
 
 
 #[cfg(target_os = "windows")]
@@ -1098,6 +1150,7 @@ pub fn run() {
             gst_control_seek,
             get_gpu_report,
             get_gst_report,
+            install_missing_gstreamer,
             logger::get_session_log,
             updater::get_app_version,
             updater::check_for_updates,

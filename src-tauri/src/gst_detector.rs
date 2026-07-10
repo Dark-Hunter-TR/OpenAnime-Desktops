@@ -92,7 +92,7 @@ fn get_gst_install_instructions(category: &str, distro: &str) -> (String, String
                 "plugins" => "gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav".to_string(),
                 _ => "gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav gstreamer-vaapi".to_string(),
             };
-            let cmd = format!("sudo pacman -S {}", pkgs);
+            let cmd = format!("sudo pacman -S --noconfirm {}", pkgs);
             (pkgs, cmd)
         }
         "ubuntu" | "debian" | "pop" | "mint" => {
@@ -101,7 +101,7 @@ fn get_gst_install_instructions(category: &str, distro: &str) -> (String, String
                 "plugins" => "gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav".to_string(),
                 _ => "libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-vaapi libass-dev".to_string(),
             };
-            let cmd = format!("sudo apt update && sudo apt install {}", pkgs);
+            let cmd = format!("sudo apt update && sudo apt install -y {}", pkgs);
             (pkgs, cmd)
         }
         "fedora" => {
@@ -110,7 +110,7 @@ fn get_gst_install_instructions(category: &str, distro: &str) -> (String, String
                 "plugins" => "gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-libav".to_string(),
                 _ => "gstreamer1-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-libav gstreamer1-vaapi".to_string(),
             };
-            let cmd = format!("sudo dnf install {}", pkgs);
+            let cmd = format!("sudo dnf install -y {}", pkgs);
             (pkgs, cmd)
         }
         "opensuse" | "opensuse-tumbleweed" => {
@@ -119,7 +119,7 @@ fn get_gst_install_instructions(category: &str, distro: &str) -> (String, String
                 "plugins" => "gstreamer-plugins-base gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugins-libav".to_string(),
                 _ => "gstreamer-devel gstreamer-plugins-base gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugins-libav".to_string(),
             };
-            let cmd = format!("sudo zypper install {}", pkgs);
+            let cmd = format!("sudo zypper install -y {}", pkgs);
             (pkgs, cmd)
         }
         _ => (
