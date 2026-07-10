@@ -4,6 +4,7 @@ pub mod inner {
     use std::sync::{Arc, Mutex, Condvar};
     use std::thread;
     use std::time::Duration;
+    use tauri::Emitter;
 
     pub struct DecodedFrame {
         pub width: u32,
@@ -114,6 +115,7 @@ pub mod inner {
             let bus = playbin.bus().ok_or("Failed to get pipeline bus")?;
             let is_playing_bus_clone = is_playing.clone();
             let frame_signal_bus_clone = frame_signal.clone();
+            let window_bus_clone = window.clone();
 
             thread::spawn(move || {
                 for msg in bus.iter_timed(gstreamer::ClockTime::NONE) {
@@ -121,6 +123,7 @@ pub mod inner {
                     match msg.view() {
                         MessageView::Error(err) => {
                             eprintln!("[GStreamer Error] {}", err.error());
+                            let _ = window_bus_clone.emit("openanime://gst-fallback", err.error().to_string());
                             break;
                         }
                         MessageView::Eos(_) => {

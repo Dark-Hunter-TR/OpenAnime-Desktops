@@ -272,7 +272,7 @@ pub mod inner {
             }
         }
 
-        pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        pub fn prepare_and_submit(&mut self) -> Result<wgpu::SurfaceTexture, wgpu::SurfaceError> {
             let output = self.surface.get_current_texture()?;
             let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
             let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -308,9 +308,7 @@ pub mod inner {
             }
 
             self.queue.submit(std::iter::once(encoder.finish()));
-            output.present();
-
-            Ok(())
+            Ok(output)
         }
     }
 
@@ -322,7 +320,9 @@ pub mod inner {
     }
 
     use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU32, Ordering};
     static MANAGER: OnceLock<Mutex<NativePlayerManager>> = OnceLock::new();
+    static CONSECUTIVE_LOCK_FAILURES: AtomicU32 = AtomicU32::new(0);
 
     pub fn get_manager() -> &'static Mutex<NativePlayerManager> {
         MANAGER.get_or_init(|| Mutex::new(NativePlayerManager {
@@ -393,9 +393,15 @@ pub mod inner {
                 };
 
                 // Render the frame immediately
-                let mut rs = rs_ref.lock().unwrap();
-                rs.update_video_texture(frame.width, frame.height, &frame.data);
-                let _ = rs.render();
+                let presentation_result = {
+                    let mut rs = rs_ref.lock().unwrap();
+                    rs.update_video_texture(frame.width, frame.height, &frame.data);
+                    rs.prepare_and_submit()
+                };
+
+                if let Ok(output) = presentation_result {
+                    output.present();
+                }
             }
         });
 
@@ -413,8 +419,16 @@ pub mod inner {
     }
 
     pub fn sync_bounds(x: i32, y: i32, width: u32, height: u32, main_window: WebviewWindow) {
-        let manager = get_manager().lock().unwrap();
-        if let Some(overlay) = &manager.overlay_window {
+        let manager_guard = match get_manager().try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+
+        let overlay_opt = manager_guard.overlay_window.clone();
+        let rs_shared_opt = manager_guard.render_state.clone();
+        drop(manager_guard);
+
+        if let Some(overlay) = overlay_opt {
             let scale_factor = main_window.scale_factor().unwrap_or(1.0);
             
             // Convert bounds relative to client area to physical screen coordinates
@@ -431,9 +445,15 @@ pub mod inner {
             let _ = overlay.set_size(tauri::Size::Physical(physical_size));
 
             // Resize wgpu surface configuration
-            if let Some(rs_shared) = &manager.render_state {
-                if let Ok(mut rs) = rs_shared.lock() {
+            if let Some(rs_shared) = rs_shared_opt {
+                if let Ok(mut rs) = rs_shared.try_lock() {
+                    CONSECUTIVE_LOCK_FAILURES.store(0, Ordering::Relaxed);
                     rs.resize(physical_size.width, physical_size.height);
+                } else {
+                    let failures = CONSECUTIVE_LOCK_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+                    if failures % 10 == 0 {
+                        eprintln!("[Native Render] Lock contention detected ({} failures), resize skipped.", failures);
+                    }
                 }
             }
         }

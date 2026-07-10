@@ -817,6 +817,18 @@ pub fn run() {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        let gpu_report = gpu_detector::detect_gpu();
+        if !gpu_report.vulkan_supported {
+            println!("[Tauri GPU] Vulkan is not supported. Disabling WebKit compositing mode.");
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        } else if gpu_report.vendor == "NVIDIA" {
+            println!("[Tauri GPU] NVIDIA GPU detected on Linux. Disabling DMABUF renderer for stability.");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
