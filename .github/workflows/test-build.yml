@@ -14,11 +14,12 @@ on:
           - ubuntu-24.04
           - macos-latest
       build_mode:
-        description: 'Build modu'
+        description: 'Build modu (test-release = hızlı, release = full opt)'
         required: true
-        default: 'release'
+        default: 'test-release'
         type: choice
         options:
+          - test-release
           - release
           - debug
       upload_artifacts:
@@ -26,32 +27,45 @@ on:
         required: true
         default: true
         type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
 jobs:
   windows:
     if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows-latest'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: lts/*
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Cache Rust
+
+      - name: Cache Rust dependencies
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: windows-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             windows-cargo-
+
       - name: Cache Tauri bundler (NSIS, Wix etc.)
         uses: actions/cache@v6
         with:
@@ -59,6 +73,7 @@ jobs:
           key: windows-tauri-bundler
           restore-keys: |
             windows-tauri-bundler-
+
       - name: Cache Bun
         uses: actions/cache@v6
         with:
@@ -66,8 +81,10 @@ jobs:
           key: windows-bun-${{ hashFiles('bun.lock', 'package.json') }}
           restore-keys: |
             windows-bun-
+
       - name: Install frontend dependencies
         run: bun install
+
       - name: Build
         uses: tauri-apps/tauri-action@v1
         env:
@@ -76,12 +93,13 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
+
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: Windows-x64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
+          path: src-tauri/target/${{ github.event.inputs.build_mode == 'debug' && 'debug' || 'release' }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
@@ -90,26 +108,33 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: lts/*
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Cache Rust
+
+      - name: Cache Rust dependencies
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: macos-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             macos-cargo-
+
       - name: Cache Bun
         uses: actions/cache@v6
         with:
@@ -117,8 +142,10 @@ jobs:
           key: macos-bun-${{ hashFiles('bun.lock', 'package.json') }}
           restore-keys: |
             macos-bun-
+
       - name: Install frontend dependencies
         run: bun install
+
       - name: Build
         uses: tauri-apps/tauri-action@v1
         env:
@@ -127,12 +154,13 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
+
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: macOS-ARM64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
+          path: src-tauri/target/${{ github.event.inputs.build_mode == 'debug' && 'debug' || 'release' }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
@@ -141,6 +169,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -152,26 +181,33 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly gstreamer1.0-libav
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: lts/*
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Cache Rust
+
+      - name: Cache Rust dependencies
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: linux-x64-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             linux-x64-cargo-
+
       - name: Cache Bun
         uses: actions/cache@v6
         with:
@@ -179,8 +215,10 @@ jobs:
           key: linux-x64-bun-${{ hashFiles('bun.lock', 'package.json') }}
           restore-keys: |
             linux-x64-bun-
+
       - name: Install frontend dependencies
         run: bun install
+
       - name: Build
         uses: tauri-apps/tauri-action@v1
         env:
@@ -189,17 +227,20 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
-      - name: Compress x64 AppImage with UPX
+
+      - name: Compress x64 AppImage with UPX (only full release)
+        if: github.event.inputs.build_mode == 'release'
         run: |
           sudo apt-get install -y upx-ucl
           upx --best --lzma \
             src-tauri/target/release/bundle/appimage/OpenAnime_*.AppImage
+
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: Linux-x64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
+          path: src-tauri/target/${{ github.event.inputs.build_mode == 'debug' && 'debug' || 'release' }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
@@ -208,6 +249,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -219,6 +261,7 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly gstreamer1.0-libav
+
       - name: Install ARM64 cross-compilation deps
         run: |
           sudo dpkg --add-architecture arm64
@@ -268,26 +311,33 @@ jobs:
         run: |
           sudo apt-get install -y qemu-user-static binfmt-support
           sudo update-binfmts --enable qemu-aarch64
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: lts/*
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Cache Rust
+
+      - name: Cache Rust dependencies
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: linux-arm64-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             linux-arm64-cargo-
+
       - name: Cache Bun
         uses: actions/cache@v6
         with:
@@ -295,8 +345,10 @@ jobs:
           key: linux-arm64-bun-${{ hashFiles('bun.lock', 'package.json') }}
           restore-keys: |
             linux-arm64-bun-
+
       - name: Install frontend dependencies
         run: bun install
+
       - name: Build (ARM64 cross-compile)
         uses: tauri-apps/tauri-action@v1
         env:
@@ -305,11 +357,12 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target aarch64-unknown-linux-gnu ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
+
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: Linux-ARM64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
+          path: src-tauri/target/${{ github.event.inputs.build_mode == 'debug' && 'debug' || 'release' }}/bundle
           if-no-files-found: warn
           retention-days: 7

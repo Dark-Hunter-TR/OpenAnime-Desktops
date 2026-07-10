@@ -21,9 +21,15 @@ on:
         required: true
         default: true
         type: boolean
+
 concurrency:
   group: publish-${{ inputs.version }}
   cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   publish:
@@ -81,6 +87,14 @@ jobs:
             gstreamer1.0-plugins-ugly \
             gstreamer1.0-libav
 
+      # Linux x64 için mold linker (linking ~%30 daha hızlı)
+      - name: Install mold linker (Linux x64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get install -y mold clang
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C link-args=-fuse-ld=mold" >> $GITHUB_ENV
+
       - name: Install ARM64 cross-compilation deps
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
@@ -137,8 +151,11 @@ jobs:
           sudo update-binfmts --enable qemu-aarch64
 
       # ────────────────────────────────────────────────────
-      # 2. Toolchain
+      # 2. Toolchain + sccache
       # ────────────────────────────────────────────────────
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
@@ -164,13 +181,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-tauri-bundler-
 
-      - name: Cache Rust
+      - name: Cache Rust dependencies
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: ${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ matrix.target }}-cargo-
