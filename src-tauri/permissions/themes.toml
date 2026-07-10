@@ -1,0 +1,12 @@
+[[permission]]
+identifier = "allow-themes"
+description = "Tema oluşturma, yükleme, silme komutlarına izin verir"
+
+[permission.commands]
+allow = [
+    "save_theme",
+    "list_themes",
+    "load_theme",
+    "delete_theme",
+    "apply_theme_css"
+]

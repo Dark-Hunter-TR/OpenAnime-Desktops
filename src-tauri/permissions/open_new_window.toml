@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-open-new-window"
+description = "Allows invoking the open_new_window command"
+
+[permission.commands]
+allow = [
+  "open_new_window"
+]

@@ -1,0 +1,246 @@
+name: '🧪 Test Build'
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Build alınacak platform'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - windows-latest
+          - ubuntu-24.04
+          - macos-latest
+      build_mode:
+        description: 'Build modu (test-release = hızlı, release = full opt)'
+        required: true
+        default: 'test-release'
+        type: choice
+        options:
+          - test-release
+          - release
+          - debug
+      upload_artifacts:
+        description: 'Artifact olarak yükle'
+        required: true
+        default: true
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  windows:
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows-latest'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: windows-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-cargo-
+
+      - name: Cache Tauri bundler (NSIS, Wix etc.)
+        uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\tauri
+          key: windows-tauri-bundler
+          restore-keys: |
+            windows-tauri-bundler-
+
+      - name: Cache Bun
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun
+          key: windows-bun-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            windows-bun-
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseDraft: false
+          prerelease: false
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
+
+      - name: Upload artifacts
+        if: github.event.inputs.upload_artifacts == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Windows-x64-${{ github.event.inputs.build_mode }}
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
+          if-no-files-found: warn
+          retention-days: 7
+
+  macos:
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos-latest'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: macos-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            macos-cargo-
+
+      - name: Cache Bun
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun
+          key: macos-bun-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            macos-bun-
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseDraft: false
+          prerelease: false
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
+
+      - name: Upload artifacts
+        if: github.event.inputs.upload_artifacts == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: macOS-ARM64-${{ github.event.inputs.build_mode }}
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux-x64:
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ubuntu-24.04'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get remove -y 'libunwind-1[0-9]-dev' || true
+          sudo apt-get install -y --no-install-recommends libunwind-dev
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: linux-x64-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            linux-x64-cargo-
+
+      - name: Cache Bun
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun
+          key: linux-x64-bun-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            linux-x64-bun-
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseDraft: false
+          prerelease: false
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
+
+      - name: Compress x64 AppImage with UPX (only full release)
+        if: github.event.inputs.build_mode == 'release'
+        run: |
+          sudo apt-get install -y upx-ucl
+          upx --best --lzma \
+            src-tauri/target/release/bundle/appimage/OpenAnime_*.AppImage
+
+      - name: Upload artifacts
+        if: github.event.inputs.upload_artifacts == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Linux-x64-${{ github.event.inputs.build_mode }}
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
+          if-no-files-found: warn
+          retention-days: 7
+

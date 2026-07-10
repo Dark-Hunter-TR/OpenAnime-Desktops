@@ -1,0 +1,234 @@
+/* === OpenAnime — Window Controls (Fluent System Icons) === */
+/* Platform classes: .platform-windows | .platform-macos | .platform-linux */
+
+/* ── Design tokens ── */
+.tauri-window-controls {
+  --wc-icon-size: 16px;
+  --wc-icon-stroke: 1;
+  --wc-icon-color: rgba(255, 255, 255, 0.85);
+  --wc-icon-color-hover: #ffffff;
+  --wc-btn-width: 46px;
+  --wc-btn-height: 36px;
+  --wc-btn-bg: transparent;
+  --wc-btn-bg-hover: rgba(255, 255, 255, 0.08);
+  --wc-btn-bg-active: rgba(255, 255, 255, 0.04);
+  --wc-close-bg-hover: #c42b1c;
+  --wc-close-bg-active: rgba(196, 43, 28, 0.72);
+  --wc-transition: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  --wc-border-radius: 0px;
+}
+
+/* ── Container ── */
+.tauri-window-controls {
+  display: flex !important;
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  height: 48px !important;
+  z-index: 99999999 !important;
+  -webkit-app-region: no-drag !important;
+  user-select: none !important;
+  background-color: transparent !important;
+  pointer-events: none !important;
+  flex-direction: row !important;
+  align-items: flex-start !important;
+}
+
+/* ── Buttons — base ── */
+.tauri-window-control-btn {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: var(--wc-btn-width) !important;
+  height: var(--wc-btn-height) !important;
+  min-width: 32px !important;
+  min-height: 32px !important;
+  cursor: pointer !important;
+  color: var(--wc-icon-color) !important;
+  background-color: var(--wc-btn-bg) !important;
+  border: none !important;
+  outline: none !important;
+  border-radius: var(--wc-border-radius) !important;
+  transition:
+    background-color var(--wc-transition),
+    color var(--wc-transition),
+    opacity var(--wc-transition) !important;
+  -webkit-app-region: no-drag !important;
+  pointer-events: auto !important;
+  position: relative !important;
+}
+
+/* ── Hover / Active ── */
+.tauri-window-control-btn:hover {
+  background-color: var(--wc-btn-bg-hover) !important;
+  color: var(--wc-icon-color-hover) !important;
+}
+.tauri-window-control-btn:active {
+  background-color: var(--wc-btn-bg-active) !important;
+}
+
+/* Close button */
+.tauri-window-control-btn.close:hover {
+  background-color: var(--wc-close-bg-hover) !important;
+  color: #ffffff !important;
+}
+.tauri-window-control-btn.close:active {
+  background-color: var(--wc-close-bg-active) !important;
+  color: #ffffff !important;
+}
+
+/* ── SVG icon sizing ── */
+.tauri-window-control-btn svg {
+  width: var(--wc-icon-size) !important;
+  height: var(--wc-icon-size) !important;
+  flex-shrink: 0 !important;
+  transition: opacity 150ms ease, transform 150ms ease !important;
+}
+
+/* ── Maximize / Restore crossfade ── */
+.tauri-window-control-btn.maximize .wc-icon-maximize,
+.tauri-window-control-btn.maximize .wc-icon-restore {
+  position: absolute !important;
+}
+.tauri-window-control-btn.maximize .wc-icon-restore {
+  opacity: 0 !important;
+  transform: scale(0.8) !important;
+}
+.tauri-window-control-btn.maximize.is-maximized .wc-icon-maximize {
+  opacity: 0 !important;
+  transform: scale(0.8) !important;
+}
+.tauri-window-control-btn.maximize.is-maximized .wc-icon-restore {
+  opacity: 1 !important;
+  transform: scale(1) !important;
+}
+.tauri-window-control-btn.maximize:not(.is-maximized) .wc-icon-maximize {
+  opacity: 1 !important;
+  transform: scale(1) !important;
+}
+
+/* ═══════════════════════════════════════════════════
+   Platform: Windows (Fluent / Win11 style)
+   ═══════════════════════════════════════════════════ */
+.tauri-window-controls.platform-windows {
+  --wc-btn-width: 46px;
+  --wc-btn-height: 36px;
+  --wc-icon-size: 16px;
+  --wc-border-radius: 0px;
+  right: 0 !important;
+  left: auto !important;
+  flex-direction: row !important;
+}
+
+/* ═══════════════════════════════════════════════════
+   Platform: macOS (traffic-light style)
+   ═══════════════════════════════════════════════════ */
+.tauri-window-controls.platform-macos {
+  --wc-btn-width: 14px;
+  --wc-btn-height: 14px;
+  --wc-icon-size: 10px;
+  --wc-border-radius: 50%;
+  right: auto !important;
+  left: 12px !important;
+  top: 14px !important;
+  gap: 8px !important;
+  flex-direction: row-reverse !important;
+  align-items: center !important;
+  height: auto !important;
+}
+
+/* macOS button base → solid color circles */
+.tauri-window-controls.platform-macos .tauri-window-control-btn {
+  min-width: 14px !important;
+  min-height: 14px !important;
+  border: 0.5px solid rgba(0, 0, 0, 0.12) !important;
+}
+.tauri-window-controls.platform-macos .tauri-window-control-btn.close {
+  background-color: #ff5f57 !important;
+}
+.tauri-window-controls.platform-macos .tauri-window-control-btn.minimize {
+  background-color: #febc2e !important;
+}
+.tauri-window-controls.platform-macos .tauri-window-control-btn.maximize {
+  background-color: #28c840 !important;
+}
+
+/* macOS: icons hidden by default, visible on container hover */
+.tauri-window-controls.platform-macos .tauri-window-control-btn svg {
+  opacity: 0 !important;
+  color: rgba(0, 0, 0, 0.5) !important;
+  transition: opacity 120ms ease !important;
+}
+.tauri-window-controls.platform-macos:hover .tauri-window-control-btn svg {
+  opacity: 1 !important;
+}
+
+/* macOS hover darkens circle */
+.tauri-window-controls.platform-macos .tauri-window-control-btn.close:hover {
+  background-color: #ff3b30 !important;
+}
+.tauri-window-controls.platform-macos .tauri-window-control-btn.minimize:hover {
+  background-color: #f5a623 !important;
+}
+.tauri-window-controls.platform-macos .tauri-window-control-btn.maximize:hover {
+  background-color: #1db934 !important;
+}
+
+/* ═══════════════════════════════════════════════════
+   Platform: Linux (GTK/KDE — neutral monochrome)
+   ═══════════════════════════════════════════════════ */
+.tauri-window-controls.platform-linux {
+  --wc-btn-width: 38px;
+  --wc-btn-height: 34px;
+  --wc-icon-size: 16px;
+  --wc-border-radius: 8px;
+  --wc-btn-bg-hover: rgba(255, 255, 255, 0.12);
+  right: 4px !important;
+  left: auto !important;
+  top: 4px !important;
+  gap: 2px !important;
+  flex-direction: row !important;
+  align-items: center !important;
+}
+
+.tauri-window-controls.platform-linux .tauri-window-control-btn {
+  border-radius: var(--wc-border-radius) !important;
+}
+
+/* ═══════════════════════════════════════════════════
+   High-contrast / forced-colors support
+   ═══════════════════════════════════════════════════ */
+@media (forced-colors: active) {
+  .tauri-window-control-btn {
+    color: ButtonText !important;
+    background-color: ButtonFace !important;
+    border: 1px solid ButtonText !important;
+    forced-color-adjust: none !important;
+  }
+  .tauri-window-control-btn:hover {
+    background-color: Highlight !important;
+    color: HighlightText !important;
+  }
+  .tauri-window-control-btn.close:hover {
+    background-color: Highlight !important;
+    color: HighlightText !important;
+  }
+  .tauri-window-control-btn svg {
+    color: inherit !important;
+  }
+}
+
+/* Hide default website window controls if they exist to prevent them from showing for a split second */
+.window-controls,
+.window-control,
+.titlebar-controls,
+.titlebar-buttons,
+.window-buttons,
+.minimize-button,
+.maximize-button,
+.close-button,
+.win-controls {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

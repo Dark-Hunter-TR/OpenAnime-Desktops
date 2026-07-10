@@ -1,0 +1,168 @@
+name: '🚀 Publish'
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Sürüm numarası (örn: 1.0.2-beta, 1.0.3-alpha, 1.0.1)'
+        required: true
+        type: string
+      channel:
+        description: 'Release kanalı (prerelease durumunu belirler)'
+        required: true
+        default: 'beta'
+        type: choice
+        options:
+          - stable
+          - beta
+          - alpha
+      draft:
+        description: 'Draft olarak oluştur (açıklamayı sonra sen yazarsın)'
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: publish-${{ inputs.version }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: ''
+            target: aarch64-apple-darwin
+            label: macOS-ARM64
+          - platform: windows-latest
+            args: ''
+            target: x86_64-pc-windows-msvc
+            label: Windows-x64
+          - platform: ubuntu-24.04
+            args: ''
+            target: x86_64-unknown-linux-gnu
+            label: Linux-x64
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # ────────────────────────────────────────────────────
+      # 1. Linux bağımlılıkları
+      # ────────────────────────────────────────────────────
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get remove -y 'libunwind-1[0-9]-dev' || true
+          sudo apt-get install -y --no-install-recommends libunwind-dev
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav
+
+      # Linux x64 için mold linker (linking ~%30 daha hızlı)
+      - name: Install mold linker (Linux x64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get install -y mold clang
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C link-args=-fuse-ld=mold" >> $GITHUB_ENV
+
+
+      # ────────────────────────────────────────────────────
+      # 2. Toolchain + sccache
+      # ────────────────────────────────────────────────────
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # ────────────────────────────────────────────────────
+      # 3. Cache
+      # ────────────────────────────────────────────────────
+      - name: Cache Tauri bundler (NSIS, Wix etc.)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\tauri
+          key: ${{ runner.os }}-tauri-bundler-${{ hashFiles('src-tauri/tauri.conf.json') }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-bundler-
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.target }}-cargo-
+
+      - name: Cache Bun
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      # ────────────────────────────────────────────────────
+      # 4. Build & Release
+      # ────────────────────────────────────────────────────
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build & publish
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v${{ inputs.version }}
+          releaseName: 'OpenAnime Desktop v${{ inputs.version }} (${{ inputs.channel }})'
+          releaseDraft: ${{ inputs.draft == 'true' }}
+          prerelease: ${{ inputs.channel != 'stable' }}
+          args: ${{ matrix.args }} --verbose
+
+      - name: Compress x64 AppImage with UPX
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get install -y upx-ucl
+          upx --best --lzma \
+            src-tauri/target/release/bundle/appimage/OpenAnime_*.AppImage

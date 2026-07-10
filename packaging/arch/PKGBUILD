@@ -1,0 +1,46 @@
+# Maintainer: darkhunter
+# Binary PKGBUILD — GitHub Releases'den hazır .deb indirir, derleme yapmaz
+pkgname=openanime-desktops
+pkgver=1.0.2_beta
+_pkgver=1.0.2-beta
+pkgrel=1
+pkgdesc="OpenAnime masaüstü istemcisi — Tauri v2 + Rust + Svelte v5"
+arch=('x86_64')
+url="https://github.com/Dark-Hunter-TR/OpenAnime-Desktops"
+license=('MIT')
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libappindicator-gtk3'
+    'librsvg'
+    'gstreamer'
+    'gst-plugins-base'
+    'gst-plugins-good'
+    'gst-plugins-bad'
+    'gst-plugins-ugly'
+    'gst-libav'
+)
+optdepends=(
+    'libva-mesa-driver: Intel/AMD donanım video decode'
+    'nvidia-utils: NVIDIA donanım video decode'
+)
+# Derleme gerekmez — direkt binary indir
+makedepends=()
+# GitHub Releases'den hazır .deb binary'si
+source=("$pkgname-$pkgver.deb::https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v$_pkgver/openanime_$_pkgver\_amd64.deb")
+sha256sums=('SKIP')
+
+# Binary olduğu için build() boş — derleme yok
+build() {
+    true
+}
+
+package() {
+    # .deb içinden dosyaları ayıkla
+    bsdtar -xf "$srcdir/$pkgname-$pkgver.deb" -C "$srcdir"
+    bsdtar -xf "$srcdir/data.tar."* -C "$pkgdir"
+
+    # Lisansı koy
+    install -Dm644 "$srcdir/usr/share/licenses/openanime-desktops/LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+}
