@@ -360,19 +360,29 @@ pub mod inner {
     /// The fix: build the window on the main thread, wait (with a timeout)
     /// for a real realize signal (first `Resized`/`Moved` event) before ever
     /// touching Vulkan, and only then hand off to `RenderState::new`.
-    pub async fn start_player(url: &str, main_window: WebviewWindow) -> Result<(), String> {
+    pub async fn start_player(url: &str, main_window: WebviewWindow, start_paused: bool) -> Result<(), String> {
         let app: tauri::AppHandle = main_window.app_handle().clone();
 
         // 1. Destroy any existing overlay/player before creating new ones,
         // so we never have two GStreamer pipelines or overlay windows alive
-        // at once.
+        // at once. Destroying windows and dropping players must happen outside
+        // the MANAGER lock to avoid blocking other calls.
         {
             let mut manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(win) = manager.overlay_window.take() {
-                let _ = win.close();
-            }
-            manager.player = None;
+            let old_win = manager.overlay_window.take();
+            let old_player = manager.player.take();
             manager.render_state = None;
+            
+            drop(manager);
+
+            if let Some(win) = old_win {
+                let win_clone = win.clone();
+                let app_clone = app.clone();
+                let _ = app_clone.run_on_main_thread(move || {
+                    let _ = win_clone.close();
+                });
+            }
+            drop(old_player);
         }
 
         // 2. Build the transparent, borderless overlay window ON THE MAIN
@@ -433,6 +443,22 @@ pub mod inner {
             manager.overlay_window = Some(overlay.clone());
         }
 
+        // Helper to cleanly close the overlay and reset manager references on errors
+        let cleanup_on_error = |err_msg: String| -> String {
+            eprintln!("[Native Render] Error starting native player: {}", err_msg);
+            let app_for_close = app.clone();
+            let overlay_for_close = overlay.clone();
+            let _ = app_for_close.run_on_main_thread(move || {
+                let _ = overlay_for_close.close();
+            });
+            if let Ok(mut manager) = get_manager().lock() {
+                manager.overlay_window = None;
+                manager.player = None;
+                manager.render_state = None;
+            }
+            err_msg
+        };
+
         // 3. Wait for the window to actually realize before touching Vulkan
         // at all. If it doesn't realize within 500ms, don't risk the
         // deadlock -- cancel the native path and fall back to the HTML5
@@ -440,18 +466,7 @@ pub mod inner {
         match tokio::time::timeout(std::time::Duration::from_millis(500), realize_rx).await {
             Ok(Ok(())) => {}
             _ => {
-                eprintln!(
-                    "[Native Render] Overlay window failed to realize within 500ms, falling back to HTML5 player."
-                );
-                let app_for_close = app.clone();
-                let overlay_for_close = overlay.clone();
-                let _ = app_for_close.run_on_main_thread(move || {
-                    let _ = overlay_for_close.close();
-                });
-                {
-                    let mut manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
-                    manager.overlay_window = None;
-                }
+                cleanup_on_error("Overlay window did not realize in time".to_string());
                 let _ = main_window.emit(
                     "openanime://gst-fallback",
                     "Overlay window did not realize in time".to_string(),
@@ -463,20 +478,33 @@ pub mod inner {
         // 4. Initialize the GStreamer player. It comes up in NULL/READY
         // state now -- playback is started explicitly via play() below,
         // outside of any manager lock.
-        let player = GstPlayer::new(url, main_window.clone())?;
+        let player = match GstPlayer::new(url, main_window.clone()) {
+            Ok(p) => p,
+            Err(e) => return Err(cleanup_on_error(format!("GStreamer init failed: {}", e))),
+        };
         let frame_signal = player.get_frame_signal();
 
         // 5. Initialize WGPU state on the now-realized overlay window. This
         // is a real `.await` -- no more `block_on` blocking a Tokio worker
         // thread while GTK might need the same X11 Display lock.
-        let render_state = RenderState::new(overlay.clone()).await?;
+        let render_state = match RenderState::new(overlay.clone()).await {
+            Ok(rs) => rs,
+            Err(e) => return Err(cleanup_on_error(format!("WGPU init failed: {}", e))),
+        };
         let render_state_shared = Arc::new(Mutex::new(render_state));
 
-        // 6. Start playback. GStreamer's state change can be asynchronous
-        // (StateChangeSuccess::Async); preroll completion is tracked via
-        // AsyncDone on the bus rather than blocked on here, and this call
-        // deliberately happens without holding the MANAGER lock.
-        player.play()?;
+        // 6. Start playback if not start_paused. Otherwise, pause to preroll
+        // the first frame without starting playback. GStreamer's state change
+        // can be asynchronous; preroll completion is tracked via AsyncDone on the bus.
+        if !start_paused {
+            if let Err(e) = player.play() {
+                return Err(cleanup_on_error(format!("Failed to start GStreamer playback: {}", e)));
+            }
+        } else {
+            if let Err(e) = player.pause() {
+                return Err(cleanup_on_error(format!("Failed to pause GStreamer: {}", e)));
+            }
+        }
 
         {
             let mut manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
@@ -484,13 +512,23 @@ pub mod inner {
             manager.player = Some(player);
         }
 
-        // 7. Spawn background render thread with Condvar synchronization
+        // 7. Spawn background render thread with Condvar synchronization.
+        // We use a zero-allocation double-buffer frame swapping mechanism:
+        // instead of allocating and deallocating Vec<u8> every single frame,
+        // we swap the vector inside the DecodedFrame with our local buffer
+        // using std::mem::swap (O(1)). GStreamer then writes to the swapped
+        // buffer in the next frame. This completely removes allocation churn
+        // and fixes UI stuttering/lag on Linux.
         let rs_ref = render_state_shared.clone();
+        let mut local_frame_data = Vec::new();
 
         thread::spawn(move || {
             loop {
+                let mut frame_width = 0;
+                let mut frame_height = 0;
+
                 // Wait for the next decoded frame using condition variable
-                let frame = {
+                {
                     let mut guard = frame_signal.frame.lock().unwrap_or_else(|p| p.into_inner());
                     loop {
                         {
@@ -499,21 +537,29 @@ pub mod inner {
                                 return;
                             }
                         }
-                        if guard.is_some() {
-                            break;
+                        if let Some(ref frame) = *guard {
+                            if frame.new_frame_available {
+                                break;
+                            }
                         }
                         guard = frame_signal
                             .condvar
                             .wait(guard)
                             .unwrap_or_else(|p| p.into_inner());
                     }
-                    guard.take().unwrap()
-                };
 
-                // Render the frame immediately
+                    if let Some(ref mut frame) = *guard {
+                        frame_width = frame.width;
+                        frame_height = frame.height;
+                        std::mem::swap(&mut frame.data, &mut local_frame_data);
+                        frame.new_frame_available = false;
+                    }
+                }
+
+                // Render the frame immediately using our local zero-allocation buffer
                 let presentation_result = {
                     let mut rs = rs_ref.lock().unwrap_or_else(|p| p.into_inner());
-                    rs.update_video_texture(frame.width, frame.height, &frame.data);
+                    rs.update_video_texture(frame_width, frame_height, &local_frame_data);
                     rs.prepare_and_submit()
                 };
 

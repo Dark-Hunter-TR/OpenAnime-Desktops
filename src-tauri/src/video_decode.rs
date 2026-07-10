@@ -10,6 +10,7 @@ pub mod inner {
         pub width: u32,
         pub height: u32,
         pub data: Vec<u8>,
+        pub new_frame_available: bool,
     }
 
     pub struct FrameSignal {
@@ -88,11 +89,23 @@ pub mod inner {
                                 .frame
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner());
-                            *guard = Some(DecodedFrame {
-                                width,
-                                height,
-                                data: map.to_vec(),
-                            });
+                            
+                            if let Some(ref mut frame) = *guard {
+                                frame.width = width;
+                                frame.height = height;
+                                if frame.data.len() != map.len() {
+                                    frame.data.resize(map.len(), 0);
+                                }
+                                frame.data.copy_from_slice(&map);
+                                frame.new_frame_available = true;
+                            } else {
+                                *guard = Some(DecodedFrame {
+                                    width,
+                                    height,
+                                    data: map.to_vec(),
+                                    new_frame_available: true,
+                                });
+                            }
                             frame_signal_clone.condvar.notify_one();
                         }
 
@@ -155,7 +168,8 @@ pub mod inner {
                 }
                 
                 // Signal termination on error or end of stream
-                if let Ok(mut playing) = is_playing_bus_clone.lock() {
+                {
+                    let mut playing = is_playing_bus_clone.lock().unwrap_or_else(|p| p.into_inner());
                     *playing = false;
                 }
                 let mut running = frame_signal_bus_clone
@@ -219,7 +233,8 @@ pub mod inner {
 
     impl Drop for GstPlayer {
         fn drop(&mut self) {
-            if let Ok(mut playing) = self.is_playing.lock() {
+            {
+                let mut playing = self.is_playing.lock().unwrap_or_else(|p| p.into_inner());
                 *playing = false;
             }
             {
