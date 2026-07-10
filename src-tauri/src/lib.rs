@@ -708,19 +708,25 @@ fn setup_windows_gpu_preference() {
                 "[Tauri] Setting DirectX GpuPreference to High Performance for: {}",
                 exe_str
             );
-            let _ = std::process::Command::new("reg")
-                .args(&[
-                    "add",
-                    "HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences",
-                    "/v",
-                    exe_str,
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                    "GpuPreference=2;",
-                    "/f",
-                ])
-                .output();
+            let mut cmd = std::process::Command::new("reg");
+            cmd.args(&[
+                "add",
+                "HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences",
+                "/v",
+                exe_str,
+                "/t",
+                "REG_SZ",
+                "/d",
+                "GpuPreference=2;",
+                "/f",
+            ]);
+            // Konsol penceresi açılmasını engelle
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            let _ = cmd.output();
         }
     }
 }

@@ -92,7 +92,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '--profile test-release' || '' }} --verbose
 
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
@@ -153,7 +153,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '--profile test-release' || '' }} --verbose
 
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
@@ -226,7 +226,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '--profile test-release' || '' }} --verbose
 
       - name: Compress x64 AppImage with UPX (only full release)
         if: github.event.inputs.build_mode == 'release'
@@ -244,125 +244,3 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  linux-arm64:
-    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ubuntu-24.04'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get remove -y 'libunwind-1[0-9]-dev' || true
-          sudo apt-get install -y --no-install-recommends libunwind-dev
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly gstreamer1.0-libav
-
-      - name: Install ARM64 cross-compilation deps
-        run: |
-          sudo dpkg --add-architecture arm64
-
-          # Mevcut x86 repolarını sadece amd64'e kısıtla
-          # .list formatı (deb http://...)
-          sudo sed -i 's/^deb http/deb [arch=amd64] http/g' /etc/apt/sources.list 2>/dev/null || true
-          sudo find /etc/apt/sources.list.d/ -name '*.list' -exec sed -i 's/^deb http/deb [arch=amd64] http/g' {} \; 2>/dev/null || true
-
-          # .sources formatı (deb822 / Ubuntu 24.04 default)
-          # Önce var olan Architectures alanını güncelle, yoksa ekle
-          sudo find /etc/apt/sources.list.d/ -name '*.sources' -exec sh -c '
-            for f; do
-              if grep -q "^Architectures:" "$f" 2>/dev/null; then
-                sudo sed -i "s/^Architectures:.*/Architectures: amd64/" "$f"
-              else
-                sudo sed -i "/^Types: deb$/a\Architectures: amd64" "$f"
-              fi
-            done
-          ' sh {} + 2>/dev/null || true
-
-          # ARM64 repolarını ports.ubuntu.com'dan ekle
-          UBUNTU_CODENAME=$(lsb_release -cs)
-          for suite in "$UBUNTU_CODENAME" "$UBUNTU_CODENAME-updates" "$UBUNTU_CODENAME-backports" "$UBUNTU_CODENAME-security"; do
-            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $suite main universe multiverse restricted"
-          done | sudo tee /etc/apt/sources.list.d/arm64.list > /dev/null
-
-          sudo apt-get update
-          sudo apt-get install -y -o DPkg::options::="--force-overwrite" \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            libwebkit2gtk-4.1-dev:arm64 libgtk-3-dev:arm64 \
-            libayatana-appindicator3-dev:arm64 librsvg2-dev:arm64 \
-            libglib2.0-dev:arm64 \
-            libgstreamer1.0-dev:arm64 \
-            libgstreamer-plugins-base1.0-dev:arm64 \
-            libsoup-3.0-dev:arm64 \
-            libjavascriptcoregtk-4.1-dev:arm64 \
-            libunwind-dev:arm64 \
-            libssl-dev:arm64
-          rustup target add aarch64-unknown-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
-          echo "PKG_CONFIG_SYSROOT_DIR=/" >> $GITHUB_ENV
-
-      - name: Install QEMU for ARM64 AppImage emulation
-        run: |
-          sudo apt-get install -y qemu-user-static binfmt-support
-          sudo update-binfmts --enable qemu-aarch64
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: linux-arm64-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            linux-arm64-cargo-
-
-      - name: Cache Bun
-        uses: actions/cache@v6
-        with:
-          path: ~/.bun
-          key: linux-arm64-bun-${{ hashFiles('bun.lock', 'package.json') }}
-          restore-keys: |
-            linux-arm64-bun-
-
-      - name: Install frontend dependencies
-        run: bun install
-
-      - name: Build (ARM64 cross-compile)
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseDraft: false
-          prerelease: false
-          args: --target aarch64-unknown-linux-gnu ${{ github.event.inputs.build_mode == 'debug' && '--debug' || '' }} --verbose
-
-      - name: Upload artifacts
-        if: github.event.inputs.upload_artifacts == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: Linux-ARM64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode == 'debug' && 'debug' || 'release' }}/bundle
-          if-no-files-found: warn
-          retention-days: 7

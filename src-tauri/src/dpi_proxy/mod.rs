@@ -387,9 +387,15 @@ async fn check_openanime_connection(use_proxy: bool) -> ConnectionResult {
 fn is_system_goodbye_running() -> bool {
     #[cfg(target_os = "windows")]
     {
-        let output = std::process::Command::new("tasklist")
-            .args(&["/FI", "IMAGENAME eq goodbyedpi.exe", "/NH"])
-            .output();
+        let mut cmd = std::process::Command::new("tasklist");
+        cmd.args(&["/FI", "IMAGENAME eq goodbyedpi.exe", "/NH"]);
+        // Konsol penceresi açılmasını engelle
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let output = cmd.output();
         match output {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
