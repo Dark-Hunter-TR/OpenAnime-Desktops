@@ -92,7 +92,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '--profile test-release' || '' }} --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
 
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
@@ -153,7 +153,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '--profile test-release' || '' }} --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
 
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
@@ -226,7 +226,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '--profile test-release' || '' }} --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
 
       - name: Compress x64 AppImage with UPX (only full release)
         if: github.event.inputs.build_mode == 'release'
