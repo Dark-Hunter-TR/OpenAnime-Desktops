@@ -697,11 +697,18 @@ async fn apply_theme_css(app: tauri::AppHandle, theme_id: String, css: String) -
 
 #[tauri::command]
 #[allow(unused_variables)]
-async fn webgpu_state_changed(window: tauri::WebviewWindow, active: bool, url: String) -> Result<(), String> {
+async fn webgpu_state_changed(window: tauri::WebviewWindow, active: bool, url: String, paused: Option<bool>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
+        use tauri::Emitter;
         if active {
-            native_render::inner::start_player(&url, window).await?;
+            let start_paused = paused.unwrap_or(false);
+            if let Err(e) = native_render::inner::start_player(&url, window.clone(), start_paused).await {
+                eprintln!("[WebGPU Bridge] start_player failed: {}", e);
+                // Trigger fallback to HTML5 immediately
+                let _ = window.emit("openanime://gst-fallback", e.clone());
+                return Err(e);
+            }
         } else {
             native_render::inner::stop_player();
         }

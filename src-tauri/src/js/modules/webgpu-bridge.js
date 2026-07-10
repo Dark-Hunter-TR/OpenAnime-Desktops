@@ -19,10 +19,15 @@
     if (shouldBeActive !== lastState) {
       lastState = shouldBeActive;
       console.log("[WebGPU Bridge] State change: active =", shouldBeActive, "url =", currentVideoUrl);
+      
+      const video = document.querySelector("video");
+      const isPaused = video ? video.paused : true;
+
       if (window.__TAURI__ && window.__TAURI__.core) {
         window.__TAURI__.core.invoke("webgpu_state_changed", {
           active: shouldBeActive,
-          url: currentVideoUrl
+          url: currentVideoUrl,
+          paused: isPaused
         }).catch((err) => console.error("[WebGPU Bridge] Tauri invoke failed:", err));
       }
       // Update DOM visibility immediately based on state
