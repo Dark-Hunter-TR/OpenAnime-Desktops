@@ -130,6 +130,12 @@ jobs:
           echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
           echo "PKG_CONFIG_SYSROOT_DIR=/" >> $GITHUB_ENV
 
+      - name: Install QEMU for ARM64 AppImage emulation
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get install -y qemu-user-static binfmt-support
+          sudo update-binfmts --enable qemu-aarch64
+
       # ────────────────────────────────────────────────────
       # 2. Toolchain
       # ────────────────────────────────────────────────────
@@ -195,3 +201,10 @@ jobs:
           releaseDraft: ${{ inputs.draft == 'true' }}
           prerelease: ${{ inputs.channel != 'stable' }}
           args: ${{ matrix.args }} --verbose
+
+      - name: Compress x64 AppImage with UPX
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get install -y upx-ucl
+          upx --best --lzma \
+            src-tauri/target/release/bundle/appimage/OpenAnime_*.AppImage

@@ -121,13 +121,172 @@ Bu özellik geliştirme aşamasında olduğundan, arayüz ve işlevsellik detayl
 
 ---
 
+## 📥 Kurulum
+
+### 🪟 Windows
+
+```
+Windows 10/11 — x86_64
+```
+
+| Yöntem | Boyut | Açıklama |
+|--------|-------|----------|
+| **[NSIS Kurulum](https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest)** | ~10 MB | GitHub Releases sayfasından `.exe` indir, çift tıkla kur |
+| **winget** *(yakında)* | — | `winget install OpenAnime` (Windows Paket Yöneticisi) |
+
+> ⚠️ Windows Defender SmartScreen uyarısı alırsanız "Yine de çalıştır" deyin. Uygulama henüz kod imzalı değil.
+
+---
+
+### 🍎 macOS
+
+```
+macOS 12+ — Apple Silicon (M1/M2/M3/M4) ve Intel x86_64
+```
+
+| Yöntem | Boyut | Açıklama |
+|--------|-------|----------|
+| **[DMG Kurulum](https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest)** | ~15 MB | GitHub Releases sayfasından `.dmg` indir, uygulamayı `Applications` klasörüne sürükle |
+| **[Homebrew](https://brew.sh)** *(yakında)* | — | `brew install openanime-desktop` |
+
+> Apple Silicon (M serisi) ve Intel Mac'lerde aynı DMG içinde evrensel binary çalışır.
+
+---
+
+### 🐧 Linux
+
+```
+Ubuntu 24.04+ / Debian 12+ / Fedora 40+ / Arch Linux — x86_64 ve ARM64 (aarch64)
+```
+
+Aşağıda her paket formatı için boyut karşılaştırması ve kurulum adımları yer alıyor. Temel fark: **AppImage** her şeyi içinde taşır (büyük boyut), **.deb/.rpm/AUR** bağımlılıkları sistemle paylaşır (küçük boyut), **Flatpak** runtime paylaşır (orta boyut + sandbox).
+
+| Format | İndirme Boyutu | Diskte Kapladığı | Bağımlılıklar |
+|--------|----------------|-------------------|---------------|
+| **AppImage** | ~80–200 MB | ~200 MB | Hepsi içinde (kendi kendine yeter) |
+| **.deb / .rpm** | ~15 MB | ~90 MB | Sistem paket yöneticisinden |
+| **AUR (kaynaktan)** | ~1 MB (PKGBUILD) | ~200 MB + derleme | Derleme anında çözülür |
+| **AUR (binary)** | ~15 MB | ~90 MB | Sistem paket yöneticisinden |
+| **Flatpak** | ~60 MB | ~250 MB (runtime paylaşılır) | Flatpak runtime ile |
+
+---
+
+#### 🏃 AppImage (Taşınabilir — Hiçbir Şey Kurmadan Çalıştır)
+
+Hiçbir bağımlılık gerekmez. İndir, çalıştır:
+
+```bash
+# 1. İndir
+wget https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/OpenAnime_*.AppImage
+
+# 2. Çalıştırma izni ver
+chmod +x OpenAnime_*.AppImage
+
+# 3. Çalıştır
+./OpenAnime_*.AppImage
+```
+
+| Mimariler | Mevcut mu? |
+|-----------|------------|
+| `x86_64` | ✅ Evet |
+| `aarch64` (ARM64) | ✅ Evet |
+
+> **Not:** AppImage, tüm bağımlılıkları içinde barındırdığı için dosya boyutu büyüktür (~80–200 MB). Ancak hiçbir sistem değişikliği gerektirmez — USB'den bile çalıştırabilirsiniz.
+
+---
+
+#### 📦 Debian / Ubuntu (.deb)
+
+```bash
+wget https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/openanime_*.deb
+sudo dpkg -i openanime_*.deb
+sudo apt-get install -f   # eksik bağımlılıkları tamamlar
+```
+
+Bağımlılıklar: `libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libappindicator3-1`, `gstreamer1.0-*`
+
+| Mimariler | Mevcut mu? |
+|-----------|------------|
+| `amd64` (x86_64) | ✅ Evet |
+| `arm64` | ✅ Evet |
+
+---
+
+#### 💿 Fedora / RHEL (.rpm)
+
+```bash
+sudo dnf install https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/openanime_*.rpm
+```
+
+| Mimariler | Mevcut mu? |
+|-----------|------------|
+| `x86_64` | ✅ Evet |
+| `aarch64` | ✅ Evet |
+
+---
+
+#### 🗿 Arch Linux (AUR)
+
+Kendi AUR paketimiz üzerinden kaynaktan derleme:
+
+```bash
+# yay ile:
+yay -S openanime-desktops
+
+# paru ile:
+paru -S openanime-desktops
+```
+
+| Mimariler | Mevcut mu? |
+|-----------|------------|
+| `x86_64` | ✅ Evet |
+| `aarch64` | 🔜 Planlanıyor |
+
+> AUR, kaynaktan derlediği için yeni sürümler GitHub release ile aynı anda güncellenir. `PKGBUILD` dosyamız: [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD)
+
+---
+
+#### 🧊 Flatpak (Kendi Repomuzdan)
+
+Flatpak, GNOME Runtime ile sandbox ortamında çalışır. Tüm bağımlılıklar Flatpak runtime ile paylaşıldığı için indirme boyutu düşüktür.
+
+Kendi Flatpak repomuzu ekleyip kurulum:
+
+```bash
+# 1. Flatpak repomuzu ekle
+flatpak remote-add --if-not-exists openanime \
+  https://flatpak.darkhunter.dev/openanime.flatpakrepo
+
+# 2. Kur
+flatpak install openanime com.darkhunter.openanime-desktops
+
+# 3. Çalıştır
+flatpak run com.darkhunter.openanime-desktops
+```
+
+> Flatpak repo'muz, her release sonrası CI tarafından otomatik güncellenir. Flathub'a göndermiyoruz — kendi sunucumuzdan dağıtıyoruz.
+
+---
+
+#### 💡 Linux İçin Hızlı Seçim
+
+| İhtiyacınız | Şunu Kullanın |
+|-------------|---------------|
+| "Hiçbir şey kurmak istemiyorum, çalıştırayım" | **AppImage** (tüm dağıtımlarda çalışır) |
+| Sistem paket yöneticimle yönetmek istiyorum | **`.deb`** (Debian/Ubuntu), **`.rpm`** (Fedora) |
+| Arch Linux kullanıyorum, AUR'dan yönetmek istiyorum | **AUR** (`yay -S openanime-desktops`) |
+| Sandbox güvenliği istiyorum, otomatik güncelleme olsun | **Flatpak** (kendi repomuz) |
+| ARM64 (Raspberry Pi, Apple Silicon VM) | **AppImage** (aarch64) veya **`.deb`** (arm64) |
+
+---
+
 ## 🖥️ Platform Desteği
 
-| Platform | Durum | Notlar |
-| --- | --- | --- |
-| 🪟 **Windows** | ✅ Tam destek | `.exe` / `.msi` çıktıları, GitHub Actions ile otomatik derlenir |
-| 🍎 **macOS** | ✅ Tam destek | `.dmg` / `.app` çıktıları, Apple Silicon dahil |
-| 🐧 **Linux** | 🧪 Aktif geliştirme | Aşağıdaki "Linux Desteği" bölümüne bakınız |
+| Platform | Durum | Paketler | Notlar |
+| --- | --- | --- | --- |
+| 🪟 **Windows** | ✅ Tam destek | `.exe` (NSIS) | GitHub Actions ile otomatik derlenir |
+| 🍎 **macOS** | ✅ Tam destek | `.dmg` | Apple Silicon + Intel, evrensel binary |
+| 🐧 **Linux** | 🧪 Aktif geliştirme | `AppImage`, `.deb`, `.rpm`, AUR, Flatpak *(yakında)* | Aşağıdaki "Linux Desteği" bölümüne bakınız |
 
 ### 🐧 Linux Desteği (Deneysel)
 
@@ -136,7 +295,7 @@ Linux desteği, Tauri'nin bu platformda **webkit2gtk** kullanmasından kaynaklan
 - **WebGPU kısıtı:** webkit2gtk henüz production-ready bir WebGPU implementasyonu sunmadığından, Windows/macOS'taki WebGPU hızlandırmalı render yolu Linux'ta doğrudan kullanılamıyor.
 - **Yayın stratejisi:** Bu nedenle Linux sürümünde video akışı webview içinde HLS.js/dash.js ile karşılanıyor; yerel dosya oynatma (local file playback) şimdilik Linux'ta devre dışı bırakıldı.
 - **Yol haritası:** Uzun vadede webview'dan bağımsız, **wgpu (Vulkan) + GStreamer** tabanlı native bir render/oynatma hattı planlanıyor.
-- **Paketleme hedefleri:** AppImage, AUR (PKGBUILD) ve `.deb` paketleri desteklenmesi hedefleniyor.
+- **Paketleme:** `AppImage`, `.deb`, `.rpm`, **AUR (PKGBUILD)** ve kendi repomuzdan **Flatpak** ile dağıtım yapılmaktadır.
 
 > Linux tarafında katkı/test isteyenler için Issues sekmesi açıktır; webkit2gtk kaynaklı davranış farkları (ör. splash ekranı, tam ekran yönetimi) bilinen konular arasındadır.
 
@@ -190,9 +349,9 @@ bun run tauri build    # veya: npm run tauri build
 
 | Platform | Gereksinim | Çıktı |
 | --- | --- | --- |
-| Windows | — | `.exe` / `.msi` |
-| macOS | Xcode Command Line Tools yüklü bir Mac | `.dmg` / `.app` |
-| Linux | `webkit2gtk` + build araçları | `AppImage` / `.deb` *(deneysel)* |
+| Windows | — | `.exe` (NSIS) |
+| macOS | Xcode Command Line Tools yüklü bir Mac | `.dmg` |
+| Linux (x86_64, aarch64) | `webkit2gtk` + build araçları | `AppImage`, `.deb`, `.rpm` |
 
 ---
 
@@ -213,7 +372,8 @@ Derleme tamamlandığında kurulum dosyaları, deponun **Releases** sekmesinde o
 
 - [ ] **Tema Sistemi:** GitHub reposu tabanlı, topluluk temalarının keşfedilip yüklenebildiği bir Tema Sayfası (yıldız/aylık en çok indirilen/en çok sevilen sıralamalarıyla)
 - [ ] Linux için native `wgpu` (Vulkan) + GStreamer render/oynatma hattı
-- [ ] AUR (PKGBUILD) ve `.deb` resmî paket dağıtımı
+- [x] AUR (PKGBUILD) ve `.deb`/`.rpm` resmî paket dağıtımı
+- [ ] Kendi Flatpak repo'muzun CI entegrasyonu
 - [ ] iGPU/dGPU otomatik anahtarlamanın Linux karşılığı
 - [ ] Genel kararlılık ve hata düzeltmeleri (özellik eklemelerinden önceliklendirilir)
 
