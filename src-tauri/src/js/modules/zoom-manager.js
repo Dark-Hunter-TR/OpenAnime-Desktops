@@ -46,13 +46,11 @@
           if (currentZoom !== parsedZoom) {
             try { localStorage.setItem("tauri-zoom-level", currentZoom.toString()); } catch(e) {}
           }
-          if (!savedScreenW) {
-            try {
-              localStorage.setItem("tauri-zoom-screen-w", curScreenW.toString());
-              localStorage.setItem("tauri-zoom-screen-h", curScreenH.toString());
-              localStorage.setItem("tauri-zoom-dpr", curDPR.toString());
-            } catch (e) {}
-          }
+          // ← BURADA EKSİK: okunan zoom uygulanmıyor!
+          // applyZoom bu çağrılınca WebView zoom'u güncellenir
+          // ama dosyanın altında async çağrı var — o da ekran çözünürlüğü değişince tetikleniyor.
+          // Kesin çözüm: burada hemen uygula
+          applyZoom(currentZoom);
         }
       }
     } else {
@@ -111,79 +109,55 @@
     } catch (e) {}
   }
 
-  function applyZoom(zoom, triggerIndicator = false) {
-
-    if (
-      window.__TAURI__ &&
-      window.__TAURI__.webview &&
-      typeof window.__TAURI__.webview.getCurrentWebview === "function"
-    ) {
-      const webview = window.__TAURI__.webview.getCurrentWebview();
-      if (webview && typeof webview.setZoom === "function") {
-        webview.setZoom(zoom)
-          .then(() => {
-            if (triggerIndicator) {
-              setTimeout(() => { showZoomIndicator(zoom); }, 30);
-            }
-          })
-          .catch((err) => {
-            console.error(err);
-            if (triggerIndicator) showZoomIndicator(zoom);
-          });
-      } else if (triggerIndicator) {
-        showZoomIndicator(zoom);
-      }
-    } else if (triggerIndicator) {
-      showZoomIndicator(zoom);
-    }
-
-    if (document.body) {
-      document.body.style.removeProperty("transform");
-      document.body.style.removeProperty("transform-origin");
-      document.body.style.removeProperty("width");
-      document.body.style.removeProperty("height");
-      document.body.style.removeProperty("position");
-      document.body.style.removeProperty("left");
-      document.body.style.removeProperty("top");
-      document.body.style.removeProperty("margin");
-      document.body.style.removeProperty("zoom");
-      document.body.style.removeProperty("min-width");
-      document.body.style.removeProperty("min-height");
-    }
-
-    const controls = document.getElementById("tauri-controls-container");
+  // requestAnimationFrame ile zoom uygula — gereksiz body stillerini temizleme yok
+  function applyZoom(zoom, triggerIndicator) {
+    // Kontrolleri göster/gizle (sadece fullscreen geçişlerinde)
+    var controls = document.getElementById("tauri-controls-container");
     if (controls) {
-      const isFullscreen = !!(
-        document.fullscreenElement || document.webkitFullscreenElement
-      );
-      if (isFullscreen) {
-        controls.style.setProperty("display", "none", "important");
+      var isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      if (isFs) {
+        if (controls.style.display !== "none") controls.style.display = "none";
       } else {
-        controls.style.removeProperty("display");
+        if (controls.style.display === "none") controls.style.removeProperty("display");
       }
     }
-    return true;
+
+    // Tauri native zoom'u ayarla
+    if (window.__TAURI__ && window.__TAURI__.webview) {
+      var wv = window.__TAURI__.webview.getCurrentWebview();
+      if (wv && typeof wv.setZoom === "function") {
+        if (triggerIndicator) {
+          wv.setZoom(zoom).then(function() {
+            requestAnimationFrame(function() { showZoomIndicator(zoom); });
+          }).catch(function() {
+            showZoomIndicator(zoom);
+          });
+        } else {
+          wv.setZoom(zoom).catch(function() {});
+        }
+        return;
+      }
+    }
+    if (triggerIndicator) showZoomIndicator(zoom);
   }
 
   function handleZoomChange(newZoom) {
-    const indicator = document.getElementById("tauri-zoom-indicator");
-    if (indicator) {
-      indicator.classList.remove("visible");
-    }
+    var ind = document.getElementById("tauri-zoom-indicator");
+    if (ind) ind.classList.remove("visible");
 
     applyZoom(newZoom, true);
 
+    // Sadece gerekliyse—setupTauriWindow/debugRegion'ı throttle
     setupTauriWindow();
     setupDragRegion();
 
-    try {
-      localStorage.setItem("tauri-zoom-level", newZoom.toString());
-      localStorage.setItem("tauri-zoom-screen-w", window.screen.width.toString());
-      localStorage.setItem("tauri-zoom-screen-h", window.screen.height.toString());
-      localStorage.setItem("tauri-zoom-dpr", (window.devicePixelRatio || 1).toString());
-    } catch (err) {}
+    // localStorage'a kaydet (Tracking Prevention kapalı olsa da try/catch güvenli)
+    try { localStorage.setItem("tauri-zoom-level", newZoom.toString()); } catch(e) {}
+    try { localStorage.setItem("tauri-zoom-screen-w", window.screen.width.toString()); } catch(e) {}
+    try { localStorage.setItem("tauri-zoom-screen-h", window.screen.height.toString()); } catch(e) {}
+    try { localStorage.setItem("tauri-zoom-dpr", (window.devicePixelRatio || 1).toString()); } catch(e) {}
 
-    // Zoom seviyesini Rust backend'e bildir (yeni pencereler için)
+    // Rust backend'e bildir (yeni pencereler)
     if (window.__TAURI__ && window.__TAURI__.core) {
       window.__TAURI__.core.invoke("set_zoom_level", { level: newZoom }).catch(function() {});
     }

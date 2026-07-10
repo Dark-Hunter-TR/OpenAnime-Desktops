@@ -125,38 +125,68 @@ mod gpu_switch_macos {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMMON_INIT_SCRIPT — Tüm webview'lara enjekte edilen JavaScript
+// Sıralama: polyfill → network → webgpu → ui → discord → updater → video → tema
+// Her blok yorumla ayrılmıştır.
+// ═══════════════════════════════════════════════════════════════════════════════
 const COMMON_INIT_SCRIPT: &str = concat!(
     "(function () {\nif (window.self !== window.top) {\n  let isBuilder = false;\n  try {\n    isBuilder = window.location.search.includes(\"theme_builder=true\") || sessionStorage.getItem(\"theme_builder_active\") === \"true\";\n  } catch (e) {}\n  if (!isBuilder) return;\n}\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 1: POLYFILL'LER & TAURI BRIDGE
+    // ──────────────────────────────────────────────
     include_str!("js/modules/linux-polyfills.js"),
     "\n",
     include_str!("js/modules/tauri-bridge.js"),
     "\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 2: AĞ ÖNBELLEK & GÖRSEL ÖNBELLEK (fetch override & image proxy cache)
+    // ──────────────────────────────────────────────
     "{\nconst NETWORK_CACHE_CSS = String.raw`",
     include_str!("js/modules/network-cache.css"),
     "`;\n",
     include_str!("js/modules/network-cache.js"),
     "}\n",
+    "{\n",
+    include_str!("js/modules/image-cache.js"),
+    "\n}\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 3: WEBGPU (SADECE LİNUX)
+    // ──────────────────────────────────────────────
     include_str!("js/modules/webgpu-patcher.js"),
     "\n",
     include_str!("js/modules/webgpu-bridge.js"),
     "\n",
 
+    // ──────────────────────────────────────────────
+    // BLOK 4: PENCERE & ARAYÜZ KONTROLLERİ
+    // ──────────────────────────────────────────────
     "{\nconst ZOOM_MANAGER_CSS = String.raw`",
     include_str!("js/modules/zoom-manager.css"),
     "`;\n",
     include_str!("js/modules/zoom-manager.js"),
     "}\n",
+
     "{\nconst WINDOW_CONTROLS_CSS = String.raw`",
     include_str!("js/modules/window-controls.css"),
     "`;\n",
     include_str!("js/modules/window-controls.js"),
     "}\n",
+
     include_str!("js/modules/keyboard-shortcuts.js"),
     "\n",
     include_str!("js/modules/link-interceptor.js"),
     "\n",
     include_str!("js/modules/fullscreen-manager.js"),
     "\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 5: DISCORD RICH PRESENCE
+    // Kendi IIFE bloğu içinde, updater yok.
+    // ──────────────────────────────────────────────
     "{\n",
     include_str!("js/modules/discord/state.js"),
     "\n",
@@ -166,14 +196,28 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n",
     include_str!("js/modules/discord/settings-ui.js"),
     "\n",
-    include_str!("js/modules/updater-ui.js"),
-    "\n",
     include_str!("js/modules/discord/discord-rpc.js"),
     "\n}\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 6: GÜNCELLEME ARAYÜZÜ (Discord'dan ayrı)
+    // Kendi IIFE bloğu — localStorage + DOM yönetimi
+    // ──────────────────────────────────────────────
+    "{\n",
+    include_str!("js/modules/updater-ui.js"),
+    "\n}\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 7: SAYFA KURTARMA & VİDEO İYİLEŞTİRİCİ
+    // ──────────────────────────────────────────────
     include_str!("js/modules/page-recovery.js"),
     "\n",
     include_str!("js/modules/video-optimizer.js"),
     "\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 8: TEMA SİSTEMİ
+    // ──────────────────────────────────────────────
     "{\n",
     "const THEME_UI_CSS = String.raw`",
     include_str!("js/modules/theme/theme-styles.css"),
@@ -191,6 +235,33 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n",
     include_str!("js/modules/theme/theme-observer.js"),
     "\n}\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 9: TITLE BAR DÜZELTMESİ (sheet/modal)
+    // Sadece .sheet-content'i hedefler, siteyi bozmaz.
+    // ──────────────────────────────────────────────
+    "(function(){\n",
+    "try{\n",
+    "var s=document.createElement('style');\n",
+    "s.id='oa-titlebar-fix';\n",
+    "s.textContent='",
+    // Panel 48px aşağı itilir (title bar'ın altına)
+    ".sheet-content{margin-top:48px!important;}",
+    // Scroll alanının max-height'i de 48px arttırılır (panelle birlikte aşağı indiği için
+    // alttaki 48px ekran dışı kalırdı, bu düzeltme ile alt seçeneklere de ulaşılır)
+    ".sheet-content [data-overlayscrollbars],",
+    ".sheet-content [data-overlayscrollbars-viewport]",
+    "{max-height:calc(-32px + 100vh)!important;}",
+    ".sheet-overlay{top:0!important;height:100vh!important;}",
+    "';\n",
+    "if(document.head)document.head.appendChild(s);\n",
+    "else document.addEventListener('DOMContentLoaded',function(){if(document.head)document.head.appendChild(s);},{once:true});\n",
+    "}catch(e){}\n",
+    "})();\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 10: BAŞLATMA (EN SON ÇALIŞIR)
+    // ──────────────────────────────────────────────
     include_str!("js/init.js"),
     "\n})();"
 );
