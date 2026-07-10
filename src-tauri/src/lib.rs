@@ -878,6 +878,30 @@ pub fn run() {
 
     #[cfg(target_os = "linux")]
     {
+        if std::env::var("APPIMAGE").is_ok() {
+            // Force GStreamer to only look at bundled plugins
+            if let Ok(appdir) = std::env::var("APPDIR") {
+                let plugin_dir = std::path::PathBuf::from(appdir).join("usr/lib/gstreamer-1.0");
+                std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &plugin_dir);
+                std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &plugin_dir);
+                std::env::set_var("GST_PLUGIN_PATH", &plugin_dir);
+                std::env::set_var("GST_PLUGIN_PATH_1_0", &plugin_dir);
+            }
+
+            // Set custom registry path for AppImage to avoid reading/writing host cache
+            if let Ok(user_cache) = std::env::var("XDG_CACHE_HOME") {
+                let cache_dir = std::path::PathBuf::from(user_cache).join("openanime");
+                let _ = std::fs::create_dir_all(&cache_dir);
+                std::env::set_var("GST_REGISTRY", cache_dir.join("gst-registry.bin"));
+            } else if let Ok(home) = std::env::var("HOME") {
+                let cache_dir = std::path::PathBuf::from(home).join(".cache").join("openanime");
+                let _ = std::fs::create_dir_all(&cache_dir);
+                std::env::set_var("GST_REGISTRY", cache_dir.join("gst-registry.bin"));
+            } else {
+                std::env::set_var("GST_REGISTRY", "/tmp/gst-registry-openanime.bin");
+            }
+        }
+
         let gpu_report = gpu_detector::detect_gpu();
         if !gpu_report.vulkan_supported {
             println!("[Tauri GPU] Vulkan is not supported. Disabling WebKit compositing mode.");
