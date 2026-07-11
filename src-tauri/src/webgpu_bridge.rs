@@ -18,6 +18,29 @@ pub mod inner {
         NEXT_ID.fetch_add(1, Ordering::Relaxed)
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // Adapter detection cache
+    // ─────────────────────────────────────────────────────────────────
+    // Adapter enumeration + software-fallback probing + GPU/distro/pkg-manager
+    // detection is expensive (spawns processes, scans the filesystem, and can
+    // create additional wgpu Instances). The site calls navigator.gpu.requestAdapter()
+    // on every hover-preview canvas, so without caching this entire chain re-runs
+    // on every single hover, causing severe UI stutter. We cache the outcome:
+    // successes are cached for the lifetime of the app session; failures are
+    // cached with a 60s TTL so a background retry can silently pick up a driver
+    // fix (e.g. the user manually installed a package) without any user action.
+    struct AdapterCacheEntry {
+        result: Result<AdapterInfo, String>,
+        computed_at: std::time::Instant,
+    }
+
+    const ADAPTER_FAILURE_RETRY_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+    static ADAPTER_CACHE: OnceLock<Mutex<Option<AdapterCacheEntry>>> = OnceLock::new();
+    fn adapter_cache() -> &'static Mutex<Option<AdapterCacheEntry>> {
+        ADAPTER_CACHE.get_or_init(|| Mutex::new(None))
+    }
+
     #[derive(Default)]
     struct Registries {
         buffers: HashMap<u64, wgpu::Buffer>,
@@ -106,7 +129,7 @@ pub mod inner {
     // Adapter / Device
     // ─────────────────────────────────────────────────────────────────
 
-    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
     pub struct AdapterInfo {
         pub id: u64,
         pub name: String,
@@ -129,6 +152,45 @@ pub mod inner {
 
     #[tauri::command]
     pub async fn gpu_request_adapter(app: tauri::AppHandle) -> Result<AdapterInfo, String> {
+        // ─── Cache check ───────────────────────────────────────────
+        // Successes are cached for the whole session (the adapter itself is
+        // already stored in BridgeState, so re-detecting would be redundant).
+        // Failures are cached with a short TTL so we don't hammer the system
+        // on every hover, but still recover automatically if drivers get
+        // installed later in the same session.
+        {
+            let cache = adapter_cache().lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(entry) = cache.as_ref() {
+                match &entry.result {
+                    Ok(info) => {
+                        return Ok(info.clone());
+                    }
+                    Err(err_json) => {
+                        if entry.computed_at.elapsed() < ADAPTER_FAILURE_RETRY_TTL {
+                            return Err(err_json.clone());
+                        }
+                        println!("[WebGPU Bridge] Adapter failure cache TTL expired, retrying detection in background...");
+                        // TTL expired: fall through and recompute below.
+                    }
+                }
+            }
+        }
+
+        let result = gpu_request_adapter_uncached(app).await;
+
+        {
+            let mut cache = adapter_cache().lock().unwrap_or_else(|p| p.into_inner());
+            *cache = Some(AdapterCacheEntry {
+                result: result.clone(),
+                computed_at: std::time::Instant::now(),
+            });
+        }
+
+        result
+    }
+
+    // The original (expensive) detection logic, now only invoked on a cache miss.
+    async fn gpu_request_adapter_uncached(app: tauri::AppHandle) -> Result<AdapterInfo, String> {
         let mut all_adapters = {
             let state = lock();
             state.instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::GL)
@@ -200,7 +262,12 @@ pub mod inner {
         let adapter = match chosen {
             Some(a) => a,
             None => {
-                let vendor = crate::gpu_detector::detect_gpu().vendor;
+                // NOTE: intentionally using the cheap vendor-only lookup here, not
+                // detect_gpu() — that function creates a *third* wgpu Vulkan
+                // instance and blocks synchronously on an adapter request, which
+                // is redundant (we already know adapter acquisition failed above)
+                // and was a major contributor to hover-triggered UI stutter.
+                let vendor = crate::gpu_detector::detect_vendor_only();
                 let missing_vulkan_packages = crate::gpu_detector::check_missing_icds(&vendor);
                 let pkg_manager = crate::gpu_detector::detect_pkg_manager();
                 let has_pkexec = crate::gpu_detector::has_pkexec();
