@@ -173,29 +173,71 @@ async function updatePresenceFromDOM() {
 
   const href = window.location.href;
   const title = document.title;
-  const videoElement = document.querySelector("video");
-  const hasVideo = !!videoElement;
-  const isVideoPaused = videoElement ? videoElement.paused : false;
-  const currentVideoTime = videoElement ? videoElement.currentTime : 0.0;
 
-  if (videoElement) {
+  // ── Video tespiti: HTML5 <video> + Canvas tabanlı player ──
+  const videoElement = document.querySelector("video");
+  const canvasPlayer = document.querySelector(".openanime-vanilla-player");
+  const videoCanvas = document.querySelector(".video-canvas");
+  const fullscreenPlayer = document.querySelector(".fullscreen-player-container");
+  const hasHtml5Video = !!videoElement;
+  const hasCanvasPlayer = !!(canvasPlayer || videoCanvas || fullscreenPlayer);
+  const hasVideo = hasHtml5Video || hasCanvasPlayer;
+
+  // Canvas player'da süre tespiti
+  let isVideoPaused = false;
+  let currentVideoTime = 0.0;
+
+  if (hasHtml5Video) {
+    isVideoPaused = videoElement.paused;
+    currentVideoTime = videoElement.currentTime;
+  } else if (hasCanvasPlayer) {
+    // Süre: slider'dan oku
+    const slider = document.querySelector('.slider.orientation-horizontal');
+    if (slider) {
+      const maxVal = parseFloat(slider.getAttribute('aria-valuemax') || '0');
+      const nowVal = parseFloat(slider.getAttribute('aria-valuenow') || '0');
+      if (maxVal > 0) {
+        currentVideoTime = nowVal;
+      }
+    }
+
+    // Canvas player pause/play: slider değeri stabilitesi
+    // Slider 2 periyot (~10sn) aynı kalırsa → paused
+    if (currentVideoTime === lastCanvasSliderValue) {
+      canvasSliderStableCount++;
+    } else {
+      canvasSliderStableCount = 0;
+    }
+    lastCanvasSliderValue = currentVideoTime;
+    isVideoPaused = canvasSliderStableCount >= 2;
+  }
+
+  if (hasHtml5Video) {
     attachVideoListeners(videoElement);
   }
 
-  const timeDiff = Math.abs(currentVideoTime - lastSentVideoTime);
-  const hasSeeked = hasVideo && !isVideoPaused && timeDiff > 3;
-
-  if (
-    !forceUpdate &&
-    href === lastHref && 
-    title === lastTitle && 
-    hasVideo === lastVideoPresence && 
-    isVideoPaused === lastVideoPaused &&
-    !hasSeeked
-  ) {
-    return;
+  // Güncelleme kararı:
+  // forceUpdate=true → özel olay (play/pause/seek/sayfa değişimi) → her durumda güncelle
+  // Periyodik (setInterval 5sn) → sadece oynuyorken timer senkronizasyonu
+  // Pause'da periyodik → timer yok, güncelleme gerekmez (state metni aynı kalır)
+  let shouldUpdate = forceUpdate;
+  if (!shouldUpdate) {
+    const hrefChanged = href !== lastHref;
+    const titleChanged = title !== lastTitle;
+    const videoPresenceChanged = hasVideo !== lastVideoPresence;
+    const pausedChanged = isVideoPaused !== lastVideoPaused;
+    
+    if (hrefChanged || titleChanged || videoPresenceChanged || pausedChanged) {
+      shouldUpdate = true;
+    } else if (hasVideo && !isVideoPaused) {
+      const timeDiff = Math.abs(currentVideoTime - lastSentVideoTime);
+      if (timeDiff > 0.5) {
+        shouldUpdate = true; // oynuyor, timer senkronizasyonu
+      }
+    }
   }
   forceUpdate = false;
+  if (!shouldUpdate) return;
 
   let page = "home";
   let metadata = null;
@@ -229,24 +271,62 @@ async function updatePresenceFromDOM() {
         animeSlug = slugMatch[1];
       }
 
-      let cleanTitle = title.split("|")[0].split("•")[0].trim();
-      cleanTitle = cleanTitle
-        .replace(/\s*İnceliyor\s*$/, "")
-        .replace(/\s*İzliyor\s*$/, "")
-        .trim();
-      const parts = cleanTitle.split("-").map(p => p.trim());
+      // ── Anime adı: önce DOM'dan dene (canvas player / dialog için) ──
+      let domAnimeName = null;
+      let domEpisodeNo = null;
 
-      if (parts.length > 0 && parts[0]) {
-        const parsedName = cleanAnimeName(parts[0]);
-        const lowerName = parsedName.toLowerCase();
-        if (lowerName !== "openanime" && lowerName !== "yükleniyor..." && lowerName !== "yükleniyor" && lowerName !== "loading") {
-          animeName = parsedName;
-        } else if (animeSlug) {
-          animeName = animeSlug
-            .split("-")
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(" ");
+      // Dialog içindeki anime metadata'sı
+      const animeMetaH3 = document.querySelector('.anime-metadata h3');
+      if (animeMetaH3) {
+        domAnimeName = animeMetaH3.textContent.trim();
+      }
+
+      // Dialog içindeki bölüm bilgisi
+      const episodeItemH5 = document.querySelector('.episode-item .left h5');
+      if (episodeItemH5) {
+        const epText = episodeItemH5.textContent.trim();
+        // "Sezon 1 - Bölüm 13" → "13"
+        const epMatch = epText.match(/Bölüm\s*(\d+)/i);
+        if (epMatch) {
+          domEpisodeNo = epMatch[1];
         }
+      }
+
+      // Player header'daki anime adı (canvas player)
+      if (!domAnimeName) {
+        const playerInfoH3 = document.querySelector('.header-transition .info .text-info h3');
+        if (playerInfoH3) {
+          domAnimeName = playerInfoH3.textContent.trim();
+        }
+      }
+
+      // DOM'dan bulunanları kullan
+      if (domAnimeName) {
+        animeName = domAnimeName;
+      } else {
+        let cleanTitle = title.split("|")[0].split("•")[0].trim();
+        cleanTitle = cleanTitle
+          .replace(/\s*İnceliyor\s*$/, "")
+          .replace(/\s*İzliyor\s*$/, "")
+          .trim();
+        const parts = cleanTitle.split("-").map(p => p.trim());
+
+        if (parts.length > 0 && parts[0]) {
+          const parsedName = cleanAnimeName(parts[0]);
+          const lowerName = parsedName.toLowerCase();
+          if (lowerName !== "openanime" && lowerName !== "yükleniyor..." && lowerName !== "yükleniyor" && lowerName !== "loading") {
+            animeName = parsedName;
+          } else if (animeSlug) {
+            animeName = animeSlug
+              .split("-")
+              .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+              .join(" ");
+          }
+        }
+      }
+
+      if (domEpisodeNo) {
+        episodeNo = domEpisodeNo;
       }
 
       const isWatchPage = hasVideo || (path.match(/\/anime\/([^\/]+)\/(\d+)\/(\d+)/i) !== null);
@@ -377,6 +457,10 @@ if (document.body) {
   }, { once: true });
 }
 
+// Periyodik kontrol: 5 saniyede bir
+// Oynuyorken timer senkronizasyonu için günceller
+// Pause'da sadece state metni güncellenir (forceUpdate olmadan timer gönderilmez)
+// Özel olaylar (play/pause/seek/sayfa değişimi) forceUpdate ile ayrıca tetiklenir
 setInterval(() => {
   updatePresenceFromDOM();
-}, 2000);
+}, 5000);

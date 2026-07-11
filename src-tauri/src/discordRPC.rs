@@ -114,7 +114,6 @@ impl DiscordState {
             let mut dashboard_msg_index = 0;
             let mut last_dashboard_update = Instant::now();
             let mut was_clear = true;
-            let mut last_sent_start_timestamp: Option<i64> = None;
 
             loop {
                 let signal = rx.recv_timeout(Duration::from_secs(1));
@@ -173,7 +172,6 @@ impl DiscordState {
                         was_clear = true;
                         current_page = None;
                         current_metadata = None;
-                        last_sent_start_timestamp = None;
                     }
                     continue;
                 }
@@ -213,19 +211,13 @@ impl DiscordState {
                         should_update = true;
                     }
 
-                    if page == AppPage::Watch && new_m.paused == Some(false) {
-                        if let (Some(_), Some(new_t)) = (curr_m.current_time, new_m.current_time) {
-                            let epoch_now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs() as i64;
-                            let new_start = epoch_now - (new_t as i64);
-                            
-                            if let Some(last_start) = last_sent_start_timestamp {
-                                if (new_start - last_start).abs() > 3 {
-                                    should_update = true;
-                                }
-                            } else {
+                    // current_time drift kontrolü: oynatma sırasında süre değiştiyse güncelle
+                    if page == AppPage::Watch {
+                        if let (Some(old_ct), Some(new_ct)) = (curr_m.current_time, new_m.current_time) {
+                            let time_diff = (new_ct - old_ct).abs();
+                            // 0.5s'den fazla drift varsa güncelle (periyodik senkronizasyon)
+                            // 3s'den fazla varsa zaten seek olarak değerlendir
+                            if time_diff > 0.5 {
                                 should_update = true;
                             }
                         }
@@ -326,20 +318,21 @@ impl DiscordState {
                                     AppPage::Dashboard => unreachable!(),
                                 };
 
+                                let is_paused = metadata.as_ref()
+                                    .and_then(|m| m.paused)
+                                    .unwrap_or(false);
+
                                 state_str = match &page {
                                     AppPage::Home => "Geziniyor".to_string(),
                                     AppPage::Details => "İnceliyor".to_string(),
                                     AppPage::Watch => {
-                                        let is_paused = metadata.as_ref()
-                                            .and_then(|m| m.paused)
-                                            .unwrap_or(false);
                                         if is_paused {
                                             let current_time_secs = metadata.as_ref()
                                                 .and_then(|m| m.current_time)
                                                 .unwrap_or(0.0) as i64;
                                             let minutes = current_time_secs / 60;
                                             let seconds = current_time_secs % 60;
-                                            format!("Animeyi Duraklattı ({:02}:{:02})", minutes, seconds)
+                                            format!("Duraklattı • {:02}:{:02}", minutes, seconds)
                                         } else {
                                             "İzliyor".to_string()
                                         }
@@ -356,9 +349,6 @@ impl DiscordState {
                                     .details(&details_str)
                                     .state(&state_str);
 
-                                let is_paused = metadata.as_ref()
-                                    .and_then(|m| m.paused)
-                                    .unwrap_or(false);
 
                                 let mut assets = activity::Assets::new();
                                 let mut has_assets = false;
@@ -411,22 +401,21 @@ impl DiscordState {
                                     .as_secs() as i64;
                                 
                                 if page == AppPage::Watch && !is_paused {
+                                    // Oynuyor → elapsed timer göster
                                     let current_time_secs = metadata.as_ref()
                                         .and_then(|m| m.current_time)
                                         .unwrap_or(0.0) as i64;
                                     let start_timestamp = epoch_now - current_time_secs;
                                     let ts = activity::Timestamps::new().start(start_timestamp);
-                                    activity = activity.timestamps(ts.clone());
-                                    timestamps = Some(ts);
-                                    last_sent_start_timestamp = Some(start_timestamp);
+                                    timestamps = Some(ts.clone());
+                                    activity = activity.timestamps(ts);
                                 } else if page != AppPage::Watch {
+                                    // İzleme sayfası değil → normal timestamp
                                     let ts = activity::Timestamps::new().start(epoch_now);
-                                    activity = activity.timestamps(ts.clone());
-                                    timestamps = Some(ts);
-                                    last_sent_start_timestamp = None;
-                                } else {
-                                    last_sent_start_timestamp = None;
+                                    timestamps = Some(ts.clone());
+                                    activity = activity.timestamps(ts);
                                 }
+                                // Paused Watch → timestamp YOK, timer kaybolur
 
                                 let mut button_vec = vec![];
 
