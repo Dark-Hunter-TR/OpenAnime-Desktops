@@ -28,6 +28,8 @@ mod gst_detector;
 #[cfg(target_os = "linux")]
 mod video_decode;
 #[cfg(target_os = "linux")]
+pub mod renderer;
+#[cfg(target_os = "linux")]
 mod native_render;
 mod webgpu_bridge;
 
@@ -544,7 +546,9 @@ async fn go_online(window: tauri::WebviewWindow) -> Result<(), String> {
         .unwrap_or(0);
     let url_str = format!("https://openani.me/?nocache={}", now);
     println!("[Tauri] Navigating online to: {}", url_str);
-    window.navigate(url_str.parse().unwrap())
+    let parsed_url = url_str.parse::<tauri::Url>()
+        .map_err(|e| format!("Failed to parse online URL: {}", e))?;
+    window.navigate(parsed_url)
         .map_err(|e| format!("Navigation failed: {}", e))
 }
 

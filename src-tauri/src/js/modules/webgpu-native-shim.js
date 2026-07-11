@@ -294,8 +294,21 @@
         this.__externalTextureCache.set(video, cached);
       }
 
+      // If native player is active, bypass heavy Base64 capture/upload steps to avoid CPU/IPC congestion
+      if (window.__NATIVE_PLAYER_ACTIVE__) {
+        return new GPUExternalTexture(cached.textureView.__id);
+      }
+
       // Draw the video to a 2D canvas to extract pixels and copy it over IPC
       try {
+        if (this.__base64PathCount === undefined) {
+          this.__base64PathCount = 0;
+        }
+        this.__base64PathCount++;
+        if (this.__base64PathCount % 100 === 0 || this.__base64PathCount === 1) {
+          console.log(`[WebGPU Shim] Base64 external texture upload path triggered: ${this.__base64PathCount} times`);
+        }
+
         cached.ctx2d.drawImage(video, 0, 0, w, h);
         const imgData = cached.ctx2d.getImageData(0, 0, w, h);
         const base64Data = arrayBufferToBase64(imgData.data.buffer);
