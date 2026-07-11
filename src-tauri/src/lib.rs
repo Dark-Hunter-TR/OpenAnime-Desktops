@@ -1050,17 +1050,14 @@ pub fn run() {
         }
 
         #[cfg(target_os = "windows")]
-        let (browser_args, proxy_status_msg) = {
-            (WINDOWS_PROXY_ARGS, "Proxy AKTİF (127.0.0.1:1453)")
-        };
+        let (browser_args, proxy_status_msg) = (WINDOWS_PROXY_ARGS, "Proxy AKTİF (127.0.0.1:1453)");
 
         #[cfg(not(target_os = "windows"))]
-        let (browser_args, proxy_status_msg) = {
-            ("", "Proxy DEVADIŞI")
-        };
+        let proxy_status_msg = "Proxy DEVADIŞI";
 
         log!("[Setup] WebView modu: {}", proxy_status_msg);
 
+        #[cfg(target_os = "windows")]
         let app_handle_for_check = app_handle.clone();
         #[cfg(target_os = "windows")]
         tauri::async_runtime::spawn(async move {
