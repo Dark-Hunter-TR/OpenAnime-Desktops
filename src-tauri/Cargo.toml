@@ -27,11 +27,8 @@ regex = "1.10"
 rfd = "0.15"
 url = "2.5"
 percent-encoding = "2.3"
-<<<<<<< HEAD
 tiny_http = "0.12"
-=======
 base64 = "0.22"
->>>>>>> ce86c7d0b097a25fdf5c4b42fcedeb1b0c5713ed
 
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"
