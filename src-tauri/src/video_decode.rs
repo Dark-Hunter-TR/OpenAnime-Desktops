@@ -4,11 +4,13 @@ pub mod inner {
     use std::sync::{Arc, Mutex, Condvar};
     use std::thread;
     use std::time::Duration;
+    use tauri::Emitter;
 
     pub struct DecodedFrame {
         pub width: u32,
         pub height: u32,
         pub data: Vec<u8>,
+        pub new_frame_available: bool,
     }
 
     pub struct FrameSignal {
@@ -17,6 +19,18 @@ pub mod inner {
         pub is_running: Mutex<bool>,
     }
 
+    // `#[derive(Clone)]` is safe here only because every field is a cheap,
+    // reference-counted handle rather than owned/unique state:
+    //   - `playbin: gstreamer::Element` is a GObject wrapper (via glib) --
+    //     cloning it bumps a refcount and yields another handle to the SAME
+    //     underlying pipeline, it does not construct a second pipeline.
+    //   - `frame_signal: Arc<FrameSignal>` and `is_playing: Arc<Mutex<bool>>`
+    //     are both `Arc`, so cloning shares the same signal/state.
+    // If a field is ever added here that owns unique resources (e.g. a raw
+    // handle, a non-refcounted pipeline object, a file descriptor), this
+    // derive must be removed or replaced with a manual `Clone` impl that
+    // does NOT duplicate the pipeline.
+    #[derive(Clone)]
     pub struct GstPlayer {
         playbin: gstreamer::Element,
         frame_signal: Arc<FrameSignal>,
@@ -71,12 +85,27 @@ pub mod inner {
                         let height = structure.get::<i32>("height").map_err(|_| gstreamer::FlowError::Error)? as u32;
 
                         if let Ok(map) = buffer.map_readable() {
-                            let mut guard = frame_signal_clone.frame.lock().unwrap();
-                            *guard = Some(DecodedFrame {
-                                width,
-                                height,
-                                data: map.to_vec(),
-                            });
+                            let mut guard = frame_signal_clone
+                                .frame
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner());
+                            
+                            if let Some(ref mut frame) = *guard {
+                                frame.width = width;
+                                frame.height = height;
+                                if frame.data.len() != map.len() {
+                                    frame.data.resize(map.len(), 0);
+                                }
+                                frame.data.copy_from_slice(&map);
+                                frame.new_frame_available = true;
+                            } else {
+                                *guard = Some(DecodedFrame {
+                                    width,
+                                    height,
+                                    data: map.to_vec(),
+                                    new_frame_available: true,
+                                });
+                            }
                             frame_signal_clone.condvar.notify_one();
                         }
 
@@ -94,7 +123,7 @@ pub mod inner {
             thread::spawn(move || {
                 loop {
                     {
-                        let playing = is_playing_clone.lock().unwrap();
+                        let playing = is_playing_clone.lock().unwrap_or_else(|p| p.into_inner());
                         if !*playing {
                             break;
                         }
@@ -114,6 +143,7 @@ pub mod inner {
             let bus = playbin.bus().ok_or("Failed to get pipeline bus")?;
             let is_playing_bus_clone = is_playing.clone();
             let frame_signal_bus_clone = frame_signal.clone();
+            let window_bus_clone = window.clone();
 
             thread::spawn(move || {
                 for msg in bus.iter_timed(gstreamer::ClockTime::NONE) {
@@ -121,30 +151,40 @@ pub mod inner {
                     match msg.view() {
                         MessageView::Error(err) => {
                             eprintln!("[GStreamer Error] {}", err.error());
+                            let _ = window_bus_clone.emit("openanime://gst-fallback", err.error().to_string());
                             break;
                         }
                         MessageView::Eos(_) => {
                             println!("[GStreamer] End of Stream reached.");
                             break;
                         }
+                        MessageView::AsyncDone(_) => {
+                            // Preroll for the async Playing transition
+                            // triggered in play() has now completed.
+                            println!("[GStreamer] AsyncDone received, preroll complete.");
+                        }
                         _ => {}
                     }
                 }
                 
                 // Signal termination on error or end of stream
-                if let Ok(mut playing) = is_playing_bus_clone.lock() {
+                {
+                    let mut playing = is_playing_bus_clone.lock().unwrap_or_else(|p| p.into_inner());
                     *playing = false;
                 }
-                let mut running = frame_signal_bus_clone.is_running.lock().unwrap();
+                let mut running = frame_signal_bus_clone
+                    .is_running
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
                 *running = false;
                 frame_signal_bus_clone.condvar.notify_all();
             });
 
-            // Start playing the stream
-            playbin
-                .set_state(gstreamer::State::Playing)
-                .map_err(|e| format!("Failed to set playbin state to Playing: {}", e))?;
-
+            // NOTE: playback is intentionally NOT started here anymore.
+            // The pipeline is constructed in its default NULL/READY state;
+            // the caller must call `play()` explicitly once construction
+            // has finished, so that the (possibly async) state change
+            // never happens while any manager lock is held.
             Ok(Self {
                 playbin,
                 frame_signal,
@@ -153,9 +193,18 @@ pub mod inner {
         }
 
         pub fn play(&self) -> Result<(), String> {
-            self.playbin
+            let result = self
+                .playbin
                 .set_state(gstreamer::State::Playing)
                 .map_err(|e| format!("Failed to resume GStreamer: {}", e))?;
+
+            if result == gstreamer::StateChangeSuccess::Async {
+                // The pipeline hasn't finished prerolling yet. Don't block
+                // waiting for it here -- the bus message loop below watches
+                // for `MessageView::AsyncDone` and logs when preroll
+                // actually completes.
+                println!("[GStreamer] Playing state change is ASYNC, waiting for AsyncDone on the bus.");
+            }
             Ok(())
         }
 
@@ -184,11 +233,16 @@ pub mod inner {
 
     impl Drop for GstPlayer {
         fn drop(&mut self) {
-            if let Ok(mut playing) = self.is_playing.lock() {
+            {
+                let mut playing = self.is_playing.lock().unwrap_or_else(|p| p.into_inner());
                 *playing = false;
             }
             {
-                let mut running = self.frame_signal.is_running.lock().unwrap();
+                let mut running = self
+                    .frame_signal
+                    .is_running
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
                 *running = false;
                 self.frame_signal.condvar.notify_all();
             }

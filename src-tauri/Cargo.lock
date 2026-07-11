@@ -3208,6 +3208,7 @@ dependencies = [
 name = "openanime"
 version = "1.0.2-beta-02"
 dependencies = [
+ "base64 0.22.1",
  "discord-rich-presence",
  "gpu-allocator 0.28.0",
  "gstreamer",

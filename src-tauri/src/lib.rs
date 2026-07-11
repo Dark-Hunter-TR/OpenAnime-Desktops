@@ -30,7 +30,10 @@ mod gst_detector;
 #[cfg(target_os = "linux")]
 mod video_decode;
 #[cfg(target_os = "linux")]
+pub mod renderer;
+#[cfg(target_os = "linux")]
 mod native_render;
+mod webgpu_bridge;
 
 #[cfg(target_os = "windows")]
 #[link(name = "shell32")]
@@ -158,6 +161,8 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // ──────────────────────────────────────────────
     // BLOK 3: WEBGPU (SADECE LİNUX)
     // ──────────────────────────────────────────────
+    include_str!("js/modules/webgpu-native-shim.js"),
+    "\n",
     include_str!("js/modules/webgpu-patcher.js"),
     "\n",
     include_str!("js/modules/webgpu-bridge.js"),
@@ -292,19 +297,19 @@ pub const WINDOWS_PROXY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msS
 fn platform_user_agent() -> &'static str {
     #[cfg(target_os = "windows")]
     {
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
     #[cfg(target_os = "linux")]
     {
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
     #[cfg(target_os = "macos")]
     {
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
-        "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+        "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
 }
 
@@ -557,7 +562,9 @@ async fn go_online(window: tauri::WebviewWindow) -> Result<(), String> {
         .unwrap_or(0);
     let url_str = format!("https://openani.me/?nocache={}", now);
     println!("[Tauri] Navigating online to: {}", url_str);
-    window.navigate(url_str.parse().unwrap())
+    let parsed_url = url_str.parse::<tauri::Url>()
+        .map_err(|e| format!("Failed to parse online URL: {}", e))?;
+    window.navigate(parsed_url)
         .map_err(|e| format!("Navigation failed: {}", e))
 }
 
@@ -713,11 +720,30 @@ async fn apply_theme_css(app: tauri::AppHandle, theme_id: String, css: String) -
 
 #[tauri::command]
 #[allow(unused_variables)]
-async fn webgpu_state_changed(window: tauri::WebviewWindow, active: bool, url: String) -> Result<(), String> {
+async fn webgpu_state_changed(window: tauri::WebviewWindow, active: bool, url: String, paused: Option<bool>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
+        use tauri::Emitter;
         if active {
-            native_render::inner::start_player(&url, window)?;
+            // Check if GStreamer and all required elements are installed on the system
+            let report = gst_detector::detect_gstreamer();
+            if !report.gstreamer_installed {
+                let err_msg = format!(
+                    "GStreamer components missing: {:?}",
+                    report.missing_elements
+                );
+                eprintln!("[WebGPU Bridge] start_player aborted: {}", err_msg);
+                let _ = window.emit("openanime://gst-fallback", err_msg.clone());
+                return Err(err_msg);
+            }
+
+            let start_paused = paused.unwrap_or(false);
+            if let Err(e) = native_render::inner::start_player(&url, window.clone(), start_paused).await {
+                eprintln!("[WebGPU Bridge] start_player failed: {}", e);
+                // Trigger fallback to HTML5 immediately
+                let _ = window.emit("openanime://gst-fallback", e.clone());
+                return Err(e);
+            }
         } else {
             native_render::inner::stop_player();
         }
@@ -785,6 +811,46 @@ async fn get_gst_report() -> serde_json::Value {
         })
     }
 }
+
+#[tauri::command]
+async fn install_missing_gstreamer() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let report = gst_detector::detect_gstreamer();
+        if report.gstreamer_installed {
+            return Ok(());
+        }
+
+        let cmd_str = report.recommended_command;
+        if cmd_str.is_empty() {
+            return Err("No recommended command found for this distribution.".to_string());
+        }
+
+        // Convert the command to run with pkexec so the user gets a graphical password dialog.
+        // E.g., "sudo apt update && sudo apt install -y ..." -> "pkexec sh -c 'apt update && apt install -y ...'"
+        let raw_cmd = cmd_str.replace("sudo ", "");
+        println!("[Tauri GStreamer Installer] Executing: pkexec sh -c \"{}\"", raw_cmd);
+
+        let status = std::process::Command::new("pkexec")
+            .arg("sh")
+            .arg("-c")
+            .arg(&raw_cmd)
+            .status()
+            .map_err(|e| format!("Failed to launch pkexec: {}", e))?;
+
+        if status.success() {
+            println!("[Tauri GStreamer Installer] GStreamer plugins installed successfully.");
+            Ok(())
+        } else {
+            Err("Installation failed or cancelled.".to_string())
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(())
+    }
+}
+
 
 
 #[cfg(target_os = "windows")]
@@ -904,6 +970,7 @@ pub fn run() {
         }
     }
 
+<<<<<<< HEAD
     let local_video_state = Arc::new(local_video_server::LocalVideoState::new());
 
     // Local video server'ı hemen başlat (arka plan thread)
@@ -912,6 +979,42 @@ pub fn run() {
         log!("[LocalVideo] ✅ Server başlatıldı: 127.0.0.1:{}", port);
     } else {
         log!("[LocalVideo] ❌ Server başlatılamadı!");
+=======
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("APPIMAGE").is_ok() {
+            // Force GStreamer to only look at bundled plugins
+            if let Ok(appdir) = std::env::var("APPDIR") {
+                let plugin_dir = std::path::PathBuf::from(appdir).join("usr/lib/gstreamer-1.0");
+                std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &plugin_dir);
+                std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &plugin_dir);
+                std::env::set_var("GST_PLUGIN_PATH", &plugin_dir);
+                std::env::set_var("GST_PLUGIN_PATH_1_0", &plugin_dir);
+            }
+
+            // Set custom registry path for AppImage to avoid reading/writing host cache
+            if let Ok(user_cache) = std::env::var("XDG_CACHE_HOME") {
+                let cache_dir = std::path::PathBuf::from(user_cache).join("openanime");
+                let _ = std::fs::create_dir_all(&cache_dir);
+                std::env::set_var("GST_REGISTRY", cache_dir.join("gst-registry.bin"));
+            } else if let Ok(home) = std::env::var("HOME") {
+                let cache_dir = std::path::PathBuf::from(home).join(".cache").join("openanime");
+                let _ = std::fs::create_dir_all(&cache_dir);
+                std::env::set_var("GST_REGISTRY", cache_dir.join("gst-registry.bin"));
+            } else {
+                std::env::set_var("GST_REGISTRY", "/tmp/gst-registry-openanime.bin");
+            }
+        }
+
+        let gpu_report = gpu_detector::detect_gpu();
+        if !gpu_report.vulkan_supported {
+            println!("[Tauri GPU] Vulkan is not supported. Disabling WebKit compositing mode.");
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        } else if gpu_report.vendor == "NVIDIA" {
+            println!("[Tauri GPU] NVIDIA GPU detected on Linux. Disabling DMABUF renderer for stability.");
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+>>>>>>> ce86c7d0b097a25fdf5c4b42fcedeb1b0c5713ed
     }
 
     let builder = tauri::Builder::default()
@@ -1181,6 +1284,7 @@ pub fn run() {
             gst_control_seek,
             get_gpu_report,
             get_gst_report,
+            install_missing_gstreamer,
             logger::get_session_log,
             updater::get_app_version,
             updater::check_for_updates,
@@ -1197,10 +1301,50 @@ pub fn run() {
             dpi_proxy::dpi_check_connection,
             dpi_proxy::dpi_reset_settings,
             dpi_proxy::dpi_get_methods,
+<<<<<<< HEAD
             // 📁 Yerel dosya seçme dialogu
             pick_mp4_file,
             // 📄 Dosyanın ilk N baytını oku (IndexedDB dummy blob için)
             read_file_head
+=======
+            // WebGPU Bridge commands
+            webgpu_bridge::inner::gpu_request_adapter,
+            webgpu_bridge::inner::gpu_request_device,
+            webgpu_bridge::inner::gpu_create_buffer,
+            webgpu_bridge::inner::gpu_write_buffer,
+            webgpu_bridge::inner::gpu_buffer_map_async,
+            webgpu_bridge::inner::gpu_buffer_unmap,
+            webgpu_bridge::inner::gpu_create_texture,
+            webgpu_bridge::inner::gpu_texture_create_view,
+            webgpu_bridge::inner::gpu_write_texture,
+            webgpu_bridge::inner::gpu_create_sampler,
+            webgpu_bridge::inner::gpu_create_shader_module,
+            webgpu_bridge::inner::gpu_create_bind_group_layout,
+            webgpu_bridge::inner::gpu_create_pipeline_layout,
+            webgpu_bridge::inner::gpu_create_bind_group,
+            webgpu_bridge::inner::gpu_create_compute_pipeline,
+            webgpu_bridge::inner::gpu_create_render_pipeline,
+            webgpu_bridge::inner::gpu_create_command_encoder,
+            webgpu_bridge::inner::gpu_encoder_begin_compute_pass,
+            webgpu_bridge::inner::gpu_encoder_set_compute_pipeline,
+            webgpu_bridge::inner::gpu_encoder_set_bind_group,
+            webgpu_bridge::inner::gpu_encoder_dispatch_workgroups,
+            webgpu_bridge::inner::gpu_encoder_end_compute_pass,
+            webgpu_bridge::inner::gpu_encoder_begin_render_pass,
+            webgpu_bridge::inner::gpu_encoder_set_render_pipeline,
+            webgpu_bridge::inner::gpu_encoder_set_render_bind_group,
+            webgpu_bridge::inner::gpu_encoder_draw,
+            webgpu_bridge::inner::gpu_encoder_end_render_pass,
+            webgpu_bridge::inner::gpu_encoder_copy_buffer_to_texture,
+            webgpu_bridge::inner::gpu_encoder_copy_texture_to_texture,
+            webgpu_bridge::inner::gpu_encoder_finish,
+            webgpu_bridge::inner::gpu_queue_submit,
+            webgpu_bridge::inner::gpu_canvas_get_context,
+            webgpu_bridge::inner::gpu_canvas_configure,
+            webgpu_bridge::inner::gpu_canvas_get_current_texture,
+            webgpu_bridge::inner::gpu_canvas_present,
+            webgpu_bridge::inner::gpu_canvas_sync_bounds
+>>>>>>> ce86c7d0b097a25fdf5c4b42fcedeb1b0c5713ed
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
