@@ -87,7 +87,7 @@ pub mod inner {
         BRIDGE.get_or_init(|| {
             Mutex::new(BridgeState {
                 instance: wgpu::Instance::new(wgpu::InstanceDescriptor {
-                    backends: wgpu::Backends::VULKAN,
+                    backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
                     ..Default::default()
                 }),
                 adapter: None,
@@ -111,35 +111,151 @@ pub mod inner {
         pub id: u64,
         pub name: String,
         pub is_fallback_adapter: bool,
+        pub is_software_adapter: bool,
+    }
+
+    #[derive(serde::Serialize)]
+    pub struct AdapterDiagnostics {
+        pub vulkan_adapters_found: usize,
+        pub gl_adapters_found: usize,
+        pub adapter_names: Vec<String>,
+        pub hint: String,
+        pub pkg_manager: String,
+        pub missing_vulkan_packages: Vec<String>,
+        pub has_pkexec: bool,
+        pub recommended_command: String,
+        pub recommended_packages_id: String,
     }
 
     #[tauri::command]
-    pub async fn gpu_request_adapter() -> Result<AdapterInfo, String> {
-        let (chosen, id) = {
+    pub async fn gpu_request_adapter(app: tauri::AppHandle) -> Result<AdapterInfo, String> {
+        let mut all_adapters = {
             let state = lock();
-            let adapters = state.instance.enumerate_adapters(wgpu::Backends::VULKAN);
-            let chosen = adapters
-                .into_iter()
-                .max_by_key(|a| match a.get_info().device_type {
-                    wgpu::DeviceType::DiscreteGpu => 3,
-                    wgpu::DeviceType::IntegratedGpu => 1,
-                    _ => 0,
-                })
-                .ok_or("No Vulkan adapter available".to_string())?;
-            let id = next_id();
-            (chosen, id)
+            state.instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::GL)
         };
 
-        let info = chosen.get_info();
+        println!("[WebGPU Bridge] Enumerate Adapters found {} devices:", all_adapters.len());
+        let mut adapter_names = Vec::new();
+        let mut vulkan_adapters_found = 0;
+        let mut gl_adapters_found = 0;
+        for (index, adapter) in all_adapters.iter().enumerate() {
+            let info = adapter.get_info();
+            let backend_str = format!("{:?}", info.backend);
+            let type_str = format!("{:?}", info.device_type);
+            println!("  [#{}] Name: '{}', Backend: {}, Type: {}", index, info.name, backend_str, type_str);
+            adapter_names.push(format!("{} ({})", info.name, backend_str));
+            match info.backend {
+                wgpu::Backend::Vulkan => vulkan_adapters_found += 1,
+                wgpu::Backend::Gl => gl_adapters_found += 1,
+                _ => {}
+            }
+        }
+
+        // Score and choose the best hardware adapter
+        let chosen_idx = all_adapters
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, a)| {
+                let info = a.get_info();
+                let backend_score = match info.backend {
+                    wgpu::Backend::Vulkan => 3,
+                    wgpu::Backend::Gl => 0,
+                    _ => 0,
+                };
+                let type_score = match info.device_type {
+                    wgpu::DeviceType::DiscreteGpu => 2,
+                    wgpu::DeviceType::IntegratedGpu => 1,
+                    _ => 0,
+                };
+                backend_score + type_score
+            })
+            .map(|(idx, _)| idx);
+
+        let mut chosen = chosen_idx.map(|idx| all_adapters.remove(idx));
+        let mut is_software_fallback = false;
+
+        // Try software fallback as a last resort if no hardware adapter is found
+        if chosen.is_none() {
+            println!("[WebGPU Bridge] No hardware GPU adapters found via enumeration. Trying force_fallback_adapter (CPU)...");
+            let fallback_opt = {
+                let state = lock();
+                state.instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::None,
+                    force_fallback_adapter: true,
+                    compatible_surface: None,
+                }).await
+            };
+            if let Some(fallback_adapter) = fallback_opt {
+                println!("[WebGPU Bridge] Successfully acquired software fallback adapter: {}", fallback_adapter.get_info().name);
+                chosen = Some(fallback_adapter);
+                is_software_fallback = true;
+            }
+        }
+
+        let adapter = match chosen {
+            Some(a) => a,
+            None => {
+                let vendor = crate::gpu_detector::detect_gpu().vendor;
+                let missing_vulkan_packages = crate::gpu_detector::check_missing_icds(&vendor);
+                let pkg_manager = crate::gpu_detector::detect_pkg_manager();
+                let has_pkexec = crate::gpu_detector::has_pkexec();
+                
+                let recommended_packages_id = missing_vulkan_packages.first().cloned().unwrap_or_else(|| "all".to_string());
+                
+                let recommended_command = crate::gpu_detector::get_whitelisted_install_command(&pkg_manager, &recommended_packages_id)
+                    .map(|(_, cmd)| cmd)
+                    .unwrap_or_else(|| {
+                        if pkg_manager != "unknown" {
+                            format!("Lütfen '{}' paketini manuel olarak kurun.", recommended_packages_id)
+                        } else {
+                            "Lütfen dağıtımınızın paket yöneticisinden ekran kartınıza uygun Vulkan sürücülerini kurun.".to_string()
+                        }
+                    });
+
+                let hint = if pkg_manager != "unknown" {
+                    format!("Vulkan sürücüsü kurulu olmayabilir. Şu komutla kurabilirsiniz:\n{}", recommended_command)
+                } else {
+                    "Vulkan sürücüsü kurulu olmayabilir veya GPU uyumsuz olabilir. Lütfen dağıtımınızın paket yöneticisinden ekran kartınıza uygun Vulkan sürücülerini kurun.".to_string()
+                };
+
+                let diagnostics = AdapterDiagnostics {
+                    vulkan_adapters_found,
+                    gl_adapters_found,
+                    adapter_names,
+                    hint,
+                    pkg_manager,
+                    missing_vulkan_packages,
+                    has_pkexec,
+                    recommended_command,
+                    recommended_packages_id,
+                };
+                let err_json = serde_json::to_string(&diagnostics).unwrap_or_else(|_| "No adapter available".to_string());
+                return Err(err_json);
+            }
+        };
+
+        let info = adapter.get_info();
+        let is_software_adapter = is_software_fallback || info.device_type == wgpu::DeviceType::Cpu;
+        let is_gl_fallback = info.backend == wgpu::Backend::Gl;
+
+        // Emit warnings to frontend if software rendering or OpenGL fallback is used
+        if is_software_adapter {
+            let _ = app.emit("openanime://gpu-warning", "Yazılımsal (CPU) render kullanılıyor, performans 4K upscale için yetersizdir.");
+        } else if is_gl_fallback {
+            let _ = app.emit("openanime://gpu-warning", "OpenGL fallback renderer kullanılıyor, performans veya uyumluluk sorunları yaşanabilir.");
+        }
+
+        let id = next_id();
         {
             let mut state = lock();
-            state.adapter = Some(Arc::new(chosen));
+            state.adapter = Some(Arc::new(adapter));
         }
 
         Ok(AdapterInfo {
             id,
             name: info.name,
-            is_fallback_adapter: false,
+            is_fallback_adapter: is_software_fallback,
+            is_software_adapter,
         })
     }
 
@@ -1082,6 +1198,7 @@ pub mod inner {
         pub id: u64,
         pub name: String,
         pub is_fallback_adapter: bool,
+        pub is_software_adapter: bool,
     }
 
     #[derive(serde::Deserialize)]
@@ -1104,7 +1221,7 @@ pub mod inner {
     }
 
     #[tauri::command]
-    pub async fn gpu_request_adapter() -> Result<AdapterInfo, String> {
+    pub async fn gpu_request_adapter(_app: tauri::AppHandle) -> Result<AdapterInfo, String> {
         Err("WebGPU bridge is only supported on Linux".to_string())
     }
 

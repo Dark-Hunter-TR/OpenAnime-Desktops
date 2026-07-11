@@ -33,9 +33,29 @@
     async requestAdapter(options) {
       try {
         const info = await window.__TAURI__.core.invoke("gpu_request_adapter", { options });
+        if (info && info.is_software_adapter) {
+          window.__IS_SOFTWARE_ADAPTER__ = true;
+          console.warn("[WebGPU Shim] Software adapter detected. 4K upscaling and native player will be disabled.");
+        } else {
+          window.__IS_SOFTWARE_ADAPTER__ = false;
+        }
         return new GPUAdapter(info);
       } catch (e) {
         console.error("[WebGPU Shim] requestAdapter failed:", e);
+        try {
+          const diag = JSON.parse(e);
+          window.__WEBGPU_DIAGNOSTICS__ = diag;
+          injectDiagnosticsToModal(diag);
+        } catch (err) {
+          const diag = {
+            vulkan_adapters_found: 0,
+            gl_adapters_found: 0,
+            adapter_names: [],
+            hint: e
+          };
+          window.__WEBGPU_DIAGNOSTICS__ = diag;
+          injectDiagnosticsToModal(diag);
+        }
         return null;
       }
     }
@@ -804,6 +824,131 @@
     }
     return originalGetContext.apply(this, arguments);
   };
+
+  function injectDiagnosticsToModal(diag) {
+    try {
+      const elements = document.querySelectorAll("div, h1, h2, h3, p, span");
+      let targetModal = null;
+      for (const el of elements) {
+        if (el.textContent && el.textContent.includes("WebGPU desteği aktif değil")) {
+          targetModal = el.closest("[role='dialog']") || el.closest(".modal") || el.parentElement;
+          break;
+        }
+      }
+
+      if (targetModal) {
+        if (targetModal.querySelector(".webgpu-diag-panel")) return;
+
+        const panel = document.createElement("div");
+        panel.className = "webgpu-diag-panel";
+        panel.style.cssText = "margin-top: 15px; padding: 12px; background: rgba(255, 0, 0, 0.08); border: 1px solid rgba(255, 0, 0, 0.2); border-radius: 8px; font-family: monospace; font-size: 12px; color: #ff8888; text-align: left;";
+        
+        const adapterList = (diag.adapter_names || []).map(name => `<li>${name}</li>`).join("");
+        
+        const showInstallButton = diag.pkg_manager && diag.pkg_manager !== "unknown" && diag.has_pkexec;
+        const installBtnHtml = showInstallButton 
+          ? `<button id="vulkan-auto-install-btn" style="margin-left: 8px; padding: 6px 12px; background: #5865f2; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-family: inherit;">🚀 Otomatik Kur</button>`
+          : "";
+
+        panel.innerHTML = `
+          <details open>
+            <summary style="cursor: pointer; font-weight: bold; margin-bottom: 5px; outline: none; user-select: none;">
+              🔍 Sistem Teşhis Bilgileri (Hata Detayları)
+            </summary>
+            <div style="margin-top: 8px; line-height: 1.4;">
+              <strong>Bulunan GPU'lar:</strong> ${diag.adapter_names && diag.adapter_names.length > 0 ? `<ul style="margin: 5px 0; padding-left: 20px;">${adapterList}</ul>` : "Yok"} <br>
+              <strong>Vulkan Cihaz Sayısı:</strong> ${diag.vulkan_adapters_found || 0} <br>
+              <strong>OpenGL Cihaz Sayısı:</strong> ${diag.gl_adapters_found || 0} <br>
+              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); color: #fff;">
+                <strong>Öneri:</strong> ${diag.hint || "Bilinmiyor"}
+              </div>
+              
+              <div style="margin-top: 12px; display: flex; gap: 8px;">
+                <button id="vulkan-copy-cmd-btn" style="padding: 6px 12px; background: #3c4043; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-family: inherit;">📋 Komutu Kopyala</button>
+                ${installBtnHtml}
+              </div>
+              
+              <div id="vulkan-install-term-log" style="display: none; margin-top: 12px; padding: 10px; background: #000; color: #0f0; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); max-height: 150px; overflow-y: auto; white-space: pre-wrap; font-family: monospace;"></div>
+            </div>
+          </details>
+        `;
+        targetModal.appendChild(panel);
+
+        // Bind copy button
+        const copyBtn = panel.querySelector("#vulkan-copy-cmd-btn");
+        if (copyBtn) {
+          copyBtn.addEventListener("click", () => {
+            if (diag.recommended_command) {
+              navigator.clipboard.writeText(diag.recommended_command)
+                .then(() => {
+                  copyBtn.textContent = "✓ Kopyalandı!";
+                  setTimeout(() => { copyBtn.textContent = "📋 Komutu Kopyala"; }, 2000);
+                })
+                .catch(() => alert("Kopyalama başarısız oldu: " + diag.recommended_command));
+            }
+          });
+        }
+
+        // Bind auto install button
+        const installBtn = panel.querySelector("#vulkan-auto-install-btn");
+        const termLog = panel.querySelector("#vulkan-install-term-log");
+        if (installBtn && termLog) {
+          installBtn.addEventListener("click", () => {
+            const confirmMsg = `Şu komut sistem parolanız istenerek otomatik çalıştırılacak:\n\n${diag.recommended_command}\n\nDevam etmek istiyor musunuz?`;
+            if (window.confirm(confirmMsg)) {
+              installBtn.disabled = true;
+              installBtn.textContent = "⌛ Kuruluyor...";
+              termLog.style.display = "block";
+              termLog.textContent = "Kurulum başlatılıyor...\n";
+              
+              if (window.__TAURI__ && window.__TAURI__.core) {
+                window.__TAURI__.core.invoke("install_gpu_packages", { packageSet: diag.recommended_packages_id })
+                  .catch((err) => {
+                    termLog.textContent += `\n❌ Hata: ${err}\n`;
+                    installBtn.disabled = false;
+                    installBtn.textContent = "🚀 Otomatik Kur";
+                  });
+              }
+            }
+          });
+        }
+
+        // Listen for install progress updates
+        if (window.__TAURI__ && window.__TAURI__.event && typeof window.__TAURI__.event.listen === "function") {
+          window.__TAURI__.event.listen("openanime://install-progress", (event) => {
+            if (termLog) {
+              termLog.style.display = "block";
+              termLog.textContent = event.payload;
+              termLog.scrollTop = termLog.scrollHeight;
+              
+              // Reset button if installation finishes or fails
+              if (event.payload.includes("✅") || event.payload.includes("❌")) {
+                if (installBtn) {
+                  installBtn.disabled = false;
+                  installBtn.textContent = "🚀 Otomatik Kur";
+                }
+              }
+            }
+          }).catch((err) => console.error("[WebGPU Shim] Failed to register progress listener:", err));
+        }
+
+        console.log("[WebGPU Shim] Diagnostics successfully injected into modal.");
+      }
+    } catch (err) {
+      console.warn("[WebGPU Shim] Failed to inject diagnostics to modal:", err);
+    }
+  }
+
+  try {
+    const observer = new MutationObserver(() => {
+      if (window.__WEBGPU_DIAGNOSTICS__) {
+        injectDiagnosticsToModal(window.__WEBGPU_DIAGNOSTICS__);
+      }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (err) {
+    console.warn("[WebGPU Shim] Failed to start diagnostics mutation observer:", err);
+  }
 
   console.log("[WebGPU Shim] Native WebGPU shim successfully injected.");
 })();
