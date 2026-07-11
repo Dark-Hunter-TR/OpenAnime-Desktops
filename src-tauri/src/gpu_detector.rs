@@ -176,3 +176,188 @@ fn get_install_instructions(vendor: &str, distro: &str) -> (String, String) {
         ),
     }
 }
+
+#[allow(dead_code)]
+pub fn detect_pkg_manager() -> String {
+    if fs::metadata("/usr/bin/pacman").is_ok() {
+        "pacman".to_string()
+    } else if fs::metadata("/usr/bin/apt").is_ok() || fs::metadata("/usr/bin/apt-get").is_ok() {
+        "apt".to_string()
+    } else if fs::metadata("/usr/bin/dnf").is_ok() {
+        "dnf".to_string()
+    } else if fs::metadata("/usr/bin/zypper").is_ok() {
+        "zypper".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+#[allow(dead_code)]
+pub fn has_pkexec() -> bool {
+    fs::metadata("/usr/bin/pkexec").is_ok()
+}
+
+#[allow(dead_code)]
+pub fn check_missing_icds(vendor: &str) -> Vec<String> {
+    let mut missing = Vec::new();
+    let icd_dir = "/usr/share/vulkan/icd.d";
+    
+    let mut icd_files = Vec::new();
+    if let Ok(entries) = fs::read_dir(icd_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(".json") {
+                    icd_files.push(name.to_lowercase());
+                }
+            }
+        }
+    }
+
+    if icd_files.is_empty() {
+        missing.push("all".to_string());
+    } else {
+        match vendor {
+            "NVIDIA" => {
+                if !icd_files.iter().any(|f| f.contains("nvidia")) {
+                    missing.push("nvidia".to_string());
+                }
+            }
+            "AMD" => {
+                if !icd_files.iter().any(|f| f.contains("radeon") || f.contains("amd")) {
+                    missing.push("amd".to_string());
+                }
+            }
+            "Intel" => {
+                if !icd_files.iter().any(|f| f.contains("intel")) {
+                    missing.push("intel".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    missing
+}
+
+#[allow(dead_code)]
+pub fn get_whitelisted_install_command(pkg_manager: &str, package_set: &str) -> Option<(Vec<String>, String)> {
+    match (pkg_manager, package_set) {
+        ("pacman", "nvidia") => Some((
+            vec!["-S", "--noconfirm", "nvidia-utils", "lib32-nvidia-utils", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo pacman -S nvidia-utils lib32-nvidia-utils vulkan-tools".to_string()
+        )),
+        ("pacman", "amd") => Some((
+            vec!["-S", "--noconfirm", "vulkan-radeon", "lib32-vulkan-radeon", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo pacman -S vulkan-radeon lib32-vulkan-radeon vulkan-tools".to_string()
+        )),
+        ("pacman", "intel") => Some((
+            vec!["-S", "--noconfirm", "vulkan-intel", "lib32-vulkan-intel", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo pacman -S vulkan-intel lib32-vulkan-intel vulkan-tools".to_string()
+        )),
+        ("pacman", "all") => Some((
+            vec!["-S", "--noconfirm", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo pacman -S vulkan-tools".to_string()
+        )),
+
+        ("apt", "nvidia") => Some((
+            vec!["install", "-y", "nvidia-driver-535", "nvidia-utils-535", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo apt install nvidia-driver-535 nvidia-utils-535 vulkan-tools".to_string()
+        )),
+        ("apt", "amd") | ("apt", "intel") => Some((
+            vec!["install", "-y", "mesa-vulkan-drivers", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo apt install mesa-vulkan-drivers vulkan-tools".to_string()
+        )),
+        ("apt", "all") => Some((
+            vec!["install", "-y", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo apt install vulkan-tools".to_string()
+        )),
+
+        ("dnf", "nvidia") => Some((
+            vec!["install", "-y", "akmod-nvidia", "xorg-x11-drv-nvidia-cuda", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo dnf install akmod-nvidia xorg-x11-drv-nvidia-cuda vulkan-tools".to_string()
+        )),
+        ("dnf", "amd") | ("dnf", "intel") => Some((
+            vec!["install", "-y", "mesa-vulkan-drivers", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo dnf install mesa-vulkan-drivers vulkan-tools".to_string()
+        )),
+        ("dnf", "all") => Some((
+            vec!["install", "-y", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo dnf install vulkan-tools".to_string()
+        )),
+
+        ("zypper", "nvidia") => Some((
+            vec!["install", "-y", "x11-video-nvidiaG06", "nvidia-glG06", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo zypper install x11-video-nvidiaG06 nvidia-glG06 vulkan-tools".to_string()
+        )),
+        ("zypper", "amd") | ("zypper", "intel") => Some((
+            vec!["install", "-y", "mesa-vulkan-device-select", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo zypper install mesa-vulkan-device-select vulkan-tools".to_string()
+        )),
+        ("zypper", "all") => Some((
+            vec!["install", "-y", "vulkan-tools"].into_iter().map(String::from).collect(),
+            "sudo zypper install vulkan-tools".to_string()
+        )),
+
+        _ => None,
+    }
+}
+
+#[tauri::command]
+pub async fn install_gpu_packages(
+    app: tauri::AppHandle,
+    package_set: String,
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let pkg_manager = detect_pkg_manager();
+    if pkg_manager == "unknown" {
+        return Err("Bilinmeyen paket yöneticisi. Lütfen paketleri manuel olarak kurun.".to_string());
+    }
+
+    if !has_pkexec() {
+        return Err("Sistemde 'pkexec' bulunamadı. Lütfen paketleri terminal üzerinden manuel olarak kurun.".to_string());
+    }
+
+    let (args, command_display) = get_whitelisted_install_command(&pkg_manager, &package_set)
+        .ok_or_else(|| "Geçersiz veya yetkisiz paket kümesi isteği.".to_string())?;
+
+    println!("[GPU Installer] Running pkexec with command: {}", command_display);
+    
+    let app_clone = app.clone();
+    let pkg_manager_binary = match pkg_manager.as_str() {
+        "pacman" => "pacman",
+        "apt" => "apt",
+        "dnf" => "dnf",
+        "zypper" => "zypper",
+        _ => return Err("Bilinmeyen paket yöneticisi.".to_string()),
+    };
+
+    std::thread::spawn(move || {
+        let _ = app_clone.emit("openanime://install-progress", format!("Kurulum başlatılıyor: {}\nŞifre onayı bekleniyor...", command_display));
+        
+        let mut cmd = std::process::Command::new("pkexec");
+        cmd.arg(pkg_manager_binary);
+        cmd.args(&args);
+
+        match cmd.output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                
+                if output.status.success() {
+                    let _ = app_clone.emit("openanime://install-progress", format!("{}\n\n✅ Kurulum başarıyla tamamlandı! Sürücülerin aktif olması için lütfen OpenAnime uygulamasını kapatıp yeniden başlatın.", stdout));
+                } else {
+                    let _ = app_clone.emit(
+                        "openanime://install-progress",
+                        format!("❌ Kurulum başarısız oldu veya iptal edildi (Hata Kodu: {}).\n\nHata Çıktısı:\n{}\n{}", output.status.code().unwrap_or(-1), stdout, stderr)
+                    );
+                }
+            }
+            Err(e) => {
+                let _ = app_clone.emit("openanime://install-progress", format!("❌ Sistem komutu çalıştırılamadı: {}", e));
+            }
+        }
+    });
+
+    Ok(())
+}
+

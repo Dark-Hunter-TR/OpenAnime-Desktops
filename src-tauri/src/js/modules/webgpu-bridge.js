@@ -15,7 +15,18 @@
   function updateNativeState() {
     if (!isLinux) return;
 
-    const shouldBeActive = isWebGpuEnabled && is4kActive && currentVideoUrl;
+    let shouldBeActive = isWebGpuEnabled && is4kActive && currentVideoUrl;
+
+    if (shouldBeActive && window.__IS_SOFTWARE_ADAPTER__) {
+      shouldBeActive = false;
+      if (!window.__SOFTWARE_ADAPTER_WARNING_SHOWN__) {
+        window.__SOFTWARE_ADAPTER_WARNING_SHOWN__ = true;
+        setTimeout(() => {
+          alert("OpenAnime: Sisteminizde yazılımsal render (Software/CPU) algılandı. Performans yetersizliği ve donmaları önlemek amacıyla 4K Upscale / Native Player özelliği otomatik olarak devre dışı bırakıldı.");
+        }, 100);
+      }
+    }
+
     if (shouldBeActive !== lastState) {
       lastState = shouldBeActive;
       window.__NATIVE_PLAYER_ACTIVE__ = shouldBeActive;

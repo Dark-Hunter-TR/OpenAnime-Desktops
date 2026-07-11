@@ -51,7 +51,7 @@ impl WebGpuRenderer {
     pub async fn new(window: WebviewWindow, vsync: bool) -> Result<Self, String> {
         // Create WGPU Instance
         let instance = Instance::new(InstanceDescriptor {
-            backends: Backends::VULKAN,
+            backends: Backends::VULKAN | Backends::GL,
             ..Default::default()
         });
 

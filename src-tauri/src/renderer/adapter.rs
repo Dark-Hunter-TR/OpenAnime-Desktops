@@ -4,24 +4,32 @@ use wgpu::{Adapter, Instance, RequestAdapterOptions, PowerPreference};
 /// Selects the best Vulkan adapter.
 /// Prioritizes Discrete GPUs, then Integrated GPUs, and finally fallback CPU adapters.
 pub async fn select_adapter(instance: &Instance) -> Result<Arc<Adapter>, String> {
-    // We target Vulkan specifically for Linux rendering
-    let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN);
+    // We target Vulkan and GL for Linux rendering
+    let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::GL);
     
-    // Sort adapters so DiscreteGpu is preferred, IntegratedGpu next, then other types.
+    // Sort adapters so Vulkan is preferred over GL, DiscreteGpu preferred over Integrated.
     let best_adapter = adapters
         .into_iter()
         .max_by_key(|a| {
             let info = a.get_info();
-            match info.device_type {
-                wgpu::DeviceType::DiscreteGpu => 3,
-                wgpu::DeviceType::IntegratedGpu => 2,
-                wgpu::DeviceType::Cpu => 0,
-                _ => 1,
-            }
+            let backend_score = match info.backend {
+                wgpu::Backend::Vulkan => 3,
+                wgpu::Backend::Gl => 0,
+                _ => 0,
+            };
+            let type_score = match info.device_type {
+                wgpu::DeviceType::DiscreteGpu => 2,
+                wgpu::DeviceType::IntegratedGpu => 1,
+                _ => 0,
+            };
+            backend_score + type_score
         });
 
     if let Some(adapter) = best_adapter {
         let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::Cpu {
+            return Err("Software adapter (CPU/llvmpipe) is not supported for high-performance rendering".to_string());
+        }
         println!(
             "[WebGPU Renderer] Selected adapter: {} (Type: {:?}, Backend: {:?})",
             info.name, info.device_type, info.backend

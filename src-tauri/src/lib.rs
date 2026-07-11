@@ -1278,6 +1278,7 @@ pub fn run() {
             get_gpu_report,
             get_gst_report,
             install_missing_gstreamer,
+            gpu_detector::install_gpu_packages,
             logger::get_session_log,
             updater::get_app_version,
             updater::check_for_updates,
