@@ -29,8 +29,28 @@
   // WebGPU Classes
   // ─────────────────────────────────────────────────────────────────
 
+  // In-memory adapter result cache. The Rust side already caches this (with a
+  // 60s TTL for failures), but the site can call navigator.gpu.requestAdapter()
+  // many times per second while hovering over cards, and every call is still a
+  // full async IPC round-trip. Caching on the JS side too means repeated hovers
+  // resolve from a plain in-memory value instead of crossing the IPC boundary
+  // at all. This is a defense-in-depth measure, not a replacement for the Rust
+  // cache — it is intentionally simple (no TTL) because the Rust layer is the
+  // source of truth for when a retry is actually warranted; we just re-fetch a
+  // fresh promise the next time the page reloads/navigates (this module runs
+  // once per page load).
+  let cachedAdapterPromise = null;
+
   class GPU {
     async requestAdapter(options) {
+      if (cachedAdapterPromise) {
+        return cachedAdapterPromise;
+      }
+      cachedAdapterPromise = this._requestAdapterUncached(options);
+      return cachedAdapterPromise;
+    }
+
+    async _requestAdapterUncached(options) {
       try {
         const info = await window.__TAURI__.core.invoke("gpu_request_adapter", { options });
         if (info && info.is_software_adapter) {
@@ -56,6 +76,12 @@
           window.__WEBGPU_DIAGNOSTICS__ = diag;
           injectDiagnosticsToModal(diag);
         }
+        // Do not poison the cache with a rejected/null result forever — allow
+        // the next call to try again (the Rust-side TTL still protects against
+        // hammering the system; this just avoids getting stuck on `null`
+        // for the rest of the page's lifetime if the user fixes drivers and
+        // the Rust TTL later succeeds).
+        cachedAdapterPromise = null;
         return null;
       }
     }
