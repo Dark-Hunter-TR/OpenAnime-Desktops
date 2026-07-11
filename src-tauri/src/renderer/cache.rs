@@ -20,33 +20,36 @@ impl ResourceCache {
     }
 
     /// Gets or creates a cached compute pipeline.
-    pub fn get_compute_pipeline<F>(&mut self, name: &str, create_fn: F) -> &ComputePipeline
+    pub fn get_compute_pipeline<F>(&mut self, name: &str, create_fn: F) -> ComputePipeline
     where
         F: FnOnce() -> ComputePipeline,
     {
         self.pipelines_compute
             .entry(name.to_string())
             .or_insert_with(create_fn)
+            .clone()
     }
 
     /// Gets or creates a cached render pipeline.
-    pub fn get_render_pipeline<F>(&mut self, name: &str, create_fn: F) -> &RenderPipeline
+    pub fn get_render_pipeline<F>(&mut self, name: &str, create_fn: F) -> RenderPipeline
     where
         F: FnOnce() -> RenderPipeline,
     {
         self.pipelines_render
             .entry(name.to_string())
             .or_insert_with(create_fn)
+            .clone()
     }
 
     /// Gets or creates a cached bind group.
-    pub fn get_bind_group<F>(&mut self, key: &str, create_fn: F) -> &BindGroup
+    pub fn get_bind_group<F>(&mut self, key: &str, create_fn: F) -> BindGroup
     where
         F: FnOnce() -> BindGroup,
     {
         self.bind_groups
             .entry(key.to_string())
             .or_insert_with(create_fn)
+            .clone()
     }
 
     /// Clears cached bind groups (useful when textures are recreated).
@@ -63,7 +66,7 @@ impl ResourceCache {
         height: u32,
         format: TextureFormat,
         usage: TextureUsages,
-    ) -> &GpuTexture {
+    ) -> GpuTexture {
         let needs_recreation = if let Some(tex) = self.textures.get(name) {
             if tex.width != width || tex.height != height || tex.format != format {
                 println!(
@@ -87,7 +90,7 @@ impl ResourceCache {
 
         self.textures.entry(name.to_string()).or_insert_with(|| {
             GpuTexture::new(device, width, height, format, usage, Some(name))
-        })
+        }).clone()
     }
 
     /// Clears all cached resources.

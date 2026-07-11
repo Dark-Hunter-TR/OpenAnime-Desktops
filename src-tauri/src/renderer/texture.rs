@@ -1,5 +1,6 @@
 use wgpu::{Device, Texture, TextureView, TextureDescriptor, Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
+#[derive(Clone)]
 pub struct GpuTexture {
     pub texture: Texture,
     pub view: TextureView,
