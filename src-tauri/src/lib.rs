@@ -29,6 +29,7 @@ mod gst_detector;
 mod video_decode;
 #[cfg(target_os = "linux")]
 mod native_render;
+mod webgpu_bridge;
 
 #[cfg(target_os = "windows")]
 #[link(name = "shell32")]
@@ -156,6 +157,8 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // ──────────────────────────────────────────────
     // BLOK 3: WEBGPU (SADECE LİNUX)
     // ──────────────────────────────────────────────
+    include_str!("js/modules/webgpu-native-shim.js"),
+    "\n",
     include_str!("js/modules/webgpu-patcher.js"),
     "\n",
     include_str!("js/modules/webgpu-bridge.js"),
@@ -276,19 +279,19 @@ pub const WINDOWS_PROXY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msS
 fn platform_user_agent() -> &'static str {
     #[cfg(target_os = "windows")]
     {
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
     #[cfg(target_os = "linux")]
     {
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
     #[cfg(target_os = "macos")]
     {
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
-        "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+        "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
 }
 
@@ -1190,7 +1193,44 @@ pub fn run() {
             dpi_proxy::dpi_get_status,
             dpi_proxy::dpi_check_connection,
             dpi_proxy::dpi_reset_settings,
-            dpi_proxy::dpi_get_methods
+            dpi_proxy::dpi_get_methods,
+            // WebGPU Bridge commands
+            webgpu_bridge::inner::gpu_request_adapter,
+            webgpu_bridge::inner::gpu_request_device,
+            webgpu_bridge::inner::gpu_create_buffer,
+            webgpu_bridge::inner::gpu_write_buffer,
+            webgpu_bridge::inner::gpu_buffer_map_async,
+            webgpu_bridge::inner::gpu_buffer_unmap,
+            webgpu_bridge::inner::gpu_create_texture,
+            webgpu_bridge::inner::gpu_texture_create_view,
+            webgpu_bridge::inner::gpu_write_texture,
+            webgpu_bridge::inner::gpu_create_sampler,
+            webgpu_bridge::inner::gpu_create_shader_module,
+            webgpu_bridge::inner::gpu_create_bind_group_layout,
+            webgpu_bridge::inner::gpu_create_pipeline_layout,
+            webgpu_bridge::inner::gpu_create_bind_group,
+            webgpu_bridge::inner::gpu_create_compute_pipeline,
+            webgpu_bridge::inner::gpu_create_render_pipeline,
+            webgpu_bridge::inner::gpu_create_command_encoder,
+            webgpu_bridge::inner::gpu_encoder_begin_compute_pass,
+            webgpu_bridge::inner::gpu_encoder_set_compute_pipeline,
+            webgpu_bridge::inner::gpu_encoder_set_bind_group,
+            webgpu_bridge::inner::gpu_encoder_dispatch_workgroups,
+            webgpu_bridge::inner::gpu_encoder_end_compute_pass,
+            webgpu_bridge::inner::gpu_encoder_begin_render_pass,
+            webgpu_bridge::inner::gpu_encoder_set_render_pipeline,
+            webgpu_bridge::inner::gpu_encoder_set_render_bind_group,
+            webgpu_bridge::inner::gpu_encoder_draw,
+            webgpu_bridge::inner::gpu_encoder_end_render_pass,
+            webgpu_bridge::inner::gpu_encoder_copy_buffer_to_texture,
+            webgpu_bridge::inner::gpu_encoder_copy_texture_to_texture,
+            webgpu_bridge::inner::gpu_encoder_finish,
+            webgpu_bridge::inner::gpu_queue_submit,
+            webgpu_bridge::inner::gpu_canvas_get_context,
+            webgpu_bridge::inner::gpu_canvas_configure,
+            webgpu_bridge::inner::gpu_canvas_get_current_texture,
+            webgpu_bridge::inner::gpu_canvas_present,
+            webgpu_bridge::inner::gpu_canvas_sync_bounds
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
