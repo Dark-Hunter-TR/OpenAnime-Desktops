@@ -968,22 +968,29 @@ pub mod inner {
         let dev = device()?;
         let tex_format = parse_texture_format(&format)?;
 
-        let mut state = lock();
-        let adapter = state.adapter.clone().ok_or("No adapter selected")?;
+        let (overlay, width, height) = {
+            let state = lock();
+            let ctx = state.registries.canvas_contexts.get(&context_id).ok_or("Unknown canvas context id")?;
+            (ctx.overlay.clone(), ctx.width, ctx.height)
+        };
 
-        let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
+        let adapter = {
+            let state = lock();
+            state.adapter.clone().ok_or("No adapter selected")?
+        };
 
-        let surface = unsafe {
-            let s = state.instance.create_surface(ctx.overlay.clone()).map_err(|e| e.to_string())?;
-            std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(s)
+        let surface = {
+            let state = lock();
+            let s = unsafe { state.instance.create_surface(overlay).map_err(|e| e.to_string())? };
+            unsafe { std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(s) }
         };
 
         let caps = surface.get_capabilities(&adapter);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: tex_format,
-            width: ctx.width.max(1),
-            height: ctx.height.max(1),
+            width: width.max(1),
+            height: height.max(1),
             present_mode: if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
                 wgpu::PresentMode::Mailbox
             } else {
@@ -995,6 +1002,8 @@ pub mod inner {
         };
         surface.configure(&dev, &config);
 
+        let mut state = lock();
+        let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         ctx.surface = Some(surface);
         ctx.format = tex_format;
         Ok(())
@@ -1026,6 +1035,11 @@ pub mod inner {
 
     #[tauri::command]
     pub async fn gpu_canvas_sync_bounds(context_id: u64, x: i32, y: i32, width: u32, height: u32) -> Result<(), String> {
+        let dev = {
+            let state = lock();
+            state.device.clone()
+        };
+
         let mut state = lock();
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         let _ = ctx.overlay.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x as f64, y as f64)));
@@ -1035,7 +1049,7 @@ pub mod inner {
         ctx.height = height;
 
         if let Some(surface) = &ctx.surface {
-            if let Some(dev) = &state.device {
+            if let Some(d) = &dev {
                 let config = wgpu::SurfaceConfiguration {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     format: ctx.format,
@@ -1046,7 +1060,7 @@ pub mod inner {
                     view_formats: vec![],
                     desired_maximum_frame_latency: 2,
                 };
-                surface.configure(dev, &config);
+                surface.configure(d, &config);
             }
         }
         Ok(())
