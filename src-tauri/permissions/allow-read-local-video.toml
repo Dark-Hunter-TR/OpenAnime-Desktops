@@ -1,0 +1,11 @@
+[[permission]]
+identifier = "allow-read-local-video"
+description = "Allows frontend to control local video streaming server (get port, register video routes)"
+
+[permission.commands]
+allow = [
+    "get_local_video_port",
+    "register_local_video",
+    "pick_mp4_file",
+    "read_file_head"
+]
