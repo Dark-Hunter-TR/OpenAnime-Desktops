@@ -34,6 +34,7 @@
     "allow-themes",
     "os:default",
     "allow-dpi-proxy",
-    "allow-session-log"
+    "allow-session-log",
+    "allow-read-local-video"
   ]
 }

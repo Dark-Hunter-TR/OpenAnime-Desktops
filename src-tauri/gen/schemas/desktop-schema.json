@@ -375,6 +375,12 @@
           "markdownDescription": "Allows invoking the open_theme_window command"
         },
         {
+          "description": "Allows frontend to control local video streaming server (get port, register video routes)",
+          "type": "string",
+          "const": "allow-read-local-video",
+          "markdownDescription": "Allows frontend to control local video streaming server (get port, register video routes)"
+        },
+        {
           "description": "Oturum log dosyasını frontend'den okumaya izin verir",
           "type": "string",
           "const": "allow-session-log",

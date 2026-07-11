@@ -2,6 +2,7 @@
 
 use tauri::{WebviewWindowBuilder, WebviewUrl, Manager};
 use std::sync::Mutex;
+use std::sync::Arc;
 
 /// Zoom seviyesini tüm pencereler arasında paylaşmak için state
 pub struct ZoomState {
@@ -22,6 +23,7 @@ mod discordRPC;
 
 mod gpu_detector;
 mod updater;
+mod local_video_server;
 
 #[cfg(target_os = "linux")]
 mod gst_detector;
@@ -213,6 +215,20 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     include_str!("js/modules/page-recovery.js"),
     "\n",
     include_str!("js/modules/video-optimizer.js"),
+    "\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 7B: YEREL VİDEO OYNATICI (KOPYASIZ STREAM)
+    // localStorage.local_video_path + port ile çalışır.
+    // ──────────────────────────────────────────────
+    include_str!("js/modules/local-player.js"),
+    "\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 7C: YEREL KÜTÜPHANE YÖNETİMİ
+    // Sidebar butonu + bölüm ekle butonu + library yönetimi
+    // ──────────────────────────────────────────────
+    include_str!("js/modules/local-library.js"),
     "\n",
 
     // ──────────────────────────────────────────────
@@ -802,6 +818,77 @@ fn setup_windows_gpu_preference() {
     }
 }
 
+/// ────────────────────────────────────────────────────────────
+/// 🎥 Local Video Server Komutları
+/// ────────────────────────────────────────────────────────────
+/// `get_local_video_port` — Server'ın dinlediği port'u döndürür
+/// `register_local_video` — videoId ↔ dosya yolu eşlemesini kaydeder
+/// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_local_video_port(state: tauri::State<'_, Arc<local_video_server::LocalVideoState>>) -> Result<u16, String> {
+    let port = state.port.lock().map_err(|e| e.to_string())?;
+    Ok(*port)
+}
+
+#[tauri::command]
+fn register_local_video(
+    state: tauri::State<'_, Arc<local_video_server::LocalVideoState>>,
+    video_id: String,
+    file_path: String,
+) -> Result<(), String> {
+    let mut map = state.video_map.lock().map_err(|e| e.to_string())?;
+    map.insert(video_id, file_path);
+    Ok(())
+}
+
+/// ────────────────────────────────────────────────────────────
+/// 📁 Dosya Seçme Dialogu
+/// ────────────────────────────────────────────────────────────
+/// Kullanıcının işletim sistemi dosya seçme dialogu ile MP4
+/// dosyası seçmesini sağlar. Seçilen dosyanın tam yolunu döndürür.
+/// ────────────────────────────────────────────────────────────
+#[tauri::command]
+async fn pick_mp4_file() -> Result<String, String> {
+    let file = rfd::AsyncFileDialog::new()
+        .set_title("Yerel Video Dosyası Seç")
+        .add_filter("Video Dosyaları", &["mp4", "mkv", "webm", "avi", "mov"])
+        .pick_file()
+        .await
+        .ok_or_else(|| "Kullanıcı dosya seçmedi".to_string())?;
+    
+    let path = file.path().to_string_lossy().to_string();
+    println!("[LocalLibrary] Seçilen dosya: {}", path);
+    Ok(path)
+}
+
+/// ────────────────────────────────────────────────────────────
+/// 📄 Dosyanın İlk N Baytını Oku
+/// ────────────────────────────────────────────────────────────
+/// IndexedDB'ye yazılacak dummy blob için dosyanın sadece ilk
+/// 100KB'ını okur. Bu sayede Svelte player geçerli bir MP4
+/// başlığı görür ve sağlam initialize olur. Asıl video stream
+/// local-player.js ile Rust HTTP server'dan gelir.
+/// ────────────────────────────────────────────────────────────
+#[tauri::command]
+async fn read_file_head(path: String, max_bytes: u32) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt;
+
+    let mut file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| format!("Dosya açılamadı: {}", e))?;
+
+    let max = max_bytes.min(5_242_880) as usize; // max 5MB güvenlik limiti
+    let mut buffer = vec![0u8; max];
+    let n = file
+        .read(&mut buffer)
+        .await
+        .map_err(|e| format!("Dosya okunamadı: {}", e))?;
+
+    buffer.truncate(n);
+    Ok(buffer)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -817,13 +904,24 @@ pub fn run() {
         }
     }
 
+    let local_video_state = Arc::new(local_video_server::LocalVideoState::new());
+
+    // Local video server'ı hemen başlat (arka plan thread)
+    let lv_state = local_video_state.clone();
+    if let Ok(port) = local_video_server::start_server(&lv_state) {
+        log!("[LocalVideo] ✅ Server başlatıldı: 127.0.0.1:{}", port);
+    } else {
+        log!("[LocalVideo] ❌ Server başlatılamadı!");
+    }
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(discordRPC::DiscordState::new())
         .manage(updater::UpdaterState::new())
-        .manage(ZoomState::default());
+        .manage(ZoomState::default())
+        .manage(local_video_state);
 
     // DPI Proxy manager'ı oluştur (setup'tan önce olmalı)
     // .manage()'i setup'tan sonra kullanacağız
@@ -1062,6 +1160,10 @@ pub fn run() {
             set_discord_rpc_enabled,
             set_focused_window,
             close_window_label,
+            // 🎥 Local video server — port sorgula
+            get_local_video_port,
+            // 🎥 Local video server — videoId ↔ dosya yolu eşlemesi kaydet
+            register_local_video,
             fetch_css,
             proxy_request,
             check_connection,
@@ -1094,7 +1196,11 @@ pub fn run() {
             dpi_proxy::dpi_get_status,
             dpi_proxy::dpi_check_connection,
             dpi_proxy::dpi_reset_settings,
-            dpi_proxy::dpi_get_methods
+            dpi_proxy::dpi_get_methods,
+            // 📁 Yerel dosya seçme dialogu
+            pick_mp4_file,
+            // 📄 Dosyanın ilk N baytını oku (IndexedDB dummy blob için)
+            read_file_head
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
