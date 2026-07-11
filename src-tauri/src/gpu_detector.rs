@@ -88,36 +88,32 @@ fn determine_distro() -> String {
 }
 
 fn check_vulkan_support() -> (bool, String) {
-    // Since we compile on Windows/macOS, we must isolate wgpu Vulkan checks if we're on Linux.
     #[cfg(target_os = "linux")]
     {
-        // Try to create a wgpu instance with Vulkan backend
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..Default::default()
-        });
+        let vulkan_lib_exists = std::path::Path::new("/usr/lib/libvulkan.so.1").exists()
+            || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libvulkan.so.1").exists()
+            || std::path::Path::new("/usr/lib64/libvulkan.so.1").exists()
+            || std::path::Path::new("/usr/lib/i386-linux-gnu/libvulkan.so.1").exists()
+            || std::process::Command::new("ldconfig")
+                .arg("-p")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains("libvulkan.so.1"))
+                .unwrap_or(false);
 
-        // Request an adapter
-        let request = instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-        });
+        let icd_exists = std::path::Path::new("/usr/share/vulkan/icd.d").exists()
+            && std::fs::read_dir("/usr/share/vulkan/icd.d")
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false);
 
-        // Block on the future synchronously for diagnostic check
-        if let Some(adapter) = tauri::async_runtime::block_on(request) {
-            let info = adapter.get_info();
-            let driver_version = format!(
-                "{} (Driver: {}, API: {:?})",
-                info.name,
-                info.driver_info,
-                info.backend
-            );
-            return (true, driver_version);
+        if vulkan_lib_exists && icd_exists {
+            return (true, "Vulkan system library and ICD driver files detected".to_string());
+        } else {
+            return (false, "libvulkan.so.1 or Vulkan ICD config files are missing".to_string());
         }
     }
 
-    (false, "Vulkan backend unavailable or failed to initialize".to_string())
+    #[cfg(not(target_os = "linux"))]
+    (true, "Vulkan mock checked".to_string())
 }
 
 fn get_install_instructions(vendor: &str, distro: &str) -> (String, String) {
@@ -367,8 +363,4 @@ pub async fn install_gpu_packages(
     });
 
     Ok(())
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> d72f66ea79a227a2e82facf842b455ae3bf4bc29
