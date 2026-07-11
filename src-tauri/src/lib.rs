@@ -701,7 +701,7 @@ async fn webgpu_state_changed(window: tauri::WebviewWindow, active: bool, url: S
     #[cfg(target_os = "linux")]
     {
         if active {
-            native_render::inner::start_player(&url, window)?;
+            native_render::inner::start_player(&url, window).await?;
         } else {
             native_render::inner::stop_player();
         }
