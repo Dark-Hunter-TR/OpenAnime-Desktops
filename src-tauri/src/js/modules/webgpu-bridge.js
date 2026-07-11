@@ -18,6 +18,7 @@
     const shouldBeActive = isWebGpuEnabled && is4kActive && currentVideoUrl;
     if (shouldBeActive !== lastState) {
       lastState = shouldBeActive;
+      window.__NATIVE_PLAYER_ACTIVE__ = shouldBeActive;
       console.log("[WebGPU Bridge] State change: active =", shouldBeActive, "url =", currentVideoUrl);
       
       const video = document.querySelector("video");
