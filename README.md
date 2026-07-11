@@ -351,7 +351,7 @@ Derleme tamamlandığında kurulum dosyaları, deponun **Releases** sekmesinde o
 ## 🗺️ Yol Haritası
 
 - [ ] **Tema Sistemi:** GitHub reposu tabanlı, topluluk temalarının keşfedilip yüklenebildiği bir Tema Sayfası (yıldız/aylık en çok indirilen/en çok sevilen sıralamalarıyla)
-- [ ] Linux için native `wgpu` (Vulkan) + GStreamer render/oynatma hattı
+- [x] Linux için native `wgpu` (Vulkan) + GStreamer render/oynatma hattı
 - [x] `.deb`/`.rpm`/AppImage resmî paket dağıtımı (GitHub Actions CI)
 - [x] Linux tek komut kurulum scripti (`install.sh`)
 - [x] Arch tabanlı dağıtımlar için binary PKGBUILD (kaynaktan değil)
