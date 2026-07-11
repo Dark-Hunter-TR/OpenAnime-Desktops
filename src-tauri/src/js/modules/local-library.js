@@ -458,28 +458,26 @@
   var LOCAL_AVATAR_URL = "https://static.openani.me/placeholder/5.png";
   var LOCAL_BANNER_URL = "https://static.openani.me/placeholder/3.png";
 
-  var _placeholderPatched = false;
-
   function applyPlaceholderPatch() {
-    // Sonsuz MutationObserver döngüsünü önle: sadece bir kere çalış
-    if (_placeholderPatched) return false;
-
     var items = document.querySelectorAll(".episode-item");
     for (var i = 0; i < items.length; i++) {
       var btn = items[i];
       var text = btn.textContent || "";
       if (text.indexOf("Yerel Video Ekle") > -1 || text.indexOf("Sezon 0") > -1 || text.indexOf("Yeni Bölüm") > -1) {
-        _placeholderPatched = true;
+        // Zaten "+" eklenmişse dokunma
+        var rightDiv = btn.querySelector(".right");
+        if (rightDiv && rightDiv.querySelector('.icon-button[title="Video Ekle"]')) {
+          continue;
+        }
 
-        // Icon'ları kaldır (sadece bir kere)
+        // Icon'ları kaldır
         var oldIconBtns = btn.querySelectorAll(".icon-button");
         for (var j = 0; j < oldIconBtns.length; j++) {
           oldIconBtns[j].remove();
         }
 
-        // Artı ikonu ekle (sadece bir kere)
-        var rightDiv = btn.querySelector(".right");
-        if (rightDiv && !rightDiv.querySelector(".icon-button")) {
+        // Artı ikonu ekle
+        if (rightDiv) {
           var newBtn = document.createElement('button');
           newBtn.className = 'icon-button animated svelte-awaipk';
           newBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" role="img" width="1em" height="1em" viewBox="0 0 16 16" class="iconify iconify--fluent" style="color: var(--fds-system-success);"><path fill="currentColor" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/></svg>';
@@ -538,13 +536,43 @@
     applyPlaceholderPatch();
     applyLocalImages();
 
-    // Periyodik check (dialog/sidebar sonradan yüklenirse)
-    var intervalId = setInterval(function() {
-      if (document.body) {
-        applyPlaceholderPatch();
-        applyLocalImages();
+    // ── MutationObserver (image-cache.js pattern'i) ──
+    // Svelte re-render sonrası DOM değişirse tekrar uygula
+    var _obs = new MutationObserver(function(mutations) {
+      for (var m = 0; m < mutations.length; m++) {
+        // Sadece addedNodes'e bak — placeholder yeniden oluşmuş olabilir
+        var added = mutations[m].addedNodes;
+        for (var i = 0; i < added.length; i++) {
+          var node = added[i];
+          if (node.nodeType !== 1) continue;
+          // Direkt episode-item eklendiyse
+          if (node.classList && node.classList.contains('episode-item')) {
+            applyPlaceholderPatch();
+            applyLocalImages();
+            break;
+          }
+          // İçinde episode-item varsa
+          var items = node.querySelectorAll ? node.querySelectorAll('.episode-item') : [];
+          if (items.length > 0) {
+            applyPlaceholderPatch();
+            applyLocalImages();
+            break;
+          }
+        }
+        // style değişimi (display:none/block — dialog açılınca)
+        if (mutations[m].type === "attributes" && mutations[m].attributeName === "style") {
+          applyPlaceholderPatch();
+          applyLocalImages();
+          break;
+        }
       }
-    }, 300);
+    });
+    _obs.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["style"]
+    });
 
     // Capture phase click handler (sadece bir kere eklenir)
     if (!window._localPlaceholderPatched) {
@@ -575,8 +603,6 @@
         }
       }, true);
     }
-
-    setTimeout(function() { clearInterval(intervalId); }, 30000);
   }
 
   // ════════════════════════════════════════════════════════
