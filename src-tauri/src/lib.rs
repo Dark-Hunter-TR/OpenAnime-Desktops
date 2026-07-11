@@ -1001,12 +1001,49 @@ pub fn run() {
         }
 
         let gpu_report = gpu_detector::detect_gpu();
+        
+        // Check if any NVIDIA GPU exists on the system (supporting hybrid/Optimus configurations)
+        let has_nvidia = {
+            let mut found = false;
+            if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name.starts_with("card") && !name.contains('-') {
+                        if let Ok(vendor_hex) = std::fs::read_to_string(entry.path().join("device/vendor")) {
+                            if vendor_hex.trim().to_lowercase().contains("10de") {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if !found {
+                if let Ok(output) = std::process::Command::new("lspci").output() {
+                    let lspci_str = String::from_utf8_lossy(&output.stdout).to_lowercase();
+                    if lspci_str.contains("nvidia") {
+                        found = true;
+                    }
+                }
+            }
+            found
+        };
+
+        let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
+
         if !gpu_report.vulkan_supported {
             println!("[Tauri GPU] Vulkan is not supported. Disabling WebKit compositing mode.");
             std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        } else if gpu_report.vendor == "NVIDIA" {
+        }
+        
+        if has_nvidia {
             println!("[Tauri GPU] NVIDIA GPU detected on Linux. Disabling DMABUF renderer for stability.");
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            
+            if is_wayland {
+                println!("[Tauri GPU] Wayland + NVIDIA detected. Setting explicit sync workaround.");
+                std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
+            }
         }
     }
 
