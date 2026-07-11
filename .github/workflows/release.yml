@@ -68,14 +68,14 @@ jobs:
           sudo apt-get remove -y 'libunwind-1[0-9]-dev' || true
           sudo apt-get install -y --no-install-recommends libunwind-dev
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
+            libwebkitgtk-6.0-dev \
+            libgtk-4-dev \
             build-essential \
             curl \
             wget \
             file \
             libxdo-dev \
             libssl-dev \
-            libayatana-appindicator3-dev \
             librsvg2-dev \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
@@ -160,6 +160,37 @@ jobs:
           releaseDraft: ${{ inputs.draft == 'true' }}
           prerelease: ${{ inputs.channel != 'stable' }}
           args: ${{ matrix.args }} --verbose
+
+      - name: Strip conflicting graphics/Wayland libraries from AppImage
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          APPIMAGE_FILE=$(ls src-tauri/target/release/bundle/appimage/OpenAnime_*.AppImage | head -n 1)
+          echo "Processing AppImage: $APPIMAGE_FILE"
+          
+          # Extract the AppImage
+          chmod +x "$APPIMAGE_FILE"
+          "$APPIMAGE_FILE" --appimage-extract
+          
+          # Remove conflicting libraries from the extracted root
+          rm -f squashfs-root/usr/lib/libEGL.so*
+          rm -f squashfs-root/usr/lib/libGL.so*
+          rm -f squashfs-root/usr/lib/libGLESv2.so*
+          rm -f squashfs-root/usr/lib/libgbm.so*
+          rm -f squashfs-root/usr/lib/libwayland-*.so*
+          rm -f squashfs-root/usr/lib/libdrm.so*
+          rm -f squashfs-root/usr/lib/libglapi.so*
+          
+          # Find or download appimagetool
+          APPIMAGETOOL_PATH="$HOME/.cache/tauri/appimagetool"
+          if [ ! -f "$APPIMAGETOOL_PATH" ]; then
+            wget -q https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage -O appimagetool
+            chmod +x appimagetool
+            APPIMAGETOOL_PATH="./appimagetool"
+          fi
+          
+          # Repackage
+          ARCH=x86_64 "$APPIMAGETOOL_PATH" squashfs-root "$APPIMAGE_FILE"
+          rm -rf squashfs-root appimagetool
 
       - name: Compress x64 AppImage with UPX
         if: matrix.target == 'x86_64-unknown-linux-gnu'
