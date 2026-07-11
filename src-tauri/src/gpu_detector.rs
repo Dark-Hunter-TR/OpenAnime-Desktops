@@ -10,6 +10,14 @@ pub struct GpuReport {
     pub recommended_packages: String,
 }
 
+/// Cheap vendor-only lookup (sysfs read, with an lspci fallback only if needed).
+/// Unlike `detect_gpu()`, this does NOT create a wgpu Vulkan instance or block on
+/// an adapter request, so it's safe to call from a hot path (e.g. after an
+/// adapter-detection failure) without introducing extra stutter.
+pub fn detect_vendor_only() -> String {
+    determine_vendor()
+}
+
 pub fn detect_gpu() -> GpuReport {
     let vendor = determine_vendor();
     let distro = determine_distro();
@@ -360,4 +368,3 @@ pub async fn install_gpu_packages(
 
     Ok(())
 }
-
