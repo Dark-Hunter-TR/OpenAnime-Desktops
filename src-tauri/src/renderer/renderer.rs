@@ -36,7 +36,7 @@ pub struct WebGpuRenderer {
     sampler: Sampler,
     
     // Video textures
-    input_texture: Option<GpuTexture>,
+    input_texture: Option<Arc<GpuTexture>>,
     has_previous_frame: bool,
     
     // Configurable pipeline switches
@@ -126,7 +126,7 @@ impl WebGpuRenderer {
                 TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
                 Some("Video Input Texture"),
             );
-            self.input_texture = Some(input_tex);
+            self.input_texture = Some(Arc::new(input_tex));
             self.cache.clear_bind_groups();
             self.has_previous_frame = false; // Reset history on size changes
         }
@@ -195,11 +195,11 @@ impl WebGpuRenderer {
                     },
                     input_tex,
                     &self.sampler,
-                    dst,
+                    &dst,
                 );
                 dst
             } else {
-                input_tex
+                input_tex.clone()
             };
 
             // 2. Upscale stage (Input size -> Output size)
@@ -227,9 +227,9 @@ impl WebGpuRenderer {
                                 Some("Bicubic Pipeline"),
                             )
                         },
-                        denoise_tex,
+                        &denoise_tex,
                         &self.sampler,
-                        upscale_tex,
+                        &upscale_tex,
                     );
                 }
                 UpscaleMode::Lanczos => {
@@ -246,9 +246,9 @@ impl WebGpuRenderer {
                                 Some("Lanczos Pipeline"),
                             )
                         },
-                        denoise_tex,
+                        &denoise_tex,
                         &self.sampler,
-                        upscale_tex,
+                        &upscale_tex,
                     );
                 }
                 UpscaleMode::Anime => {
@@ -265,9 +265,9 @@ impl WebGpuRenderer {
                                 Some("Anime Pipeline"),
                             )
                         },
-                        denoise_tex,
+                        &denoise_tex,
                         &self.sampler,
-                        upscale_tex,
+                        &upscale_tex,
                     );
                 }
             }
@@ -296,13 +296,13 @@ impl WebGpuRenderer {
                             Some("Edge Enhancement Pipeline"),
                         )
                     },
-                    upscale_tex,
+                    &upscale_tex,
                     &self.sampler,
-                    dst,
+                    &dst,
                 );
                 dst
             } else {
-                upscale_tex
+                upscale_tex.clone()
             };
 
             // 4. Sharpen (Output size)
@@ -329,17 +329,17 @@ impl WebGpuRenderer {
                             Some("Sharpen Pipeline"),
                         )
                     },
-                    edge_tex,
+                    &edge_tex,
                     &self.sampler,
-                    dst,
+                    &dst,
                 );
                 dst
             } else {
-                edge_tex
+                edge_tex.clone()
             };
 
             // 5. Frame Interpolation / Generation Stage
-            let final_render_view = if self.enable_frame_gen {
+            let final_render_tex = if self.enable_frame_gen {
                 // Get or allocate previous frame container
                 let prev_tex = self.cache.get_texture(
                     &self.device,
@@ -364,9 +364,9 @@ impl WebGpuRenderer {
                     self.compute_pipeline.dispatch_motion_vector(
                         &mut encoder,
                         &mut self.cache,
-                        sharpen_tex,
-                        prev_tex,
-                        mv_tex,
+                        &sharpen_tex,
+                        &prev_tex,
+                        &mv_tex,
                     );
 
                     // Interpolate frame
@@ -382,11 +382,11 @@ impl WebGpuRenderer {
                     self.compute_pipeline.dispatch_frame_gen(
                         &mut encoder,
                         &mut self.cache,
-                        sharpen_tex,
-                        prev_tex,
-                        mv_tex,
+                        &sharpen_tex,
+                        &prev_tex,
+                        &mv_tex,
                         &self.sampler,
-                        gen_tex,
+                        &gen_tex,
                     );
 
                     // Copy the final processed frame to "previous_frame" to serve as history for the next frame
@@ -410,7 +410,7 @@ impl WebGpuRenderer {
                         },
                     );
 
-                    gen_tex.view()
+                    gen_tex
                 } else {
                     // Seed the previous frame history buffer
                     encoder.copy_texture_to_texture(
@@ -433,17 +433,17 @@ impl WebGpuRenderer {
                         },
                     );
                     self.has_previous_frame = true;
-                    sharpen_tex.view()
+                    sharpen_tex.clone()
                 }
             } else {
-                sharpen_tex.view()
+                sharpen_tex.clone()
             };
 
             // 6. Presentation Pass (renders processed frame view onto target surface)
             self.presenter.draw(
                 &mut encoder,
                 &mut self.cache,
-                final_render_view,
+                final_render_tex.view(),
                 &self.sampler,
                 &output_view,
                 self.surface_manager.format(),
