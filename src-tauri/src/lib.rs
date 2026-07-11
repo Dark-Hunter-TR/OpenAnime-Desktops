@@ -970,7 +970,6 @@ pub fn run() {
         }
     }
 
-<<<<<<< HEAD
     let local_video_state = Arc::new(local_video_server::LocalVideoState::new());
 
     // Local video server'ı hemen başlat (arka plan thread)
@@ -979,7 +978,7 @@ pub fn run() {
         log!("[LocalVideo] ✅ Server başlatıldı: 127.0.0.1:{}", port);
     } else {
         log!("[LocalVideo] ❌ Server başlatılamadı!");
-=======
+    }
     #[cfg(target_os = "linux")]
     {
         if std::env::var("APPIMAGE").is_ok() {
@@ -1014,7 +1013,6 @@ pub fn run() {
             println!("[Tauri GPU] NVIDIA GPU detected on Linux. Disabling DMABUF renderer for stability.");
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
->>>>>>> ce86c7d0b097a25fdf5c4b42fcedeb1b0c5713ed
     }
 
     let builder = tauri::Builder::default()
@@ -1301,12 +1299,10 @@ pub fn run() {
             dpi_proxy::dpi_check_connection,
             dpi_proxy::dpi_reset_settings,
             dpi_proxy::dpi_get_methods,
-<<<<<<< HEAD
             // 📁 Yerel dosya seçme dialogu
             pick_mp4_file,
             // 📄 Dosyanın ilk N baytını oku (IndexedDB dummy blob için)
-            read_file_head
-=======
+            read_file_head,
             // WebGPU Bridge commands
             webgpu_bridge::inner::gpu_request_adapter,
             webgpu_bridge::inner::gpu_request_device,
@@ -1344,7 +1340,6 @@ pub fn run() {
             webgpu_bridge::inner::gpu_canvas_get_current_texture,
             webgpu_bridge::inner::gpu_canvas_present,
             webgpu_bridge::inner::gpu_canvas_sync_bounds
->>>>>>> ce86c7d0b097a25fdf5c4b42fcedeb1b0c5713ed
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
