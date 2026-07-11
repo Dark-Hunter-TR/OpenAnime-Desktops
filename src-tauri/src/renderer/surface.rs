@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use wgpu::{Adapter, Device, Instance, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, PresentMode, TextureUsages};
 use tauri::WebviewWindow;
 

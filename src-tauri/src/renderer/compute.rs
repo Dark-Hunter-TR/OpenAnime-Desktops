@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use wgpu::{Device, Queue, CommandEncoder, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, ShaderStages, BindingType, TextureSampleType, TextureViewDimension, SamplerBindingType, StorageTextureAccess, TextureFormat, BindGroupDescriptor, BindGroupEntry, BindingResource, ComputePassDescriptor};
+use wgpu::{Device, CommandEncoder, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, ShaderStages, BindingType, TextureSampleType, TextureViewDimension, SamplerBindingType, StorageTextureAccess, TextureFormat, BindGroupDescriptor, BindGroupEntry, BindingResource, ComputePassDescriptor};
 use super::texture::GpuTexture;
 use super::cache::ResourceCache;
 use super::shader::ShaderSystem;

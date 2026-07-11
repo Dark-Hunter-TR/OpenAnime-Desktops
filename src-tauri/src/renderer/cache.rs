@@ -1,12 +1,13 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use wgpu::{BindGroup, ComputePipeline, RenderPipeline, Device, TextureFormat, TextureUsages};
 use super::texture::GpuTexture;
 
 pub struct ResourceCache {
-    pipelines_compute: HashMap<String, ComputePipeline>,
-    pipelines_render: HashMap<String, RenderPipeline>,
-    bind_groups: HashMap<String, BindGroup>,
-    textures: HashMap<String, GpuTexture>,
+    pipelines_compute: HashMap<String, Arc<ComputePipeline>>,
+    pipelines_render: HashMap<String, Arc<RenderPipeline>>,
+    bind_groups: HashMap<String, Arc<BindGroup>>,
+    textures: HashMap<String, Arc<GpuTexture>>,
 }
 
 impl ResourceCache {
@@ -20,35 +21,35 @@ impl ResourceCache {
     }
 
     /// Gets or creates a cached compute pipeline.
-    pub fn get_compute_pipeline<F>(&mut self, name: &str, create_fn: F) -> ComputePipeline
+    pub fn get_compute_pipeline<F>(&mut self, name: &str, create_fn: F) -> Arc<ComputePipeline>
     where
         F: FnOnce() -> ComputePipeline,
     {
         self.pipelines_compute
             .entry(name.to_string())
-            .or_insert_with(create_fn)
+            .or_insert_with(|| Arc::new(create_fn()))
             .clone()
     }
 
     /// Gets or creates a cached render pipeline.
-    pub fn get_render_pipeline<F>(&mut self, name: &str, create_fn: F) -> RenderPipeline
+    pub fn get_render_pipeline<F>(&mut self, name: &str, create_fn: F) -> Arc<RenderPipeline>
     where
         F: FnOnce() -> RenderPipeline,
     {
         self.pipelines_render
             .entry(name.to_string())
-            .or_insert_with(create_fn)
+            .or_insert_with(|| Arc::new(create_fn()))
             .clone()
     }
 
     /// Gets or creates a cached bind group.
-    pub fn get_bind_group<F>(&mut self, key: &str, create_fn: F) -> BindGroup
+    pub fn get_bind_group<F>(&mut self, key: &str, create_fn: F) -> Arc<BindGroup>
     where
         F: FnOnce() -> BindGroup,
     {
         self.bind_groups
             .entry(key.to_string())
-            .or_insert_with(create_fn)
+            .or_insert_with(|| Arc::new(create_fn()))
             .clone()
     }
 
@@ -66,7 +67,7 @@ impl ResourceCache {
         height: u32,
         format: TextureFormat,
         usage: TextureUsages,
-    ) -> GpuTexture {
+    ) -> Arc<GpuTexture> {
         let needs_recreation = if let Some(tex) = self.textures.get(name) {
             if tex.width != width || tex.height != height || tex.format != format {
                 println!(
@@ -83,13 +84,13 @@ impl ResourceCache {
 
         if needs_recreation {
             let new_tex = GpuTexture::new(device, width, height, format, usage, Some(name));
-            self.textures.insert(name.to_string(), new_tex);
+            self.textures.insert(name.to_string(), Arc::new(new_tex));
             // Clear bind groups associated with the old texture
             self.bind_groups.clear();
         }
 
         self.textures.entry(name.to_string()).or_insert_with(|| {
-            GpuTexture::new(device, width, height, format, usage, Some(name))
+            Arc::new(GpuTexture::new(device, width, height, format, usage, Some(name)))
         }).clone()
     }
 
