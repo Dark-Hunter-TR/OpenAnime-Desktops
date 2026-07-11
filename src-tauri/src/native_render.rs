@@ -2,7 +2,7 @@
 pub mod inner {
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use tauri::{Manager, WebviewWindow, WebviewWindowBuilder, WebviewUrl};
+    use tauri::{Emitter, Manager, WebviewWindow, WebviewWindowBuilder, WebviewUrl};
     // use wgpu::util::DeviceExt;
     use crate::video_decode::inner::GstPlayer;
 
@@ -34,22 +34,30 @@ pub mod inner {
                 ..Default::default()
             });
 
-            // Create surface on Tauri window
+            // Select the adapter WITHOUT a surface reference first.
+            // Querying a surface tied to a not-yet-realized window forces
+            // wgpu/Vulkan to reach into the X11 Display -- which is exactly
+            // the lock GTK's realize step is racing us for. By the time
+            // this function runs, `start_player` has already awaited the
+            // window's realize signal, but we keep adapter selection
+            // surface-independent anyway so this ordering stays safe even
+            // if that guarantee ever changes upstream.
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                })
+                .await
+                .ok_or("Failed to find a compatible Vulkan adapter")?;
+
+            // Only now create the surface, once we already hold a valid
+            // adapter and the window is expected to be realized.
             // Since WebviewWindow implements HasWindowHandle and HasDisplayHandle, we cast it to static lifetime
             let surface = unsafe {
                 let s = instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
                 std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(s)
             };
-
-            // Request adapter
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: Some(&surface),
-                    force_fallback_adapter: false,
-                })
-                .await
-                .ok_or("Failed to find a compatible Vulkan adapter")?;
 
             // Request device and queue
             let (device, queue) = adapter
@@ -332,54 +340,161 @@ pub mod inner {
         }))
     }
 
-    pub fn start_player(url: &str, main_window: WebviewWindow) -> Result<(), String> {
-        let app = main_window.app_handle();
-        let mut manager = get_manager().lock().unwrap();
+    /// Starts the native GStreamer + WGPU overlay player.
+    ///
+    /// This is `async` (no more `tauri::async_runtime::block_on`) because it
+    /// has to interleave two things that must NOT block each other:
+    /// - GTK window realization, which only happens on the main thread.
+    /// - Vulkan adapter/surface/device negotiation, which is genuinely async
+    ///   and used to be forced through `block_on` on a Tokio worker thread.
+    ///
+    /// The old flow created the overlay window and immediately asked wgpu to
+    /// create a surface + adapter for it from a worker thread. If GTK hadn't
+    /// finished realizing the window yet, wgpu's Vulkan backend would try to
+    /// query the X11 Display to resolve the window handle, take the X11
+    /// lock, and block waiting for realization -- while GTK's main thread
+    /// was simultaneously blocked waiting for that same X11 lock to
+    /// *perform* the realization. Classic circular deadlock, and it fired
+    /// before the first frame ever rendered.
+    ///
+    /// The fix: build the window on the main thread, wait (with a timeout)
+    /// for a real realize signal (first `Resized`/`Moved` event) before ever
+    /// touching Vulkan, and only then hand off to `RenderState::new`.
+    pub async fn start_player(url: &str, main_window: WebviewWindow) -> Result<(), String> {
+        let app: tauri::AppHandle = main_window.app_handle().clone();
 
-        // 1. Destroy existing overlay if active
-        if let Some(win) = manager.overlay_window.take() {
-            let _ = win.close();
+        // 1. Destroy any existing overlay/player before creating new ones,
+        // so we never have two GStreamer pipelines or overlay windows alive
+        // at once.
+        {
+            let mut manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(win) = manager.overlay_window.take() {
+                let _ = win.close();
+            }
+            manager.player = None;
+            manager.render_state = None;
         }
-        manager.player = None;
-        manager.render_state = None;
 
-        // 2. Spawn transparent, borderless overlay window
-        let overlay = WebviewWindowBuilder::new(
-            app,
-            "gst_overlay",
-            WebviewUrl::default(),
-        )
-        .title("Video Overlay")
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .build()
-        .map_err(|e| format!("Failed to create overlay window: {}", e))?;
+        // 2. Build the transparent, borderless overlay window ON THE MAIN
+        // THREAD. WebviewWindowBuilder::build() touches GTK/X11 internals
+        // and must never run from a Tokio worker thread.
+        //
+        // We also register the realize detector (first Resized/Moved event)
+        // from inside the same main-thread closure, immediately after
+        // building the window, so there's no window between "window
+        // exists" and "listener attached" where we could miss the event.
+        let (window_tx, window_rx) = tokio::sync::oneshot::channel::<Result<WebviewWindow, String>>();
+        let (realize_tx, realize_rx) = tokio::sync::oneshot::channel::<()>();
+        let realize_tx = Arc::new(Mutex::new(Some(realize_tx)));
 
-        manager.overlay_window = Some(overlay.clone());
+        let app_for_build = app.clone();
+        app.run_on_main_thread(move || {
+            let build_result = WebviewWindowBuilder::new(
+                &app_for_build,
+                "gst_overlay",
+                WebviewUrl::default(),
+            )
+            .title("Video Overlay")
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .build();
 
-        // 3. Initialize GStreamer player
+            match build_result {
+                Ok(overlay) => {
+                    let realize_tx_for_event = realize_tx.clone();
+                    overlay.on_window_event(move |event| {
+                        if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)) {
+                            if let Some(tx) = realize_tx_for_event
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .take()
+                            {
+                                let _ = tx.send(());
+                            }
+                        }
+                    });
+                    let _ = window_tx.send(Ok(overlay));
+                }
+                Err(e) => {
+                    let _ = window_tx.send(Err(format!("Failed to create overlay window: {}", e)));
+                }
+            }
+        })
+        .map_err(|e| format!("Failed to dispatch overlay creation to main thread: {}", e))?;
+
+        let overlay = window_rx
+            .await
+            .map_err(|_| "Main thread dropped the overlay window channel".to_string())??;
+
+        {
+            let mut manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
+            manager.overlay_window = Some(overlay.clone());
+        }
+
+        // 3. Wait for the window to actually realize before touching Vulkan
+        // at all. If it doesn't realize within 500ms, don't risk the
+        // deadlock -- cancel the native path and fall back to the HTML5
+        // player via the same event the GStreamer error handler uses.
+        match tokio::time::timeout(std::time::Duration::from_millis(500), realize_rx).await {
+            Ok(Ok(())) => {}
+            _ => {
+                eprintln!(
+                    "[Native Render] Overlay window failed to realize within 500ms, falling back to HTML5 player."
+                );
+                let app_for_close = app.clone();
+                let overlay_for_close = overlay.clone();
+                let _ = app_for_close.run_on_main_thread(move || {
+                    let _ = overlay_for_close.close();
+                });
+                {
+                    let mut manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
+                    manager.overlay_window = None;
+                }
+                let _ = main_window.emit(
+                    "openanime://gst-fallback",
+                    "Overlay window did not realize in time".to_string(),
+                );
+                return Ok(());
+            }
+        }
+
+        // 4. Initialize the GStreamer player. It comes up in NULL/READY
+        // state now -- playback is started explicitly via play() below,
+        // outside of any manager lock.
         let player = GstPlayer::new(url, main_window.clone())?;
+        let frame_signal = player.get_frame_signal();
 
-        // 4. Initialize WGPU state on overlay window
-        let render_state = tauri::async_runtime::block_on(RenderState::new(overlay.clone()))?;
+        // 5. Initialize WGPU state on the now-realized overlay window. This
+        // is a real `.await` -- no more `block_on` blocking a Tokio worker
+        // thread while GTK might need the same X11 Display lock.
+        let render_state = RenderState::new(overlay.clone()).await?;
         let render_state_shared = Arc::new(Mutex::new(render_state));
-        manager.render_state = Some(render_state_shared.clone());
-        manager.player = Some(player);
 
-        // 5. Spawn background render thread with Condvar synchronization
-        let frame_signal = manager.player.as_ref().unwrap().get_frame_signal();
+        // 6. Start playback. GStreamer's state change can be asynchronous
+        // (StateChangeSuccess::Async); preroll completion is tracked via
+        // AsyncDone on the bus rather than blocked on here, and this call
+        // deliberately happens without holding the MANAGER lock.
+        player.play()?;
+
+        {
+            let mut manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
+            manager.render_state = Some(render_state_shared.clone());
+            manager.player = Some(player);
+        }
+
+        // 7. Spawn background render thread with Condvar synchronization
         let rs_ref = render_state_shared.clone();
 
         thread::spawn(move || {
             loop {
                 // Wait for the next decoded frame using condition variable
                 let frame = {
-                    let mut guard = frame_signal.frame.lock().unwrap();
+                    let mut guard = frame_signal.frame.lock().unwrap_or_else(|p| p.into_inner());
                     loop {
                         {
-                            let running = frame_signal.is_running.lock().unwrap();
+                            let running = frame_signal.is_running.lock().unwrap_or_else(|p| p.into_inner());
                             if !*running {
                                 return;
                             }
@@ -387,14 +502,17 @@ pub mod inner {
                         if guard.is_some() {
                             break;
                         }
-                        guard = frame_signal.condvar.wait(guard).unwrap();
+                        guard = frame_signal
+                            .condvar
+                            .wait(guard)
+                            .unwrap_or_else(|p| p.into_inner());
                     }
                     guard.take().unwrap()
                 };
 
                 // Render the frame immediately
                 let presentation_result = {
-                    let mut rs = rs_ref.lock().unwrap();
+                    let mut rs = rs_ref.lock().unwrap_or_else(|p| p.into_inner());
                     rs.update_video_texture(frame.width, frame.height, &frame.data);
                     rs.prepare_and_submit()
                 };
@@ -409,12 +527,36 @@ pub mod inner {
     }
 
     pub fn stop_player() {
-        let mut manager = get_manager().lock().unwrap();
-        if let Some(win) = manager.overlay_window.take() {
-            let _ = win.close();
+        // Pull the overlay window and player out of the manager under a
+        // short-lived lock, then do the actual teardown work OUTSIDE that
+        // lock. Both `overlay.close()` (needs the main thread) and dropping
+        // `GstPlayer` (its Drop impl calls the blocking GStreamer
+        // State::Null transition) can take a moment, and holding MANAGER
+        // during either would stall any other thread waiting on it (e.g.
+        // `sync_bounds` during a resize).
+        let (overlay_opt, player_opt) = {
+            let mut manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
+            let overlay = manager.overlay_window.take();
+            let player = manager.player.take();
+            manager.render_state = None;
+            (overlay, player)
+        };
+
+        if let Some(overlay) = overlay_opt {
+            let app = overlay.app_handle().clone();
+            let overlay_for_close = overlay.clone();
+            // Window destruction is a GTK/main-thread operation, same as
+            // creation -- dispatch it rather than calling close() from
+            // whatever thread stop_player() happens to run on.
+            let _ = app.run_on_main_thread(move || {
+                let _ = overlay_for_close.close();
+            });
         }
-        manager.player = None;
-        manager.render_state = None;
+
+        // Dropping the GstPlayer (outside the lock) runs its Drop impl,
+        // which blocks on GStreamer's State::Null transition.
+        drop(player_opt);
+
         println!("[Native Render] Native player stopped and overlay closed.");
     }
 
@@ -460,7 +602,7 @@ pub mod inner {
     }
 
     pub fn control_play() -> Result<(), String> {
-        let manager = get_manager().lock().unwrap();
+        let manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
         if let Some(player) = &manager.player {
             player.play()?;
         }
@@ -468,7 +610,7 @@ pub mod inner {
     }
 
     pub fn control_pause() -> Result<(), String> {
-        let manager = get_manager().lock().unwrap();
+        let manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
         if let Some(player) = &manager.player {
             player.pause()?;
         }
@@ -476,7 +618,7 @@ pub mod inner {
     }
 
     pub fn control_seek(time: f64) -> Result<(), String> {
-        let manager = get_manager().lock().unwrap();
+        let manager = get_manager().lock().unwrap_or_else(|p| p.into_inner());
         if let Some(player) = &manager.player {
             player.seek(time)?;
         }
