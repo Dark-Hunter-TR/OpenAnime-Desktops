@@ -65,7 +65,7 @@ pub fn start_server(state: &Arc<LocalVideoState>) -> Result<u16, String> {
     let shared_state = state.clone();
 
     // Thread pool — 4 thread ile eşzamanlı istekleri işle
-    let pool = thread::spawn(move || {
+    thread::spawn(move || {
         let _state = shared_state;
         for request in server.incoming_requests() {
             let url = request.url().to_string();
