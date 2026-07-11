@@ -75,7 +75,7 @@ pub mod inner {
 
     pub struct BridgeState {
         instance: wgpu::Instance,
-        adapter: Option<wgpu::Adapter>,
+        adapter: Option<Arc<wgpu::Adapter>>,
         device: Option<Arc<wgpu::Device>>,
         queue: Option<Arc<wgpu::Queue>>,
         registries: Registries,
@@ -115,26 +115,25 @@ pub mod inner {
 
     #[tauri::command]
     pub async fn gpu_request_adapter() -> Result<AdapterInfo, String> {
-        let instance = {
+        let (chosen, id) = {
             let state = lock();
-            state.instance.clone()
+            let adapters = state.instance.enumerate_adapters(wgpu::Backends::VULKAN);
+            let chosen = adapters
+                .into_iter()
+                .max_by_key(|a| match a.get_info().device_type {
+                    wgpu::DeviceType::DiscreteGpu => 3,
+                    wgpu::DeviceType::IntegratedGpu => 1,
+                    _ => 0,
+                })
+                .ok_or("No Vulkan adapter available".to_string())?;
+            let id = next_id();
+            (chosen, id)
         };
 
-        let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN);
-        let chosen = adapters
-            .into_iter()
-            .max_by_key(|a| match a.get_info().device_type {
-                wgpu::DeviceType::DiscreteGpu => 3,
-                wgpu::DeviceType::IntegratedGpu => 1,
-                _ => 0,
-            })
-            .ok_or("No Vulkan adapter available")?;
-
         let info = chosen.get_info();
-        let id = next_id();
         {
             let mut state = lock();
-            state.adapter = Some(chosen);
+            state.adapter = Some(Arc::new(chosen));
         }
 
         Ok(AdapterInfo {
@@ -152,10 +151,9 @@ pub mod inner {
                 .adapter
                 .as_ref()
                 .cloned()
-                .ok_or("requestDevice() called before requestAdapter()")?
+                .ok_or("requestDevice() called before requestAdapter()".to_string())?
         };
 
-        // Proactively request SHADER_F16 and BGRA8UNORM_STORAGE features if supported
         let supported_features = adapter.features();
         let mut required_features = wgpu::Features::empty();
         if supported_features.contains(wgpu::Features::SHADER_F16) {
@@ -228,21 +226,23 @@ pub mod inner {
 
     #[tauri::command]
     pub async fn gpu_buffer_map_async(buffer_id: u64, mode: u32, offset: u64, size: u64) -> Result<String, String> {
-        let state = lock();
-        let buf = state
-            .registries
-            .buffers
-            .get(&buffer_id)
-            .ok_or("Unknown buffer id")?;
+        let (rx, dev) = {
+            let state = lock();
+            let buf = state
+                .registries
+                .buffers
+                .get(&buffer_id)
+                .ok_or("Unknown buffer id")?;
 
-        let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), wgpu::BufferAsyncError>>();
-        let map_mode = if mode == 1 { wgpu::MapMode::Read } else { wgpu::MapMode::Write };
-        buf.slice(offset..(offset + size)).map_async(map_mode, move |result| {
-            let _ = tx.send(result);
-        });
+            let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), wgpu::BufferAsyncError>>();
+            let map_mode = if mode == 1 { wgpu::MapMode::Read } else { wgpu::MapMode::Write };
+            buf.slice(offset..(offset + size)).map_async(map_mode, move |result| {
+                let _ = tx.send(result);
+            });
 
-        let dev = state.device.clone().ok_or("No device")?;
-        drop(state);
+            let dev = state.device.clone().ok_or("No device")?;
+            (rx, dev)
+        }; // Lock state dropped here
 
         dev.poll(wgpu::Maintain::Wait);
 
@@ -250,17 +250,21 @@ pub mod inner {
             .map_err(|_| "Channel closed".to_string())?
             .map_err(|e| e.to_string())?;
 
-        let state = lock();
-        let buf = state
-            .registries
-            .buffers
-            .get(&buffer_id)
-            .ok_or("Unknown buffer id")?;
-        let view = buf.slice(offset..(offset + size)).get_mapped_range();
-        use base64::Engine;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&view);
-        drop(view);
-        Ok(b64)
+        let view_b64 = {
+            let state = lock();
+            let buf = state
+                .registries
+                .buffers
+                .get(&buffer_id)
+                .ok_or("Unknown buffer id")?;
+            let view = buf.slice(offset..(offset + size)).get_mapped_range();
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&view);
+            drop(view);
+            b64
+        };
+
+        Ok(view_b64)
     }
 
     #[tauri::command]
@@ -855,6 +859,7 @@ pub mod inner {
                     );
                 }
                 RecordedOp::WriteTimestamp => {}
+                _ => return Err("Op encountered outside of any pass".into()),
             }
             i += 1;
         }
@@ -961,24 +966,24 @@ pub mod inner {
     #[tauri::command]
     pub async fn gpu_canvas_configure(context_id: u64, format: String) -> Result<(), String> {
         let dev = device()?;
-        let (instance, overlay, width, height) = {
-            let state = lock();
-            let ctx = state.registries.canvas_contexts.get(&context_id).ok_or("Unknown canvas context id")?;
-            (state.instance.clone(), ctx.overlay.clone(), ctx.width, ctx.height)
-        };
         let tex_format = parse_texture_format(&format)?;
 
+        let mut state = lock();
+        let adapter = state.adapter.clone().ok_or("No adapter selected")?;
+
+        let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
+
         let surface = unsafe {
-            let s = instance.create_surface(overlay).map_err(|e| e.to_string())?;
+            let s = state.instance.create_surface(ctx.overlay.clone()).map_err(|e| e.to_string())?;
             std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(s)
         };
-        let adapter = lock().adapter.clone().ok_or("No adapter selected")?;
+
         let caps = surface.get_capabilities(&adapter);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: tex_format,
-            width: width.max(1),
-            height: height.max(1),
+            width: ctx.width.max(1),
+            height: ctx.height.max(1),
             present_mode: if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
                 wgpu::PresentMode::Mailbox
             } else {
@@ -990,8 +995,6 @@ pub mod inner {
         };
         surface.configure(&dev, &config);
 
-        let mut state = lock();
-        let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         ctx.surface = Some(surface);
         ctx.format = tex_format;
         Ok(())
@@ -1023,14 +1026,16 @@ pub mod inner {
 
     #[tauri::command]
     pub async fn gpu_canvas_sync_bounds(context_id: u64, x: i32, y: i32, width: u32, height: u32) -> Result<(), String> {
-        let state = lock();
-        let ctx = state.registries.canvas_contexts.get(&context_id).ok_or("Unknown canvas context id")?;
+        let mut state = lock();
+        let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         let _ = ctx.overlay.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x as f64, y as f64)));
         let _ = ctx.overlay.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width as f64, height as f64)));
+        
+        ctx.width = width;
+        ctx.height = height;
+
         if let Some(surface) = &ctx.surface {
-            let dev = state.device.clone();
-            drop(state);
-            if let Some(dev) = dev {
+            if let Some(dev) = &state.device {
                 let config = wgpu::SurfaceConfiguration {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     format: ctx.format,
@@ -1041,7 +1046,7 @@ pub mod inner {
                     view_formats: vec![],
                     desired_maximum_frame_latency: 2,
                 };
-                surface.configure(&dev, &config);
+                surface.configure(dev, &config);
             }
         }
         Ok(())
