@@ -30,6 +30,7 @@ env:
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
+  GSTREAMER_INCLUDE_BAD_PLUGINS: "1"
 
 jobs:
   publish:

@@ -1,0 +1,119 @@
+use wgpu::{Adapter, Device, Instance, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, PresentMode, TextureUsages};
+use tauri::WebviewWindow;
+
+pub struct SurfaceManager {
+    surface: Surface<'static>,
+    config: SurfaceConfiguration,
+    vsync: bool,
+}
+
+impl SurfaceManager {
+    /// Creates a new surface for the given WebviewWindow.
+    pub fn new(
+        instance: &Instance,
+        adapter: &Adapter,
+        device: &Device,
+        window: &WebviewWindow,
+        vsync: bool,
+    ) -> Result<Self, String> {
+        let size = window.inner_size().map_err(|e| e.to_string())?;
+        let width = size.width.max(1);
+        let height = size.height.max(1);
+
+        let surface = instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
+
+        let caps = surface.get_capabilities(adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
+
+        let present_mode = Self::select_present_mode(&caps.present_modes, vsync);
+
+        let config = SurfaceConfiguration {
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST,
+            format,
+            width,
+            height,
+            present_mode,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
+        surface.configure(device, &config);
+
+        Ok(Self {
+            surface,
+            config,
+            vsync,
+        })
+    }
+
+    /// Selects present mode based on VSync request and hardware capabilities.
+    fn select_present_mode(available: &[PresentMode], vsync: bool) -> PresentMode {
+        if vsync {
+            // Mailbox is preferred for low latency vsync.
+            if available.contains(&PresentMode::Mailbox) {
+                PresentMode::Mailbox
+            } else {
+                PresentMode::Fifo
+            }
+        } else {
+            // Immediate or FifoRelaxed for disabled vsync.
+            if available.contains(&PresentMode::Immediate) {
+                PresentMode::Immediate
+            } else if available.contains(&PresentMode::FifoRelaxed) {
+                PresentMode::FifoRelaxed
+            } else {
+                PresentMode::Fifo
+            }
+        }
+    }
+
+    /// Configures/recreates surface for a new size.
+    pub fn resize(&mut self, device: &Device, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(device, &self.config);
+            println!("[WebGPU Renderer] Surface resized to {}x{}", width, height);
+        }
+    }
+
+    /// Re-evaluates capabilities and reconfigures the surface.
+    pub fn reconfigure(&mut self, device: &Device, adapter: &Adapter) {
+        let caps = self.surface.get_capabilities(adapter);
+        self.config.present_mode = Self::select_present_mode(&caps.present_modes, self.vsync);
+        self.config.alpha_mode = caps.alpha_modes[0];
+        self.surface.configure(device, &self.config);
+    }
+
+    /// Toggles VSync on the fly.
+    pub fn set_vsync(&mut self, device: &Device, adapter: &Adapter, vsync: bool) {
+        self.vsync = vsync;
+        self.reconfigure(device, adapter);
+    }
+
+    /// Gets the current frame from the swapchain.
+    pub fn get_current_texture(&self) -> Result<SurfaceTexture, SurfaceError> {
+        self.surface.get_current_texture()
+    }
+
+    /// Returns the surface format.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    /// Returns the surface width.
+    pub fn width(&self) -> u32 {
+        self.config.width
+    }
+
+    /// Returns the surface height.
+    pub fn height(&self) -> u32 {
+        self.config.height
+    }
+}

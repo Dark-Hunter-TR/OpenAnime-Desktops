@@ -5,8 +5,12 @@
 
   let currentVideoUrl = "";
   let isWebGpuEnabled = false;
-  let is4kActive = false;
+  let is4kActive = true; // Enabled by default on Linux
   let lastState = false;
+
+  let lastBounds = { x: 0, y: 0, width: 0, height: 0, windowWidth: 0, windowHeight: 0 };
+  let syncTimeout = null;
+  let isTicking = false;
 
   function updateNativeState() {
     if (!isLinux) return;
@@ -14,13 +18,46 @@
     const shouldBeActive = isWebGpuEnabled && is4kActive && currentVideoUrl;
     if (shouldBeActive !== lastState) {
       lastState = shouldBeActive;
+      window.__NATIVE_PLAYER_ACTIVE__ = shouldBeActive;
       console.log("[WebGPU Bridge] State change: active =", shouldBeActive, "url =", currentVideoUrl);
+      
+      const video = document.querySelector("video");
+      const isPaused = video ? video.paused : true;
+
       if (window.__TAURI__ && window.__TAURI__.core) {
         window.__TAURI__.core.invoke("webgpu_state_changed", {
           active: shouldBeActive,
-          url: currentVideoUrl
-        }).catch((err) => console.error("[WebGPU Bridge] Tauri invoke failed:", err));
+          url: currentVideoUrl,
+          paused: isPaused
+        }).catch((err) => {
+          console.error("[WebGPU Bridge] Tauri invoke failed, falling back to HTML5:", err);
+          is4kActive = false;
+          updateNativeState();
+          // Restore video element
+          const videoEl = document.querySelector("video");
+          if (videoEl) {
+            videoEl.style.opacity = "1";
+            videoEl.muted = false;
+          }
+
+          // If GStreamer components are missing, ask the user if they want to install them automatically
+          if (err && (err.includes("GStreamer components missing") || err.includes("appsink") || err.includes("autoaudiosink"))) {
+            setTimeout(() => {
+              if (window.confirm("OpenAnime: Video oynatımı için gerekli GStreamer bileşenleri sisteminizde eksik. Otomatik olarak kurmak ister misiniz? (Root şifresi gerektirecektir)")) {
+                window.__TAURI__.core.invoke("install_missing_gstreamer")
+                  .then(() => {
+                    alert("Kurulum tamamlandı. Arayüzü yenilemek veya videoyu yeniden açmak yerel oynatıcıyı aktif edecektir.");
+                  })
+                  .catch((installErr) => {
+                    alert("Kurulum başarısız oldu veya iptal edildi: " + installErr);
+                  });
+              }
+            }, 100);
+          }
+        });
       }
+      // Update DOM visibility immediately based on state
+      observePlayerControls();
     }
   }
 
@@ -30,24 +67,49 @@
     if (!video) return;
     
     const rect = video.getBoundingClientRect();
-    const payload = {
-      x: Math.round(rect.left),
-      y: Math.round(rect.top),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
-      windowWidth: window.innerWidth,
-      windowHeight: window.innerHeight
-    };
+    const x = Math.round(rect.left);
+    const y = Math.round(rect.top);
+    const width = Math.round(rect.width);
+    const height = Math.round(rect.height);
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+
+    // Only invoke if bounds actually changed
+    if (
+      x === lastBounds.x &&
+      y === lastBounds.y &&
+      width === lastBounds.width &&
+      height === lastBounds.height &&
+      windowWidth === lastBounds.windowWidth &&
+      windowHeight === lastBounds.windowHeight
+    ) {
+      return;
+    }
+
+    lastBounds = { x, y, width, height, windowWidth, windowHeight };
     
     if (window.__TAURI__ && window.__TAURI__.core) {
-      window.__TAURI__.core.invoke("webgpu_sync_bounds", payload)
+      window.__TAURI__.core.invoke("webgpu_sync_bounds", lastBounds)
         .catch(() => {});
     }
   }
 
-  window.addEventListener("resize", syncPlayerBounds, { passive: true });
-  window.addEventListener("scroll", syncPlayerBounds, { passive: true });
-  setInterval(syncPlayerBounds, 100);
+  function requestSync() {
+    if (!lastState) return;
+    if (!isTicking) {
+      window.requestAnimationFrame(() => {
+        syncPlayerBounds();
+        isTicking = false;
+      });
+      isTicking = true;
+    }
+    // Debounce to ensure perfect alignment after scrolling/resizing ends
+    if (syncTimeout) clearTimeout(syncTimeout);
+    syncTimeout = setTimeout(syncPlayerBounds, 150);
+  }
+
+  window.addEventListener("resize", requestSync, { passive: true });
+  window.addEventListener("scroll", requestSync, { passive: true });
 
   function handleVideoSource(src) {
     if (!src) return;
@@ -109,10 +171,18 @@
   function checkLocalStorageKey(key, value) {
     if (!key) return;
     const keyLower = key.toLowerCase();
+    
     if (keyLower.includes("webgpu") || keyLower.includes("upscale") || keyLower.includes("4k")) {
       const isEnabled = (value === "true" || value === "1" || value === true);
       console.log("[WebGPU Bridge] localStorage key:", key, "value:", value, "-> enabled:", isEnabled);
       isWebGpuEnabled = isEnabled;
+      updateNativeState();
+    }
+
+    if (keyLower === "openanime_experimental_native_gpu") {
+      const isDisabled = (value === "false" || value === "0" || value === false);
+      console.log("[WebGPU Bridge] Experimental Native GPU toggle:", key, "value:", value, "-> enabled:", !isDisabled);
+      is4kActive = !isDisabled;
       updateNativeState();
     }
   }
@@ -139,6 +209,20 @@
     }
   } catch (e) {}
 
+  let resizeObserver = null;
+  function setupResizeObserver() {
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
+    const video = document.querySelector("video");
+    if (video) {
+      resizeObserver = new ResizeObserver(() => {
+        requestSync();
+      });
+      resizeObserver.observe(video);
+    }
+  }
 
   function observePlayerControls() {
     const video = document.querySelector("video");
@@ -149,8 +233,13 @@
         video.muted = true;
       }
       video.style.opacity = "0";
+      setupResizeObserver();
     } else {
       video.style.opacity = "1";
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+        resizeObserver = null;
+      }
     }
   }
 
@@ -200,6 +289,21 @@
         }
       }
     }, true);
+  }
+
+  // Listen for GStreamer fallback event from Rust backend
+  if (window.__TAURI__ && window.__TAURI__.event && typeof window.__TAURI__.event.listen === "function") {
+    window.__TAURI__.event.listen("openanime://gst-fallback", (event) => {
+      console.warn("[WebGPU Bridge] GStreamer error received, falling back to HTML5:", event.payload);
+      is4kActive = false;
+      updateNativeState();
+      // Make sure the video element is visible and unmuted
+      const video = document.querySelector("video");
+      if (video) {
+        video.style.opacity = "1";
+        video.muted = false;
+      }
+    }).catch((err) => console.error("[WebGPU Bridge] Failed to listen to fallback event:", err));
   }
 
   window.__TAURI_GST_TIME_SYNC__ = function (time) {

@@ -32,6 +32,7 @@ env:
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
+  GSTREAMER_INCLUDE_BAD_PLUGINS: "1"
 
 jobs:
   windows:
@@ -92,14 +93,14 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '--profile test-release' || '' }} --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
 
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: Windows-x64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode == 'debug' && 'debug' || 'release' }}/bundle
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
@@ -153,14 +154,14 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '--profile test-release' || '' }} --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
 
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: macOS-ARM64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode == 'debug' && 'debug' || 'release' }}/bundle
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
@@ -226,7 +227,7 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '--profile test-release' || '' }} --verbose
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
 
       - name: Compress x64 AppImage with UPX (only full release)
         if: github.event.inputs.build_mode == 'release'
@@ -240,7 +241,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: Linux-x64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode == 'debug' && 'debug' || 'release' }}/bundle
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
