@@ -74,7 +74,7 @@ pub mod inner {
     // ─────────────────────────────────────────────────────────────────
 
     pub struct BridgeState {
-        instance: wgpu::Instance,
+        instance: Arc<wgpu::Instance>,
         adapter: Option<Arc<wgpu::Adapter>>,
         device: Option<Arc<wgpu::Device>>,
         queue: Option<Arc<wgpu::Queue>>,
@@ -86,10 +86,10 @@ pub mod inner {
     fn bridge() -> &'static Mutex<BridgeState> {
         BRIDGE.get_or_init(|| {
             Mutex::new(BridgeState {
-                instance: wgpu::Instance::new(wgpu::InstanceDescriptor {
+                instance: Arc::new(wgpu::Instance::new(wgpu::InstanceDescriptor {
                     backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
                     ..Default::default()
-                }),
+                })),
                 adapter: None,
                 device: None,
                 queue: None,
