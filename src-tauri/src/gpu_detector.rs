@@ -367,4 +367,8 @@ pub async fn install_gpu_packages(
     });
 
     Ok(())
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> d72f66ea79a227a2e82facf842b455ae3bf4bc29
