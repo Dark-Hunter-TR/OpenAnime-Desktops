@@ -853,12 +853,17 @@
 
   function injectDiagnosticsToModal(diag) {
     try {
-      const elements = document.querySelectorAll("div, h1, h2, h3, p, span");
+      const elements = document.querySelectorAll("div, h1, h2, h3, p, span, font");
       let targetModal = null;
       for (const el of elements) {
-        if (el.textContent && el.textContent.includes("WebGPU desteği aktif değil")) {
-          targetModal = el.closest("[role='dialog']") || el.closest(".modal") || el.parentElement;
-          break;
+        const text = el.textContent || "";
+        if (
+          text.includes("WebGPU desteği aktif değil") ||
+          text.includes("4K Upscale Kullanılamaz") ||
+          text.includes("Donanım hızlandırmayı kapatmış olabilirsiniz")
+        ) {
+          targetModal = el.closest("[role='dialog']") || el.closest(".modal") || el.closest(".fixed") || el.parentElement;
+          if (targetModal) break;
         }
       }
 
@@ -867,7 +872,7 @@
 
         const panel = document.createElement("div");
         panel.className = "webgpu-diag-panel";
-        panel.style.cssText = "margin-top: 15px; padding: 12px; background: rgba(255, 0, 0, 0.08); border: 1px solid rgba(255, 0, 0, 0.2); border-radius: 8px; font-family: monospace; font-size: 12px; color: #ff8888; text-align: left;";
+        panel.style.cssText = "margin-top: 15px; padding: 12px; background: rgba(255, 0, 0, 0.08); border: 1px solid rgba(255, 0, 0, 0.2); border-radius: 8px; font-family: monospace; font-size: 12px; color: #ff8888; text-align: left; width: 100%; box-sizing: border-box;";
         
         const adapterList = (diag.adapter_names || []).map(name => `<li>${name}</li>`).join("");
         
@@ -966,12 +971,17 @@
   }
 
   try {
-    const observer = new MutationObserver(() => {
+    const runInjections = () => {
       if (window.__WEBGPU_DIAGNOSTICS__) {
         injectDiagnosticsToModal(window.__WEBGPU_DIAGNOSTICS__);
       }
-    });
+    };
+
+    const observer = new MutationObserver(runInjections);
     observer.observe(document.documentElement, { childList: true, subtree: true });
+
+    // Fallback interval checks to catch dynamic async React portals
+    setInterval(runInjections, 500);
   } catch (err) {
     console.warn("[WebGPU Shim] Failed to start diagnostics mutation observer:", err);
   }

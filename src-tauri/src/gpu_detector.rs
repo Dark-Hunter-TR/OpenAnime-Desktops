@@ -10,10 +10,7 @@ pub struct GpuReport {
     pub recommended_packages: String,
 }
 
-/// Cheap vendor-only lookup (sysfs read, with an lspci fallback only if needed).
-/// Unlike `detect_gpu()`, this does NOT create a wgpu Vulkan instance or block on
-/// an adapter request, so it's safe to call from a hot path (e.g. after an
-/// adapter-detection failure) without introducing extra stutter.
+#[allow(dead_code)]
 pub fn detect_vendor_only() -> String {
     determine_vendor()
 }
@@ -348,7 +345,10 @@ pub async fn install_gpu_packages(
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 
                 if output.status.success() {
-                    let _ = app_clone.emit("openanime://install-progress", format!("{}\n\n✅ Kurulum başarıyla tamamlandı! Sürücülerin aktif olması için lütfen OpenAnime uygulamasını kapatıp yeniden başlatın.", stdout));
+                    let _ = app_clone.emit(
+                        "openanime://install-progress",
+                        format!("{}\n\n✅ Kurulum başarıyla tamamlandı!\n\nDonanım hızlandırmanın aktifleşmesi için:\n1. OpenAnime uygulamasını kapatıp yeniden başlatın.\n2. Eğer donanım hızlandırma otomatik aktifleşmezse, terminalden şu komutla zorlayarak başlatabilirsiniz:\n   WEBKIT_FORCE_COMPOSITING_MODE=1 openanime", stdout)
+                    );
                 } else {
                     let _ = app_clone.emit(
                         "openanime://install-progress",
