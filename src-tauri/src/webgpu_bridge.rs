@@ -177,14 +177,19 @@ pub mod inner {
         // Try software fallback as a last resort if no hardware adapter is found
         if chosen.is_none() {
             println!("[WebGPU Bridge] No hardware GPU adapters found via enumeration. Trying force_fallback_adapter (CPU)...");
-            let fallback_opt = {
+            // IMPORTANT: Clone the instance *before* .await so the MutexGuard is
+            // dropped prior to the async suspension point. Holding a MutexGuard
+            // across .await makes the future non-Send, which Tauri's command
+            // runtime requires.
+            let instance_clone = {
                 let state = lock();
-                state.instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::None,
-                    force_fallback_adapter: true,
-                    compatible_surface: None,
-                }).await
+                state.instance.clone()
             };
+            let fallback_opt = instance_clone.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::None,
+                force_fallback_adapter: true,
+                compatible_surface: None,
+            }).await;
             if let Some(fallback_adapter) = fallback_opt {
                 println!("[WebGPU Bridge] Successfully acquired software fallback adapter: {}", fallback_adapter.get_info().name);
                 chosen = Some(fallback_adapter);
