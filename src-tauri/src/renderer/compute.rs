@@ -195,8 +195,8 @@ impl VideoComputePipeline {
             timestamp_writes: None,
         });
 
-        compute_pass.set_pipeline(pipeline);
-        compute_pass.set_bind_group(0, bind_group, &[]);
+        compute_pass.set_pipeline(&pipeline);
+        compute_pass.set_bind_group(0, &bind_group, &[]);
         
         let workgroups_x = (output_texture.width() + 15) / 16;
         let workgroups_y = (output_texture.height() + 15) / 16;
@@ -250,8 +250,8 @@ impl VideoComputePipeline {
             timestamp_writes: None,
         });
 
-        compute_pass.set_pipeline(pipeline);
-        compute_pass.set_bind_group(0, bind_group, &[]);
+        compute_pass.set_pipeline(&pipeline);
+        compute_pass.set_bind_group(0, &bind_group, &[]);
         
         let workgroups_x = (output_mv.width() + 7) / 8;
         let workgroups_y = (output_mv.height() + 7) / 8;
@@ -317,8 +317,8 @@ impl VideoComputePipeline {
             timestamp_writes: None,
         });
 
-        compute_pass.set_pipeline(pipeline);
-        compute_pass.set_bind_group(0, bind_group, &[]);
+        compute_pass.set_pipeline(&pipeline);
+        compute_pass.set_bind_group(0, &bind_group, &[]);
         
         let workgroups_x = (output_frame.width() + 15) / 16;
         let workgroups_y = (output_frame.height() + 15) / 16;

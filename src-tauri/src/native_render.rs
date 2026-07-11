@@ -32,10 +32,10 @@ pub mod inner {
 
     // Shared global state for managing the player instance and rendering loop
     pub struct NativePlayerManager {
-        player: Option<GstPlayer>,
-        render_state: Option<Arc<Mutex<RenderState>>>,
-        overlay_window: Option<WebviewWindow>,
-        teardown_thread: Option<std::thread::JoinHandle<()>>,
+        pub player: Option<GstPlayer>,
+        pub render_state: Option<Arc<Mutex<RenderState>>>,
+        pub overlay_window: Option<WebviewWindow>,
+        pub teardown_thread: Option<std::thread::JoinHandle<()>>,
     }
 
     use std::sync::OnceLock;

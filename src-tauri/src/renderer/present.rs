@@ -102,8 +102,8 @@ impl Presenter {
             timestamp_writes: None,
         });
 
-        render_pass.set_pipeline(pipeline);
-        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.set_pipeline(&pipeline);
+        render_pass.set_bind_group(0, &bind_group, &[]);
         render_pass.draw(0..6, 0..1); // Fullscreen quad (6 vertices)
     }
 }

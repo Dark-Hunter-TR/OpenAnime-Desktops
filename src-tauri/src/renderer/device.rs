@@ -37,7 +37,7 @@ pub async fn create_device_and_queue(adapter: &Adapter) -> Result<(Arc<Device>, 
             .map_err(|e| format!("Failed to create WGPU Device: {}", e))?;
 
         println!("[WebGPU Renderer] Created WGPU Device and Queue successfully.");
-        Ok((Arc::new(device), Arc::new(queue)))
+        Ok::<_, String>((Arc::new(device), Arc::new(queue)))
     }).await?;
 
     Ok(shared.clone())
