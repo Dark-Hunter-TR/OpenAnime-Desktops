@@ -470,19 +470,27 @@
           continue;
         }
 
+        // ÖNCE klonlanacak butonu bul (silmeden önce!)
+        var templateBtn = null;
+        var tmpBtns = btn.querySelectorAll(".icon-button");
+        if (tmpBtns.length > 0) templateBtn = tmpBtns[0];
+
         // Icon'ları kaldır
-        var oldIconBtns = btn.querySelectorAll(".icon-button");
-        for (var j = 0; j < oldIconBtns.length; j++) {
-          oldIconBtns[j].remove();
+        for (var j = 0; j < tmpBtns.length; j++) {
+          tmpBtns[j].remove();
         }
 
-        // Artı ikonu ekle
-        if (rightDiv) {
-          var newBtn = document.createElement('button');
-          newBtn.className = 'icon-button animated svelte-awaipk';
-          newBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" role="img" width="1em" height="1em" viewBox="0 0 16 16" class="iconify iconify--fluent" style="color: var(--fds-system-success);"><path fill="currentColor" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/></svg>';
+        // Artı ikonu ekle — template butonu klonla (Svelte class + hover aynen kalır)
+        if (rightDiv && templateBtn) {
+          var newBtn = templateBtn.cloneNode(true);
+          // İkonu değiştir: ➕ (add_regular)
+          var svg = newBtn.querySelector('svg');
+          if (svg) {
+            svg.innerHTML = '<path fill="currentColor" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>';
+            svg.removeAttribute('style'); // stil varsa temizle, hover/color CSS'e bırak
+            svg.style.color = 'var(--fds-system-success)';
+          }
           newBtn.title = 'Video Ekle';
-          newBtn.style.pointerEvents = 'none';
           rightDiv.appendChild(newBtn);
         }
 
