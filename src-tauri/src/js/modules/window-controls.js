@@ -202,7 +202,45 @@
     if (topbar && topbar.style.marginRight && topbar.style.marginRight !== "0px") {
       topbar.style.removeProperty("margin-right");
     }
+
+    // Sheet pozisyonunu düzelt (zoom-aware)
+    fixSheetContent();
+
     return true;
+  }
+
+  // ── Sheet pozisyon düzeltmesi (BLOK 9'un zoom-aware versiyonu) ──
+  // Title bar 48px altında kalması için margin + kalan alanı doldurmak için max-height
+  function fixSheetContent() {
+    var sheets = document.querySelectorAll('.sheet-content');
+    if (!sheets.length) return;
+    var zoom = typeof currentZoom !== 'undefined' ? currentZoom : 1.0;
+    // margin-top: 48/zoom → WebView zoom'u uyguladığında 48px fiziksel kalır
+    var mt = Math.round(48 / zoom * 10) / 10;
+    Array.from(sheets).forEach(function(sheet) {
+      sheet.style.setProperty('margin-top', mt + 'px', 'important');
+    });
+
+    // Bir frame bekle (margin uygulandıktan sonra pozisyonu ölç)
+    requestAnimationFrame(function() {
+      Array.from(sheets).forEach(function(sheet) {
+        var body = sheet.querySelector('.sheet-body');
+        if (!body) return;
+        // getBoundingClientRect → CSS logical px (zoom-independent)
+        var bodyTop = Math.round(body.getBoundingClientRect().top);
+        var remaining = Math.round(window.innerHeight - bodyTop - 8); // 8px bottom boşluk
+        if (remaining < 100) remaining = 100;
+
+        // Hem [data-overlayscrollbars] host'unu hem de viewport'u aynı anda ayarla
+        var scrolls = sheet.querySelectorAll(
+          '[data-overlayscrollbars], [data-overlayscrollbars-viewport]'
+        );
+        Array.from(scrolls).forEach(function(el) {
+          el.style.setProperty('max-height', remaining + 'px', 'important');
+          // overflow-y auto zaten OverlayScrollbars tarafından yönetiliyor
+        });
+      });
+    });
   }
 
   function setupDragRegion() {

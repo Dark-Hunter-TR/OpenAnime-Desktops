@@ -470,6 +470,19 @@
           continue;
         }
 
+        // ── Metni düzelt: "Sezon 0 - Bölüm 0" → "Yeni Bölüm Ekle" ──
+        var leftDiv = btn.querySelector(".left");
+        if (leftDiv) {
+          var h5 = leftDiv.querySelector("h5");
+          var span = leftDiv.querySelector("span");
+          if (h5 && (h5.textContent || "").indexOf("Sezon 0") > -1) {
+            h5.textContent = "Yeni Bölüm Ekle";
+          }
+          if (span && ((span.textContent || "").indexOf("Yerel Video Ekle") > -1 || (span.textContent || "").indexOf("0p") > -1)) {
+            span.textContent = "Bilgisayarınızdan bir video dosyası seçerek kütüphanenize ekleyin";
+          }
+        }
+
         // ÖNCE klonlanacak butonu bul (silmeden önce!)
         var templateBtn = null;
         var tmpBtns = btn.querySelectorAll(".icon-button");
@@ -494,7 +507,7 @@
           rightDiv.appendChild(newBtn);
         }
 
-        console.log("[LocalLib] ✅ Placeholder düzenlendi");
+        console.log("[LocalLib] ✅ Placeholder düzenlendi (metin + ikon)");
         return true;
       }
     }

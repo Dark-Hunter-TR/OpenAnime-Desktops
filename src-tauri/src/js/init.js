@@ -95,21 +95,42 @@
 
   var observerStarted = false;
 
+  // MutationObserver feedback loop koruması:
+  // Kendi tauri-* elementlerimizdeki değişiklikleri yoksay
+  function _isTauriMutation(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var target = mutations[i].target;
+      while (target) {
+        if (target.id && target.id.indexOf("tauri-") === 0) return true;
+        target = target.parentElement;
+      }
+    }
+    return false;
+  }
+
   function startObserver() {
     if (observerStarted || !document.body) return;
     console.log("[OpenAnime Init] MutationObserver başlatılıyor...");
     if (window.MutationObserver) {
-      const observer = new MutationObserver(() => {
-        const isFullscreen = !!(
-          document.fullscreenElement || document.webkitFullscreenElement
-        );
-        if (isFullscreen) {
-          if (typeof forceVideoFullscreen === "function") forceVideoFullscreen();
-        } else {
-          applyZoom(getActiveZoom());
-          setupTauriWindow();
-          setupDragRegion();
-        }
+      var _oaRafToken = null;
+      const observer = new MutationObserver((mutations) => {
+        // [feedback loop fix] Kendi tauri elementlerimizdeki style değişikliklerini yoksay
+        if (_isTauriMutation(mutations)) return;
+        // [throttle] Aynı frame içinde birden fazla tetiklemeyi birleştir
+        if (_oaRafToken) return;
+        _oaRafToken = requestAnimationFrame(function () {
+          _oaRafToken = null;
+          const isFullscreen = !!(
+            document.fullscreenElement || document.webkitFullscreenElement
+          );
+          if (isFullscreen) {
+            if (typeof forceVideoFullscreen === "function") forceVideoFullscreen();
+          } else {
+            applyZoom(getActiveZoom());
+            setupTauriWindow();
+            setupDragRegion();
+          }
+        });
       });
       observer.observe(document.body, {
         childList: true,
@@ -118,7 +139,7 @@
         attributeFilter: ["style"],
       });
       observerStarted = true;
-      console.log("[OpenAnime Init] ✅ MutationObserver aktif");
+      console.log("[OpenAnime Init] ✅ MutationObserver aktif (feedback loop korumalı)");
     }
   }
 

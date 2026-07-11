@@ -259,20 +259,15 @@ const COMMON_INIT_SCRIPT: &str = concat!(
 
     // ──────────────────────────────────────────────
     // BLOK 9: TITLE BAR DÜZELTMESİ (sheet/modal)
-    // Sadece .sheet-content'i hedefler, siteyi bozmaz.
+    // Sabit CSS kullanılmaz — zoom-aware dinamik düzeltme
+    // window-controls.js içindeki fixSheetContent() ile yapılır.
+    // SADECE sheet-overlay fix'i kalıcı CSS olarak enjekte edilir.
     // ──────────────────────────────────────────────
     "(function(){\n",
     "try{\n",
     "var s=document.createElement('style');\n",
     "s.id='oa-titlebar-fix';\n",
     "s.textContent='",
-    // Panel 48px aşağı itilir (title bar'ın altına)
-    ".sheet-content{margin-top:48px!important;}",
-    // Scroll alanının max-height'i de 48px arttırılır (panelle birlikte aşağı indiği için
-    // alttaki 48px ekran dışı kalırdı, bu düzeltme ile alt seçeneklere de ulaşılır)
-    ".sheet-content [data-overlayscrollbars],",
-    ".sheet-content [data-overlayscrollbars-viewport]",
-    "{max-height:calc(-32px + 100vh)!important;}",
     ".sheet-overlay{top:0!important;height:100vh!important;}",
     "';\n",
     "if(document.head)document.head.appendChild(s);\n",
