@@ -86,6 +86,8 @@ jobs:
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly \
             gstreamer1.0-libav
+          echo "PKG_CONFIG=/usr/bin/pkg-config" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
 
       # Linux x64 için mold linker (linking ~%30 daha hızlı)
       - name: Install mold linker (Linux x64)
