@@ -575,12 +575,20 @@
         }
       }
     });
-    _obs.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["style"]
-    });
+    // documentElement hazır değilse bekle (tıpkı image-cache.js gibi)
+    function startObserver() {
+      if (document.documentElement) {
+        _obs.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["style"]
+        });
+      } else {
+        setTimeout(startObserver, 50);
+      }
+    }
+    startObserver();
 
     // Capture phase click handler (sadece bir kere eklenir)
     if (!window._localPlaceholderPatched) {
@@ -626,17 +634,9 @@
     // Buton dönüştürme — hemen uygula, MutationObserver DOM değişimlerinde tekrar çalışır
     patchPlaceholderButton();
   }
+// __TAURI__ kontrolü OLMADAN direkt başla (tıpkı Discord/Updater gibi)
+// Svelte DOM'u hemen hazır olmayabilir, ama MutationObserver bekler.
+init();
 
-  if (typeof __TAURI__ !== "undefined" && __TAURI__.core) {
-    init();
-  } else {
-    var waitForTauri = setInterval(function() {
-      if (typeof __TAURI__ !== "undefined" && __TAURI__.core) {
-        clearInterval(waitForTauri);
-        init();
-      }
-    }, 200);
-    setTimeout(function() { clearInterval(waitForTauri); }, 10000);
-  }
 
 })();
