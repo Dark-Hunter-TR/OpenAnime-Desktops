@@ -7,7 +7,7 @@ pub mod inner {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
-    use tauri::{Manager, WebviewWindow, WebviewWindowBuilder, WebviewUrl};
+    use tauri::{Manager, WebviewWindow, WebviewWindowBuilder, WebviewUrl, Emitter};
 
     // ─────────────────────────────────────────────────────────────────
     // ID allocation + generic registries
