@@ -1,5 +1,5 @@
 use wgpu::{Adapter, CompositeAlphaMode, Device, Instance, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, PresentMode, TextureUsages};
-use tauri::WebviewWindow;
+use tauri::Window;
 
 pub struct SurfaceManager {
     surface: Surface<'static>,
@@ -8,12 +8,12 @@ pub struct SurfaceManager {
 }
 
 impl SurfaceManager {
-    /// Creates a new surface for the given WebviewWindow.
+    /// Creates a new surface for the given window (webview'sız overlay).
     pub fn new(
         instance: &Instance,
         adapter: &Adapter,
         device: &Device,
-        window: &WebviewWindow,
+        window: &Window,
         vsync: bool,
     ) -> Result<Self, String> {
         let size = window.inner_size().map_err(|e| e.to_string())?;
