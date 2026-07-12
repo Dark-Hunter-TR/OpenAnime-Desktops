@@ -74,8 +74,20 @@ impl SurfaceManager {
     }
 
     /// Configures/recreates surface for a new size.
-    pub fn resize(&mut self, device: &Device, width: u32, height: u32) {
+    ///
+    /// Re-queries surface capabilities and re-selects `alpha_mode`/`present_mode`
+    /// from the fresh result before configuring. On Wayland (notably NVIDIA),
+    /// the capabilities reported by an early `get_capabilities()` call (e.g. in
+    /// `new()`, before the compositor has fully mapped the surface) can be wider
+    /// than what a later `configure()` actually validates against — reusing a
+    /// stale `alpha_mode` here caused a hard panic ("Requested alpha mode
+    /// PostMultiplied is not in the list of supported alpha modes: [Opaque]")
+    /// that aborted the whole process (`panic = "abort"`).
+    pub fn resize(&mut self, device: &Device, adapter: &Adapter, width: u32, height: u32) {
         if width > 0 && height > 0 {
+            let caps = self.surface.get_capabilities(adapter);
+            self.config.present_mode = Self::select_present_mode(&caps.present_modes, self.vsync);
+            self.config.alpha_mode = caps.alpha_modes[0];
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(device, &self.config);
