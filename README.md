@@ -169,7 +169,7 @@ bash <(curl -s https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Deskto
 
 | Dağıtım | Yöntem | İndirme |
 |---------|--------|---------|
-| **CachyOS / Arch / Manjaro / EndeavourOS** | Repodaki PKGBUILD ile binary kurulum | **~15 MB** |
+| **CachyOS / Arch / Manjaro / EndeavourOS** | `install.sh` ile release `.deb` tabanlı binary kurulum | **~15 MB** |
 | **Ubuntu / Debian / Mint / Pop!_OS** | `.deb` indir + `dpkg -i` | **~15 MB** |
 | **Fedora / RHEL** | `.rpm` indir + `dnf install` | **~15 MB** |
 | **Diğer (NixOS, Void, Solus, Gentoo)** | Release `.deb` içinden binary çıkar, yalnızca gerekirse AppImage | **~15–120 MB** |
@@ -197,15 +197,13 @@ chmod +x OpenAnime_*.AppImage
 
 #### 🗿 CachyOS / Arch Linux (Release `.deb` + launcher alias)
 
-AUR'a gitmez, doğrudan GitHub Releases'deki `.deb` paketini indirip açar ve `openanime-desktops` komutunu kurar:
+AUR'a gitmez; günlük kullanım için önerilen yol aşağıdaki tek komutlu kurulumdur. Bu yol GitHub Releases'deki `.deb` paketini indirip açar ve `openanime-desktops` komutunu kurar:
 
 ```bash
-git clone https://github.com/Dark-Hunter-TR/OpenAnime-Desktops.git
-cd OpenAnime-Desktops/packaging/arch
-makepkg -si    # 5 saniye, derleme yok!
+bash <(curl -s https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/install.sh)
 ```
 
-`PKGBUILD`, GitHub Releases'den hazır `.deb` binary'sini indirir, sistemde çalıştırılabilir komutu ve `openanime-desktops` alias'ını kurar. `pacman -R openanime-desktops` ile kaldırılır.
+Manuel paketleme yolunu tercih ederseniz, [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD) GitHub Releases'deki `.deb` paketini Arch bağımlılıklarıyla birlikte yerel bir pakete çevirir. `pacman -R openanime-desktops` ile kaldırılır.
 
 | Mimariler | Durum |
 |-----------|-------|
@@ -256,7 +254,7 @@ sudo dnf install https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/l
 |-------------|---------------|
 | "Tek komutla kur" | **`install.sh`** (otomatik algılama) |
 | "Hiçbir şey kurmak istemiyorum" | **AppImage** (çalıştır ve kullan) |
-| CachyOS / Arch kullanıyorum | **`makepkg -si`** (binary, 5 sn) |
+| CachyOS / Arch kullanıyorum | **`install.sh`** (otomatik algılama) |
 | Debian / Ubuntu | **`.deb`** (sistem paket yöneticisi) |
 | Fedora / RHEL | **`.rpm`** (sistem paket yöneticisi) |
 | Sandbox güvenliği | **Flatpak** *(hazır değil)* |
@@ -270,7 +268,7 @@ sudo dnf install https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/l
 | --- | --- | --- | --- |
 | 🪟 **Windows** | ✅ Tam destek | `.exe` (NSIS) | GitHub Actions ile otomatik derlenir |
 | 🍎 **macOS** | ✅ Tam destek | `.dmg` | Apple Silicon + Intel, evrensel binary |
-| 🐧 **Linux** | 🧪 Aktif geliştirme | `AppImage`, `.deb`, `.rpm`, `PKGBUILD` (binary), `install.sh` | Aşağıdaki "Linux Desteği" bölümüne bakınız |
+| 🐧 **Linux** | 🧪 Aktif geliştirme | `install.sh`, `.deb`, `.rpm`, `AppImage`, `Arch PKGBUILD` | Aşağıdaki "Linux Desteği" bölümüne bakınız |
 
 ### 🐧 Linux Desteği (Deneysel)
 
@@ -279,7 +277,7 @@ Linux desteği, Tauri'nin bu platformda **webkit2gtk** kullanmasından kaynaklan
 - **WebGPU kısıtı:** webkit2gtk henüz production-ready bir WebGPU implementasyonu sunmadığından, Windows/macOS'taki WebGPU hızlandırmalı render yolu Linux'ta doğrudan kullanılamıyor.
 - **Yayın stratejisi:** Bu nedenle Linux sürümünde video akışı webview içinde HLS.js/dash.js ile karşılanıyor; yerel dosya oynatma (local file playback) şimdilik Linux'ta devre dışı bırakıldı.
 - **Yol haritası:** Uzun vadede webview'dan bağımsız, **wgpu (Vulkan) + GStreamer** tabanlı native bir render/oynatma hattı planlanıyor.
-- **Paketleme:** `AppImage`, `.deb`, `.rpm`, **AUR (PKGBUILD)** ve kendi repomuzdan **Flatpak** ile dağıtım yapılmaktadır.
+- **Paketleme:** `AppImage`, `.deb`, `.rpm` ve repo içindeki **Arch PKGBUILD** mevcuttur; **Flatpak** altyapısı ise henüz hazır değildir.
 
 > Linux tarafında katkı/test isteyenler için Issues sekmesi açıktır; webkit2gtk kaynaklı davranış farkları (ör. splash ekranı, tam ekran yönetimi) bilinen konular arasındadır.
 
