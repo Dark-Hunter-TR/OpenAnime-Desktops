@@ -243,21 +243,6 @@ pub enum WebGpuStatus {
 }
 
 impl WebGpuStatus {
-    pub fn is_functional(&self) -> bool {
-        matches!(self, WebGpuStatus::NativeOk | WebGpuStatus::BridgeOk | WebGpuStatus::SoftwareFallback)
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            WebGpuStatus::NativeOk => "Native WebGPU (OK)",
-            WebGpuStatus::BridgeOk => "wgpu Bridge (OK)",
-            WebGpuStatus::SoftwareFallback => "Software Fallback",
-            WebGpuStatus::AdapterFailed => "Adapter Başlatılamadı",
-            WebGpuStatus::DeviceFailed => "Device Oluşturulamadı",
-            WebGpuStatus::NoNavigatorGpu => "navigator.gpu Yok",
-            WebGpuStatus::Unsupported => "Desteklenmiyor",
-        }
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -418,40 +403,16 @@ impl LogEntry {
 // NvidiaDriverType
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NvidiaDriverType {
-    Proprietary,
-    Nouveau,
-    NotNvidia,
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AmdDriverType
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AmdDriverType {
-    /// Mesa RADV (open-source, önerilen)
-    Radv,
-    /// AMD resmi AMDVLK sürücüsü
-    AmdVlk,
-    /// Bilinmeyen AMD sürücüsü
-    Unknown,
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IntelDriverType
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum IntelDriverType {
-    /// Mesa ANV (Anvil — Vulkan)
-    Anv,
-    /// Mesa i965/iris (OpenGL)
-    Mesa,
-    /// Bilinmeyen Intel sürücüsü
-    Unknown,
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Linux Distribution

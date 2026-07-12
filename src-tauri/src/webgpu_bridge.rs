@@ -91,7 +91,6 @@ pub mod inner {
         EndRenderPass,
         CopyBufferToTexture { src: u64, dst_texture: u64, bytes_per_row: u32, width: u32, height: u32 },
         CopyTextureToTexture { src: u64, dst: u64, width: u32, height: u32 },
-        WriteTimestamp,
     }
 
     #[derive(Default)]
@@ -104,7 +103,7 @@ pub mod inner {
     // ─────────────────────────────────────────────────────────────────
 
     pub struct BridgeState {
-        instance: Arc<wgpu::Instance>,
+        instance: &'static wgpu::Instance,
         adapter: Option<Arc<wgpu::Adapter>>,
         device: Option<Arc<wgpu::Device>>,
         queue: Option<Arc<wgpu::Queue>>,
@@ -116,12 +115,8 @@ pub mod inner {
     fn bridge() -> &'static Mutex<BridgeState> {
         BRIDGE.get_or_init(|| {
             Mutex::new(BridgeState {
-                // Panik-korumalı: bozuk EGL'de GL backend'i init'te çökebiliyor
-                // (khronos-egl unwrap None) — sahada splash'ta sonsuz takılma
-                // olarak görülüyordu.
-                instance: Arc::new(crate::gpu::create_instance_safe(
-                    wgpu::Backends::VULKAN | wgpu::Backends::GL,
-                )),
+                // Uygulama geneli paylaşılan instance (panik-korumalı, tek sefer).
+                instance: crate::gpu::shared_instance(),
                 adapter: None,
                 device: None,
                 queue: None,
@@ -323,7 +318,7 @@ pub mod inner {
             // runtime requires.
             let instance_clone = {
                 let state = lock();
-                state.instance.clone()
+                state.instance
             };
             let fallback_opt = instance_clone.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::None,
@@ -1273,7 +1268,6 @@ pub mod inner {
                         wgpu::Extent3d { width: *width, height: *height, depth_or_array_layers: 1 },
                     );
                 }
-                RecordedOp::WriteTimestamp => {}
                 _ => return Err("Op encountered outside of any pass".into()),
             }
             i += 1;

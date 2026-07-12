@@ -249,6 +249,11 @@ jobs:
           rm -f squashfs-root/usr/lib/libwayland-*.so*
           rm -f squashfs-root/usr/lib/libdrm.so*
           rm -f squashfs-root/usr/lib/libglapi.so*
+
+          # Host ses yığınıyla (jack/pipewire) çakışan, video ile ilgisiz
+          # GStreamer eklentileri (plugin scanner uyarı gürültüsü kaynağı)
+          rm -f squashfs-root/usr/lib/gstreamer-1.0/libgstfluidsynthmidi.so
+          rm -f squashfs-root/usr/lib/gstreamer-1.0/libgstjack.so
           
           # Find or download appimagetool
           APPIMAGETOOL_PATH="$HOME/.cache/tauri/appimagetool"

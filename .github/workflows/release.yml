@@ -184,6 +184,12 @@ jobs:
           rm -f squashfs-root/usr/lib/libwayland-*.so*
           rm -f squashfs-root/usr/lib/libdrm.so*
           rm -f squashfs-root/usr/lib/libglapi.so*
+
+          # Video ile ilgisiz, host ses yığını (jack/pipewire) ile çakışan
+          # GStreamer eklentilerini çıkar — plugin scanner'da
+          # "undefined symbol: pw_log_topic_register" gürültüsünün kaynağı.
+          rm -f squashfs-root/usr/lib/gstreamer-1.0/libgstfluidsynthmidi.so
+          rm -f squashfs-root/usr/lib/gstreamer-1.0/libgstjack.so
           
           # Find or download appimagetool
           APPIMAGETOOL_PATH="$HOME/.cache/tauri/appimagetool"
