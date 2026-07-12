@@ -44,6 +44,7 @@ pub async fn resolve_dns_doh(domain: &str) -> Option<IpAddr> {
 
 /// Uzak proxy olarak Cloudflare Worker / Reverse Proxy bağlantısını dener.
 /// DPI engellerinin yanı sıra coğrafi/yurt dışı IP engellerini aşmak için tasarlanmıştır.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub async fn try_remote_proxy_connection() -> Result<(), String> {
     println!("[Remote Proxy] Cloudflare Worker reverse proxy fallback deneniyor...");
 

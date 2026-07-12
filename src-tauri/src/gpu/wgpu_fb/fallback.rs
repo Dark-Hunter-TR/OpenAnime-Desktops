@@ -49,22 +49,6 @@ pub fn activate_fallback(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 /// Fallback'i deaktive eder (örn. driver güncellendikten sonra).
-pub fn deactivate_fallback(app: &tauri::AppHandle) -> Result<(), String> {
-    use tauri::Emitter;
-
-    if !FALLBACK_ACTIVE.load(Ordering::Relaxed) {
-        return Ok(());
-    }
-
-    FALLBACK_ACTIVE.store(false, Ordering::Relaxed);
-
-    app.emit("openanime://webgpu-fallback-active", serde_json::json!({
-        "active": false,
-        "reason": "wgpu bridge deaktive edildi"
-    })).map_err(|e| format!("Fallback deactivate event hatası: {}", e))?;
-
-    Ok(())
-}
 
 /// Tauri komutu: frontend'den fallback durumunu sorgular.
 #[tauri::command]
