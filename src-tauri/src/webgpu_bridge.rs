@@ -116,10 +116,12 @@ pub mod inner {
     fn bridge() -> &'static Mutex<BridgeState> {
         BRIDGE.get_or_init(|| {
             Mutex::new(BridgeState {
-                instance: Arc::new(wgpu::Instance::new(wgpu::InstanceDescriptor {
-                    backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
-                    ..Default::default()
-                })),
+                // Panik-korumalı: bozuk EGL'de GL backend'i init'te çökebiliyor
+                // (khronos-egl unwrap None) — sahada splash'ta sonsuz takılma
+                // olarak görülüyordu.
+                instance: Arc::new(crate::gpu::create_instance_safe(
+                    wgpu::Backends::VULKAN | wgpu::Backends::GL,
+                )),
                 adapter: None,
                 device: None,
                 queue: None,

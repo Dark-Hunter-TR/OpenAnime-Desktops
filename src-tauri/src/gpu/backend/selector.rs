@@ -103,11 +103,8 @@ async fn try_vulkan_backend() -> bool {
         return false;
     }
 
-    // wgpu Vulkan adapter dene
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        ..Default::default()
-    });
+    // wgpu Vulkan adapter dene (panik-korumalı)
+    let instance = crate::gpu::create_instance_safe(wgpu::Backends::VULKAN);
 
     let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN);
     if !adapters.is_empty() {
@@ -127,10 +124,9 @@ async fn try_vulkan_backend() -> bool {
 
 #[cfg(target_os = "linux")]
 async fn try_opengl_backend() -> bool {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::GL,
-        ..Default::default()
-    });
+    // Panik-korumalı: bozuk EGL'de GL init çöker; helper boş sete düşer ve
+    // request_adapter None döndürerek bu fonksiyonun false dönmesini sağlar.
+    let instance = crate::gpu::create_instance_safe(wgpu::Backends::GL);
 
     instance
         .request_adapter(&wgpu::RequestAdapterOptions {

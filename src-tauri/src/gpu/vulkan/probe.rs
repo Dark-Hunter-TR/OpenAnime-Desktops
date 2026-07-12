@@ -76,12 +76,8 @@ pub mod inner {
         }
 
         // ── ADIM 4: wgpu Instance oluştur ─────────────────────────────────
-        // Sadece Vulkan backend — GL ile karıştırmıyoruz
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            flags: wgpu::InstanceFlags::default(),
-            ..Default::default()
-        });
+        // Sadece Vulkan backend — GL ile karıştırmıyoruz (panik-korumalı)
+        let instance = crate::gpu::create_instance_safe(wgpu::Backends::VULKAN);
 
         steps.push(VulkanProbeStep::success("Instance Create", "wgpu Vulkan instance oluşturuldu"));
 

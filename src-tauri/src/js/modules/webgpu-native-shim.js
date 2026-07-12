@@ -156,7 +156,15 @@
 
     async _requestAdapterUncached(options) {
       try {
-        const info = await window.__TAURI__.core.invoke("gpu_request_adapter", { options });
+        // Güvenlik ağı: Rust tarafındaki komut herhangi bir nedenle hiç
+        // yanıt veremezse (ör. sürücü init'inde takılma) site splash
+        // ekranında sonsuza dek beklememeli — 15 sn sonra adaptersiz devam.
+        const info = await Promise.race([
+          window.__TAURI__.core.invoke("gpu_request_adapter", { options }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject("gpu_request_adapter zaman aşımı (15s)"), 15000)
+          )
+        ]);
         if (info && info.is_software_adapter) {
           window.__IS_SOFTWARE_ADAPTER__ = true;
           console.warn("[WebGPU Shim] Software adapter detected. 4K upscaling and native player will be disabled.");
