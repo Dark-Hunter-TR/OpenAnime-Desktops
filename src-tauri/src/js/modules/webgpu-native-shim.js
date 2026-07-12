@@ -91,17 +91,22 @@
     constructor(info) {
       this.__id = info.id;
       this.name = info.name;
-      this.features = new Set();
-      this.limits = {};
+      // Rust tarafı (webgpu_bridge.rs) artık gerçek wgpu::Features/Limits'i
+      // WebGPU spec adlarıyla (kebab-case feature, camelCase limit) taşıyor —
+      // önceden bu her zaman boş Set()/{} idi, bu yüzden site tarafındaki
+      // `adapter.features.has(...)` / `adapter.limits.x` kontrolleri hep
+      // başarısız oluyordu.
+      this.features = new Set(info.features ?? []);
+      this.limits = { ...(info.limits ?? {}) };
       this.isFallbackAdapter = info.is_fallback_adapter;
     }
     async requestDevice(descriptor) {
       try {
-        const deviceId = await window.__TAURI__.core.invoke("gpu_request_device", {
+        const deviceInfo = await window.__TAURI__.core.invoke("gpu_request_device", {
           adapterId: this.__id,
           descriptor
         });
-        return new GPUDevice(deviceId, this);
+        return new GPUDevice(deviceInfo, this);
       } catch (e) {
         console.error("[WebGPU Shim] requestDevice failed:", e);
         throw e;
@@ -110,12 +115,12 @@
   }
 
   class GPUDevice {
-    constructor(id, adapter) {
-      this.__id = id;
+    constructor(info, adapter) {
+      this.__id = info.id;
       this.adapter = adapter;
       this.queue = new GPUQueue(this);
-      this.features = new Set();
-      this.limits = {};
+      this.features = new Set(info.features ?? []);
+      this.limits = { ...(info.limits ?? {}) };
       this.lost = new Promise(() => {});
       this.__lastShaderUsedExternal = false;
       this.__externalTextureCache = new Map(); // videoElement -> { texture, textureView, width, height }
