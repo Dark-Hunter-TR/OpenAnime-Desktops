@@ -317,7 +317,10 @@ pub mod inner {
                 &wgpu::DeviceDescriptor {
                     label: Some("vulkan_probe_device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downgraded(),
+                    // wgpu 22'de Limits::downgraded() yok; downlevel_defaults()
+                    // zayıf donanım (llvmpipe dahil) tarafından da desteklenen
+                    // muhafazakâr limit setidir — probe'un amacına uygundur.
+                    required_limits: wgpu::Limits::downlevel_defaults(),
                     memory_hints: wgpu::MemoryHints::Performance,
                 },
                 None,
@@ -336,9 +339,8 @@ pub mod inner {
     }
 
     fn check_swapchain_support(adapter: &wgpu::Adapter, steps: &mut Vec<VulkanProbeStep>) -> bool {
-        let features = adapter.features();
-        // wgpu'da swapchain her Vulkan adapter'ın desteklemesi beklenir
-        // Surface extension eksikliğini feature flag ile kontrol et
+        // wgpu'da swapchain desteği adapter backend'inden çıkarılır;
+        // Vulkan adapter'larda swapchain extension'ı beklenir.
         let info = adapter.get_info();
         if info.backend == wgpu::Backend::Vulkan {
             steps.push(VulkanProbeStep::success("Swapchain", "Vulkan swapchain destekleniyor"));

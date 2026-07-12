@@ -22,7 +22,6 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::gpu::diagnostics::types::*;
-use crate::gpu::diagnostics::report::*;
 
 /// Linux GPU algılama sonucu (ham veri, henüz rapor haline getirilmemiş).
 pub struct LinuxGpuDetection {

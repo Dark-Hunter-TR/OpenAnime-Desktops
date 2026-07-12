@@ -300,8 +300,9 @@ async fn try_get_wgpu_adapter_info(
         GpuBackend::Vulkan => wgpu::Backends::VULKAN,
         GpuBackend::OpenGL => wgpu::Backends::GL,
         GpuBackend::Metal => wgpu::Backends::METAL,
-        GpuBackend::Direct3D12 => wgpu::Backends::DX12,
-        GpuBackend::Direct3D11 => wgpu::Backends::DX11,
+        // wgpu 22'de ayrı bir DX11 backend'i yok (yalnızca DX12). Bu fonksiyon
+        // zaten Linux'a özgüdür; D3D kolları pratikte hiç seçilmez.
+        GpuBackend::Direct3D12 | GpuBackend::Direct3D11 => wgpu::Backends::DX12,
         _ => wgpu::Backends::all(),
     };
 

@@ -375,38 +375,6 @@ async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), Strin
     build_new_window(&app, url)
 }
 
-/// GPU Tanılama penceresini açar. Zaten açıksa öne getirir.
-/// Yerel SvelteKit sayfası (build/gpu-diagnostics.html) yüklenir; sayfa
-/// `gpu_full_report` komutunu invoke ederek raporu gösterir.
-#[tauri::command]
-async fn open_gpu_diagnostics(app: tauri::AppHandle) -> Result<(), String> {
-    // Zaten açık bir tanı penceresi varsa yenisini açma, mevcut olanı öne getir.
-    if let Some(existing) = app.get_webview_window("gpu-diagnostics") {
-        existing
-            .set_focus()
-            .map_err(|e| format!("Tanı penceresi öne getirilemedi: {}", e))?;
-        return Ok(());
-    }
-
-    let win_builder = WebviewWindowBuilder::new(
-        &app,
-        "gpu-diagnostics",
-        WebviewUrl::App("gpu-diagnostics.html".into()),
-    )
-    .title("GPU Tanılama")
-    .inner_size(1000.0, 760.0)
-    .min_inner_size(680.0, 520.0)
-    .center()
-    .resizable(true);
-
-    win_builder
-        .build()
-        .map(|_| {
-            println!("[Tauri] GPU Tanılama penceresi açıldı");
-        })
-        .map_err(|e| format!("GPU Tanılama penceresi oluşturulamadı: {}", e))
-}
-
 #[tauri::command]
 fn set_zoom_level(state: tauri::State<'_, ZoomState>, level: f64) -> Result<(), String> {
     let mut zoom = state.level.lock().map_err(|e| e.to_string())?;
@@ -1314,7 +1282,6 @@ pub fn run() {
             gpu::gpu_refresh_report,
             gpu::gpu_fallback_status,
             gpu::gpu_activate_fallback,
-            open_gpu_diagnostics,
             logger::get_session_log,
             updater::get_app_version,
             updater::check_for_updates,
