@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use wgpu::{Adapter, Instance, InstanceDescriptor, Backends, Device, Queue, Sampler, SamplerDescriptor, AddressMode, FilterMode, TextureFormat, TextureUsages, CommandEncoderDescriptor};
-use tauri::WebviewWindow;
+use tauri::Window;
 
 use super::adapter::select_adapter;
 use super::device::create_device_and_queue;
@@ -49,7 +49,7 @@ pub struct WebGpuRenderer {
 }
 
 impl WebGpuRenderer {
-    pub async fn new(window: WebviewWindow, vsync: bool) -> Result<Self, String> {
+    pub async fn new(window: Window, vsync: bool) -> Result<Self, String> {
         // Create WGPU Instance
         let instance = Instance::new(InstanceDescriptor {
             backends: Backends::VULKAN | Backends::GL,

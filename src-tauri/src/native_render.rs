@@ -2,7 +2,7 @@
 pub mod inner {
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use tauri::{Emitter, Manager, WebviewWindow, WebviewWindowBuilder, WebviewUrl};
+    use tauri::{Emitter, Manager, WebviewWindow, Window, window::WindowBuilder};
     use crate::video_decode::inner::GstPlayer;
     use crate::renderer::WebGpuRenderer;
 
@@ -11,7 +11,7 @@ pub mod inner {
     }
 
     impl RenderState {
-        pub async fn new(window: WebviewWindow) -> Result<Self, String> {
+        pub async fn new(window: Window) -> Result<Self, String> {
             // Initialize the WebGpuRenderer with VSync enabled
             let renderer = WebGpuRenderer::new(window, true).await?;
             Ok(Self { renderer })
@@ -34,7 +34,7 @@ pub mod inner {
     pub struct NativePlayerManager {
         pub player: Option<GstPlayer>,
         pub render_state: Option<Arc<Mutex<RenderState>>>,
-        pub overlay_window: Option<WebviewWindow>,
+        pub overlay_window: Option<Window>,
         pub teardown_thread: Option<std::thread::JoinHandle<()>>,
     }
 
@@ -92,25 +92,26 @@ pub mod inner {
         }
 
         // 2. Build the transparent, borderless overlay window ON THE MAIN
-        // THREAD. WebviewWindowBuilder::build() touches GTK/X11 internals
-        // and must never run from a Tokio worker thread.
-        let (window_tx, window_rx) = tokio::sync::oneshot::channel::<Result<WebviewWindow, String>>();
+        // THREAD. Window building touches GTK/X11 internals and must never
+        // run from a Tokio worker thread.
+        //
+        // Webview'sız düz pencere kullanılır: wgpu'nun tek ihtiyacı bir raw
+        // window handle. Önceden her overlay tam bir WebKit webview başlatıp
+        // bundled frontend'i yüklüyordu (~100 MB israf + webkit 2.44+
+        // renderer bug'larına ekstra maruziyet).
+        let (window_tx, window_rx) = tokio::sync::oneshot::channel::<Result<Window, String>>();
         let (realize_tx, realize_rx) = tokio::sync::oneshot::channel::<()>();
         let realize_tx = Arc::new(Mutex::new(Some(realize_tx)));
 
         let app_for_build = app.clone();
         app.run_on_main_thread(move || {
-            let build_result = WebviewWindowBuilder::new(
-                &app_for_build,
-                "gst_overlay",
-                WebviewUrl::default(),
-            )
-            .title("Video Overlay")
-            .decorations(false)
-            .transparent(true)
-            .shadow(false)
-            .always_on_top(true)
-            .build();
+            let build_result = WindowBuilder::new(&app_for_build, "gst_overlay")
+                .title("Video Overlay")
+                .decorations(false)
+                .transparent(true)
+                .shadow(false)
+                .always_on_top(true)
+                .build();
 
             match build_result {
                 Ok(overlay) => {
@@ -219,6 +220,7 @@ pub mod inner {
         // buffer in the next frame. This completely removes allocation churn
         // and fixes UI stuttering/lag on Linux.
         let rs_ref = render_state_shared.clone();
+        let main_window_for_thread = main_window.clone();
         let mut local_frame_data = Vec::new();
 
         thread::spawn(move || {
@@ -262,8 +264,27 @@ pub mod inner {
                     rs.prepare_and_submit()
                 };
 
-                if let Ok(output) = presentation_result {
-                    output.present();
+                match presentation_result {
+                    Ok(output) => output.present(),
+                    // Lost/Outdated: prepare_and_submit içindeki tek seferlik
+                    // reconfigure+retry de başarısız olmuş demektir — bir
+                    // sonraki karede yeniden dene, kareyi atla.
+                    Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+                        eprintln!("[Native Render] Surface lost/outdated, frame skipped; retrying next frame.");
+                    }
+                    Err(wgpu::SurfaceError::Timeout) => {
+                        eprintln!("[Native Render] Surface timeout, frame skipped.");
+                    }
+                    // OutOfMemory kurtarılamaz: HTML5 player'a temiz geçiş yap
+                    // ve render döngüsünden çık.
+                    Err(wgpu::SurfaceError::OutOfMemory) => {
+                        eprintln!("[Native Render] Surface out of memory — falling back to HTML5 player.");
+                        let _ = main_window_for_thread.emit(
+                            "openanime://gst-fallback",
+                            "GPU out of memory".to_string(),
+                        );
+                        return;
+                    }
                 }
             }
         });
