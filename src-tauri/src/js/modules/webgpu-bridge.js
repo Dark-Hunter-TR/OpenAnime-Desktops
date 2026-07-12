@@ -5,8 +5,15 @@
 
   let currentVideoUrl = "";
   let isWebGpuEnabled = false;
-  let is4kActive = true; // Enabled by default on Linux
+  // Native player OPT-IN'dir: varsayılan kapalı. Önceden true idi ve sitenin
+  // kendi WebGPU pipeline'ı ile AYNI ANDA çalışıyordu (çift pipeline: siyah
+  // ekran, ses/video senkron kopması, lag). Kullanıcı sitedeki 4K/upscale
+  // ayarını açınca checkLocalStorageKey bunu aktifleştirir.
+  let is4kActive = false;
   let lastState = false;
+
+  // Overlay konumlandırma yoksa (saf Wayland) native player tamamen kapalı.
+  const overlaysOk = window.__OA_OVERLAY_OK__ !== false;
 
   let lastBounds = { x: 0, y: 0, width: 0, height: 0, windowWidth: 0, windowHeight: 0 };
   let syncTimeout = null;
@@ -15,7 +22,7 @@
   function updateNativeState() {
     if (!isLinux) return;
 
-    let shouldBeActive = isWebGpuEnabled && is4kActive && currentVideoUrl;
+    let shouldBeActive = overlaysOk && isWebGpuEnabled && is4kActive && currentVideoUrl;
 
     if (shouldBeActive && window.__IS_SOFTWARE_ADAPTER__) {
       shouldBeActive = false;
@@ -30,6 +37,9 @@
     if (shouldBeActive !== lastState) {
       lastState = shouldBeActive;
       window.__NATIVE_PLAYER_ACTIVE__ = shouldBeActive;
+      // Shim'e tek-pipeline sinyali: native aktifleşince canvas overlay'leri
+      // yıkılır (webgpu-native-shim.js "oa-native-state" dinleyicisi).
+      window.dispatchEvent(new CustomEvent("oa-native-state", { detail: { active: !!shouldBeActive } }));
       console.log("[WebGPU Bridge] State change: active =", shouldBeActive, "url =", currentVideoUrl);
       
       const video = document.querySelector("video");

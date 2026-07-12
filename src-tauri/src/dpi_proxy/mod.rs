@@ -196,6 +196,8 @@ impl DpiProxyManager {
     }
 
     /// Uzak proxy fallback adımını dener
+    // Windows DPI arka plan akışında kullanılır (cfg(windows)); Linux'ta ölü görünür.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub async fn try_remote_proxy_fallback(&self, _app: &tauri::AppHandle) -> Result<(), String> {
         println!("[DPI Proxy] Uzak proxy fallback deneniyor...");
         *self.connection_stage.lock().await = "trying_proxy".to_string();
@@ -236,31 +238,12 @@ impl DpiProxyManager {
         }
     }
 
-    /// Proxy ayarlarını sıfırla (frontend için)
-    pub async fn reset_settings(&self, app: &tauri::AppHandle) {
-        let mut settings = self.settings.lock().await;
-        *settings = GoodbyeSettings::default();
-        settings.save(app);
-    }
 }
 
 // ===== Tauri Komutları =====
-
-#[tauri::command]
-pub async fn dpi_start_proxy(
-    app: tauri::AppHandle,
-    method_id: u32,
-) -> Result<(), String> {
-    let state = app.state::<DpiProxyManager>();
-    state.start_proxy(&app, method_id).await
-}
-
-#[tauri::command]
-pub async fn dpi_stop_proxy(app: tauri::AppHandle) -> Result<(), String> {
-    let state = app.state::<DpiProxyManager>();
-    state.stop_proxy(&app).await;
-    Ok(())
-}
+// (dpi_start_proxy/dpi_stop_proxy/dpi_check_connection/dpi_reset_settings/
+//  dpi_get_methods kaldırıldı — hiçbir JS/frontend'ten çağrılmıyordu; proxy
+//  yaşam döngüsü lib.rs setup arka plan akışından yönetiliyor.)
 
 #[tauri::command]
 pub async fn dpi_test_methods(app: tauri::AppHandle) -> Result<Option<u32>, String> {
@@ -272,28 +255,6 @@ pub async fn dpi_test_methods(app: tauri::AppHandle) -> Result<Option<u32>, Stri
 pub async fn dpi_get_status(app: tauri::AppHandle) -> Result<DpiStatus, String> {
     let state = app.state::<DpiProxyManager>();
     Ok(state.get_status().await)
-}
-
-#[tauri::command]
-pub async fn dpi_check_connection(
-    app: tauri::AppHandle,
-    use_proxy: Option<bool>,
-) -> Result<ConnectionResult, String> {
-    let state = app.state::<DpiProxyManager>();
-    Ok(state.check_connection_detailed(use_proxy.unwrap_or(false)).await)
-}
-
-#[tauri::command]
-pub async fn dpi_reset_settings(app: tauri::AppHandle) -> Result<(), String> {
-    let state = app.state::<DpiProxyManager>();
-    state.reset_settings(&app).await;
-    Ok(())
-}
-
-// Static listeyi döndür — serileştirilebilir versiyon
-#[tauri::command]
-pub async fn dpi_get_methods() -> Result<Vec<DpiMethod>, String> {
-    Ok(methods::ALL_METHODS.to_vec())
 }
 
 // ===== İç Yardımcılar =====

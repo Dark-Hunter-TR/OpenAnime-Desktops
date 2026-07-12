@@ -24,6 +24,7 @@ use std::process::Command;
 use crate::gpu::diagnostics::types::*;
 
 /// Linux GPU algılama sonucu (ham veri, henüz rapor haline getirilmemiş).
+#[derive(Clone)]
 pub struct LinuxGpuDetection {
     pub vendor: GpuVendor,
     pub renderer: String,
@@ -41,14 +42,22 @@ pub struct LinuxGpuDetection {
     pub intel_driver: Option<String>,
     pub vaapi_supported: bool,
     pub dmabuf_supported: bool,
-    pub distro: LinuxDistro,
     pub pkg_manager: String,
     pub has_pkexec: bool,
     pub log: Vec<LogEntry>,
 }
 
 /// Linux GPU algılamasını çalıştırır. Her adım hata toleranslıdır.
+///
+/// Sonuç önbelleğe alınır: tespit process spawn (lspci/glxinfo) ve dosya
+/// taraması içerir; önceden her tanılama çağrısında baştan koşuyordu
+/// (açılış gecikmesi + lag katkısı). Donanım uygulama ömrü içinde değişmez.
 pub fn detect() -> LinuxGpuDetection {
+    static CACHE: std::sync::OnceLock<LinuxGpuDetection> = std::sync::OnceLock::new();
+    CACHE.get_or_init(detect_uncached).clone()
+}
+
+fn detect_uncached() -> LinuxGpuDetection {
     let mut log = Vec::new();
 
     // ── 1. Display server tespiti ────────────────────────────────────────
@@ -110,7 +119,6 @@ pub fn detect() -> LinuxGpuDetection {
         intel_driver,
         vaapi_supported,
         dmabuf_supported,
-        distro,
         pkg_manager,
         has_pkexec,
         log,
@@ -157,8 +165,25 @@ fn detect_display_server(log: &mut Vec<LogEntry>) -> DisplayServer {
 // PCI Bilgileri ve Vendor Tespiti
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Bir GPU vendor'ının hibrit sistemdeki tercih önceliği (yüksek = birincil).
+/// Hedef: dGPU her zaman iGPU'ya tercih edilir; NVIDIA dGPU'lar en yaygın
+/// hibrit senaryodur (AMD/Intel iGPU + NVIDIA dGPU laptop'lar).
+fn vendor_priority(v: &GpuVendor) -> u8 {
+    match v {
+        GpuVendor::Nvidia => 4,
+        GpuVendor::Amd => 3,
+        GpuVendor::Intel => 2,
+        GpuVendor::VirtIo | GpuVendor::Vmware => 1,
+        _ => 0,
+    }
+}
+
 fn detect_pci_info(log: &mut Vec<LogEntry>) -> (GpuVendor, Option<String>, Option<String>, String) {
-    // Önce /sys/class/drm üzerinden deneriz (kernel doğrudan sağlar)
+    // Önce /sys/class/drm üzerinden TÜM kartları topla (kernel doğrudan sağlar).
+    // ÖNCEKİ HATA: döngü İLK kartta return ediyordu — hibrit laptop'larda
+    // card0 genelde iGPU olduğundan (ör. AMD iGPU + NVIDIA RTX 3050) vendor
+    // yanlış raporlanıyor ve NVIDIA'ya özel düzeltmeler atlanıyordu.
+    let mut found: Vec<(GpuVendor, String, Option<String>, bool)> = Vec::new();
     if let Ok(entries) = fs::read_dir("/sys/class/drm") {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -169,27 +194,49 @@ fn detect_pci_info(log: &mut Vec<LogEntry>) -> (GpuVendor, Option<String>, Optio
 
             let base_path = entry.path();
 
-            // vendor
-            let vendor_path = base_path.join("device/vendor");
-            let vendor_hex = match fs::read_to_string(&vendor_path) {
+            let vendor_hex = match fs::read_to_string(base_path.join("device/vendor")) {
                 Ok(v) => v.trim().to_lowercase(),
                 Err(_) => continue,
             };
-
-            // device
             let device_hex = fs::read_to_string(base_path.join("device/device"))
                 .map(|s| s.trim().to_lowercase())
                 .ok();
+            // boot_vga=1 tipik olarak sistemin açılış (genelde entegre) GPU'su.
+            let boot_vga = fs::read_to_string(base_path.join("device/boot_vga"))
+                .map(|s| s.trim() == "1")
+                .unwrap_or(false);
 
             if let Some(vendor_enum) = GpuVendor::from_pci_vendor_hex(&vendor_hex) {
-                let renderer = build_renderer_string_from_vendor(&vendor_enum, &device_hex);
-                log.push(LogEntry::ok_detail("PCI Vendor", format!("{} ({})", vendor_enum.as_str(), &vendor_hex)));
-                if let Some(ref dev) = device_hex {
-                    log.push(LogEntry::ok_detail("PCI Device ID", dev));
-                }
-                return (vendor_enum, Some(vendor_hex), device_hex, renderer);
+                found.push((vendor_enum, vendor_hex, device_hex, boot_vga));
             }
         }
+    }
+
+    if !found.is_empty() {
+        // Tüm GPU'ları logla (hibrit sistem görünürlüğü)
+        for (v, hex, dev, boot) in &found {
+            log.push(LogEntry::ok_detail(
+                "GPU",
+                format!(
+                    "{} ({}{}{})",
+                    v.as_str(),
+                    hex,
+                    dev.as_deref().map(|d| format!(", dev:{}", d)).unwrap_or_default(),
+                    if *boot { ", boot_vga" } else { "" }
+                ),
+            ));
+        }
+
+        // Birincil seçim: vendor önceliği; eşitlikte boot_vga=0 (discrete) tercih.
+        found.sort_by(|a, b| {
+            vendor_priority(&b.0)
+                .cmp(&vendor_priority(&a.0))
+                .then(a.3.cmp(&b.3)) // boot_vga=false önce
+        });
+        let (vendor_enum, vendor_hex, device_hex, _) = found.remove(0);
+        let renderer = build_renderer_string_from_vendor(&vendor_enum, &device_hex);
+        log.push(LogEntry::ok_detail("Birincil GPU", vendor_enum.as_str()));
+        return (vendor_enum, Some(vendor_hex), device_hex, renderer);
     }
 
     // Fallback: lspci çıktısını parse et
@@ -631,14 +678,6 @@ pub fn find_vulkan_icd_files() -> Vec<String> {
 }
 
 /// Renderer string'den yazılımsal renderer olup olmadığını tespit eder.
-pub fn is_software_renderer(renderer: &str) -> bool {
-    let lower = renderer.to_lowercase();
-    lower.contains("llvmpipe")
-        || lower.contains("softpipe")
-        || lower.contains("swiftshader")
-        || lower.contains("software")
-        || lower.contains("cpu")
-}
 
 /// Renderer string'den GpuVendor refinement'ı yapar.
 /// llvmpipe/SwiftShader gibi yazılımsal renderer'ları özel vendor'a taşır.

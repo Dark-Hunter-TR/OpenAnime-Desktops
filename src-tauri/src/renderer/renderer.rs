@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use wgpu::{Adapter, Backends, Device, Queue, Sampler, SamplerDescriptor, AddressMode, FilterMode, TextureFormat, TextureUsages, CommandEncoderDescriptor};
+use wgpu::{Adapter, Device, Queue, Sampler, SamplerDescriptor, AddressMode, FilterMode, TextureFormat, TextureUsages, CommandEncoderDescriptor};
 use tauri::Window;
 
 use super::adapter::select_adapter;
@@ -50,8 +50,10 @@ pub struct WebGpuRenderer {
 
 impl WebGpuRenderer {
     pub async fn new(window: Window, vsync: bool) -> Result<Self, String> {
-        // Create WGPU Instance (panik-korumalı — bozuk EGL'de GL init çökebilir)
-        let instance = crate::gpu::create_instance_safe(Backends::VULKAN | Backends::GL);
+        // Uygulama geneli paylaşılan instance (&'static) — her player
+        // başlatmada yeni instance kurmak bozuk EGL'de tekrarlanan panic
+        // maliyeti demekti.
+        let instance: &wgpu::Instance = crate::gpu::shared_instance();
 
         // Select compatible Vulkan adapter
         let adapter = select_adapter(&instance).await?;

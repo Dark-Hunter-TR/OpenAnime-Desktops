@@ -136,6 +136,17 @@ mod gpu_switch_macos {
 // Sıralama: polyfill → network → webgpu → ui → discord → updater → video → tema
 // Her blok yorumla ayrılmıştır.
 // ═══════════════════════════════════════════════════════════════════════════════
+/// COMMON_INIT_SCRIPT'in başına çalışma zamanı bayraklarını ekler.
+/// __OA_OVERLAY_OK__: overlay pencereleri konumlandırılabiliyor mu
+/// (Wayland'da false → shim navigator.gpu'yu hiç kurmaz, site HTML5'e döner).
+fn build_init_script() -> String {
+    #[cfg(target_os = "linux")]
+    let overlay_flag = overlays_supported();
+    #[cfg(not(target_os = "linux"))]
+    let overlay_flag = true;
+    format!("window.__OA_OVERLAY_OK__={};\n{}", overlay_flag, COMMON_INIT_SCRIPT)
+}
+
 const COMMON_INIT_SCRIPT: &str = concat!(
     "(function () {\nif (window.self !== window.top) {\n  let isBuilder = false;\n  try {\n    isBuilder = window.location.search.includes(\"theme_builder=true\") || sessionStorage.getItem(\"theme_builder_active\") === \"true\";\n  } catch (e) {}\n  if (!isBuilder) return;\n}\n",
 
@@ -164,8 +175,9 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // ──────────────────────────────────────────────
     include_str!("js/modules/webgpu-native-shim.js"),
     "\n",
-    include_str!("js/modules/webgpu-patcher.js"),
-    "\n",
+    // webgpu-patcher.js kaldırıldı: tek işlevi (conv2d_tf layout'unda
+    // texture→externalTexture dönüşümü) shim'in kendi bind group eşlemesinde
+    // zaten aynı sonuca ("texture" kind) çıkıyordu — işlevsiz mükerrerlikti.
     include_str!("js/modules/webgpu-bridge.js"),
     "\n",
 
@@ -352,7 +364,7 @@ fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
         });
         tauri::webview::NewWindowResponse::Deny
     })
-    .initialization_script(COMMON_INIT_SCRIPT);
+    .initialization_script(build_init_script());
 
     #[cfg(target_os = "windows")]
     let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
@@ -453,54 +465,7 @@ async fn close_window_label(app: tauri::AppHandle, label: Option<String>) -> Res
     Ok(())
 }
 
-#[tauri::command]
-async fn proxy_request(
-    method: String,
-    url: String,
-    body: Option<String>,
-    headers: Option<std::collections::HashMap<String, String>>,
-) -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("OpenAnime-Desktop/1.0")
-        .build()
-        .map_err(|e| format!("Client build error: {}", e))?;
-
-    let method_upper = method.to_uppercase();
-    let mut req = match method_upper.as_str() {
-        "GET" => client.get(&url),
-        "POST" => client.post(&url),
-        "PUT" => client.put(&url),
-        "DELETE" => client.delete(&url),
-        "PATCH" => client.patch(&url),
-        _ => client.get(&url),
-    };
-
-    if let Some(headers_map) = headers {
-        for (k, v) in headers_map {
-            let k_lower = k.to_lowercase();
-            if k_lower == "host" || k_lower == "origin" || k_lower == "referer" {
-                continue;
-            }
-            req = req.header(k, v);
-        }
-    }
-
-    if let Some(body_content) = body {
-        if !body_content.is_empty() {
-            req = req.body(body_content);
-        }
-    }
-
-    let response = req.send().await.map_err(|e| format!("Request failed: {}", e))?;
-    let status = response.status();
-    let text = response.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
-
-    if !status.is_success() {
-        return Err(format!("HTTP error {}: {}", status, text));
-    }
-
-    Ok(text)
-}
+// (proxy_request kaldırıldı — hiçbir JS/frontend tarafından çağrılmıyordu.)
 
 
 #[tauri::command]
@@ -638,46 +603,8 @@ async fn list_themes(app: tauri::AppHandle) -> Result<Vec<ThemeJson>, String> {
     Ok(themes)
 }
 
-#[tauri::command]
-async fn save_theme(app: tauri::AppHandle, theme: ThemeJson) -> Result<(), String> {
-    let local_data = app.path().app_local_data_dir()
-        .map_err(|e| format!("Failed to get app local data dir: {}", e))?;
-    let themes_dir = local_data.join("themes");
-    std::fs::create_dir_all(&themes_dir)
-        .map_err(|e| format!("Failed to create themes dir: {}", e))?;
-    
-    let safe_name = theme.meta.name.chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect::<String>();
-    let file_path = themes_dir.join(format!("{}.json", safe_name));
-    
-    let content = serde_json::to_string_pretty(&theme)
-        .map_err(|e| format!("Serialization failed: {}", e))?;
-    
-    std::fs::write(file_path, content)
-        .map_err(|e| format!("Failed to write theme file: {}", e))?;
-    
-    Ok(())
-}
-
-#[tauri::command]
-async fn delete_theme(app: tauri::AppHandle, name: String) -> Result<(), String> {
-    let local_data = app.path().app_local_data_dir()
-        .map_err(|e| format!("Failed to get app local data dir: {}", e))?;
-    let themes_dir = local_data.join("themes");
-    
-    let safe_name = name.chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect::<String>();
-    let file_path = themes_dir.join(format!("{}.json", safe_name));
-    
-    if file_path.exists() {
-        std::fs::remove_file(file_path)
-            .map_err(|e| format!("Failed to delete theme file: {}", e))?;
-    }
-    
-    Ok(())
-}
+// (save_theme / delete_theme kaldırıldı — tema kaydetme/silme frontend'te
+// henüz yok; list_themes/load_theme/apply_theme_css kullanımda ve korunuyor.)
 
 #[tauri::command]
 async fn load_theme(app: tauri::AppHandle, name: String) -> Result<ThemeJson, String> {
@@ -785,28 +712,8 @@ async fn gst_control_seek(time: f64) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-async fn get_gpu_report() -> gpu_detector::GpuReport {
-    gpu_detector::detect_gpu()
-}
-
-#[tauri::command]
-async fn get_gst_report() -> serde_json::Value {
-    #[cfg(target_os = "linux")]
-    {
-        let report = gst_detector::detect_gstreamer();
-        serde_json::to_value(&report).unwrap_or(serde_json::Value::Null)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        serde_json::json!({
-            "gstreamer_installed": true,
-            "missing_elements": [],
-            "recommended_command": "",
-            "recommended_packages": ""
-        })
-    }
-}
+// (get_gpu_report / get_gst_report kaldırıldı — çağıran yoktu; gpu_detector ve
+// gst_detector modülleri diğer kullanıcıları üzerinden yaşamaya devam ediyor.)
 
 #[tauri::command]
 async fn install_missing_gstreamer() -> Result<(), String> {
@@ -884,24 +791,14 @@ fn setup_windows_gpu_preference() {
 /// 🎥 Local Video Server Komutları
 /// ────────────────────────────────────────────────────────────
 /// `get_local_video_port` — Server'ın dinlediği port'u döndürür
-/// `register_local_video` — videoId ↔ dosya yolu eşlemesini kaydeder
+/// (register_local_video kaldırıldı — çağıran yoktu; eşleme server
+///  tarafında yönetiliyor.)
 /// ────────────────────────────────────────────────────────────
 
 #[tauri::command]
 fn get_local_video_port(state: tauri::State<'_, Arc<local_video_server::LocalVideoState>>) -> Result<u16, String> {
     let port = state.port.lock().map_err(|e| e.to_string())?;
     Ok(*port)
-}
-
-#[tauri::command]
-fn register_local_video(
-    state: tauri::State<'_, Arc<local_video_server::LocalVideoState>>,
-    video_id: String,
-    file_path: String,
-) -> Result<(), String> {
-    let mut map = state.video_map.lock().map_err(|e| e.to_string())?;
-    map.insert(video_id, file_path);
-    Ok(())
 }
 
 /// ────────────────────────────────────────────────────────────
@@ -952,11 +849,33 @@ async fn read_file_head(path: String, max_bytes: u32) -> Result<Vec<u8>, String>
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+// catch_unwind ile BİLEREK yakalanan panic'ler (ör. bozuk EGL'de wgpu GL
+// backend init'i) için pahalı backtrace toplama ve crash.log yazımını bastırır.
+// Bastırılmazsa her yakalanan panic terminale korkutucu bir döküm basar ve
+// Backtrace::force_capture maliyeti lag'e katkı yapar.
+thread_local! {
+    static SUPPRESS_PANIC_LOG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// f çalışırken bu thread'de panic hook'un ağır kısmını devre dışı bırakır.
+pub(crate) fn with_suppressed_panic_log<T>(f: impl FnOnce() -> T) -> T {
+    SUPPRESS_PANIC_LOG.with(|c| c.set(true));
+    let result = f();
+    SUPPRESS_PANIC_LOG.with(|c| c.set(false));
+    result
+}
+
 /// Panic mesajı + backtrace'i hem session log'a hem de kalıcı bir crash
 /// dosyasına yazar; "uygulama sessizce çöküyor" raporları böylece kanıtlı gelir.
 fn install_crash_logger() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Beklenen/yakalanan panic: tek satır log, backtrace yok, crash.log yok.
+        if SUPPRESS_PANIC_LOG.with(|c| c.get()) {
+            log!("[Panic-Yakalandı] {}", info);
+            return;
+        }
+
         let backtrace = std::backtrace::Backtrace::force_capture();
         let report = format!(
             "===== OPENANIME PANIC =====\n{}\n\nBacktrace:\n{}\n",
@@ -1019,8 +938,58 @@ fn show_fatal_startup_error(err: &dyn std::fmt::Display) {
         .show();
 }
 
+/// Linux'ta pencere overlay'lerinin (native player + WebGPU canvas) çalışıp
+/// çalışamayacağı. Wayland'da toplevel pencereler konumlandırılamaz
+/// (gtk_window_move no-op) — overlay mimarisi yalnızca X11/XWayland'da işler.
+#[cfg(target_os = "linux")]
+static OVERLAYS_SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "linux")]
+pub fn overlays_supported() -> bool {
+    *OVERLAYS_SUPPORTED.get().unwrap_or(&false)
+}
+
+/// Wayland oturumunda GTK'yı X11 backend'ine (XWayland) zorlar.
+/// GTK init'ten ÖNCE çağrılmalıdır. Gerekçe: tao/GTK'da set_position →
+/// gtk_window_move, Wayland'da belgeli no-op'tur; gst_overlay ve
+/// gpu_canvas overlay pencereleri videonun üzerine hizalanamaz (sahada
+/// "siyah dikdörtgen + bozuk player" olarak görüldü). XWayland altında
+/// konumlandırma X11 semantiğiyle çalışır.
+#[cfg(target_os = "linux")]
+fn configure_display_backend() {
+    let native_wayland_opt_in = std::env::var("OPENANIME_NATIVE_WAYLAND")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let is_wayland_session = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let has_x11 = std::env::var_os("DISPLAY").is_some();
+    let user_forced_backend = std::env::var_os("GDK_BACKEND").is_some();
+
+    let overlays_ok = if !is_wayland_session {
+        // Zaten X11 oturumu.
+        true
+    } else if user_forced_backend {
+        // Kullanıcı GDK_BACKEND'i kendisi seçmiş — dokunma; x11 ise overlay çalışır.
+        std::env::var("GDK_BACKEND").map(|v| v.contains("x11")).unwrap_or(false)
+    } else if native_wayland_opt_in {
+        println!("[Display] OPENANIME_NATIVE_WAYLAND=1 — Wayland'da kalınıyor, overlay'ler devre dışı");
+        false
+    } else if has_x11 {
+        std::env::set_var("GDK_BACKEND", "x11");
+        println!("[Display] Wayland oturumu tespit edildi — GDK_BACKEND=x11 zorlandı (XWayland). Overlay konumlandırma aktif.");
+        true
+    } else {
+        println!("[Display] Saf Wayland (XWayland yok) — overlay'ler devre dışı, HTML5 player modu");
+        false
+    };
+
+    let _ = OVERLAYS_SUPPORTED.set(overlays_ok);
+}
+
 pub fn run() {
     install_crash_logger();
+
+    #[cfg(target_os = "linux")]
+    configure_display_backend();
 
     #[cfg(target_os = "windows")]
     {
@@ -1240,7 +1209,7 @@ pub fn run() {
             });
             tauri::webview::NewWindowResponse::Deny
         })
-        .initialization_script(COMMON_INIT_SCRIPT);
+        .initialization_script(build_init_script());
 
         #[cfg(target_os = "windows")]
         let win_builder = win_builder.additional_browser_args(browser_args);
@@ -1328,15 +1297,11 @@ pub fn run() {
             // 🎥 Local video server — port sorgula
             get_local_video_port,
             // 🎥 Local video server — videoId ↔ dosya yolu eşlemesi kaydet
-            register_local_video,
             fetch_css,
-            proxy_request,
             check_connection,
             go_online,
             go_offline,
             list_themes,
-            save_theme,
-            delete_theme,
             load_theme,
             apply_theme_css,
             webgpu_state_changed,
@@ -1344,8 +1309,6 @@ pub fn run() {
             gst_control_play,
             gst_control_pause,
             gst_control_seek,
-            get_gpu_report,
-            get_gst_report,
             install_missing_gstreamer,
             gpu_detector::install_gpu_packages,
             // 🖥️ Yeni GPU tanılama sistemi (src/gpu/)
@@ -1359,18 +1322,12 @@ pub fn run() {
             updater::get_app_version,
             updater::check_for_updates,
             updater::start_update_download,
-            updater::debug_log,
             // DPI Proxy komutları
             reopen_with_proxy,
             set_zoom_level,
             get_zoom_level,
-            dpi_proxy::dpi_start_proxy,
-            dpi_proxy::dpi_stop_proxy,
             dpi_proxy::dpi_test_methods,
             dpi_proxy::dpi_get_status,
-            dpi_proxy::dpi_check_connection,
-            dpi_proxy::dpi_reset_settings,
-            dpi_proxy::dpi_get_methods,
             // 📁 Yerel dosya seçme dialogu
             pick_mp4_file,
             // 📄 Dosyanın ilk N baytını oku (IndexedDB dummy blob için)

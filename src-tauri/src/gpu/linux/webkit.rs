@@ -20,11 +20,13 @@ pub fn version() -> (u32, u32, u32) {
     }
 }
 
-/// webkit2gtk >= 2.44 sürümlerinde DMABUF renderer'ın Arch/Fedora gibi
+/// webkit2gtk 2.44–2.48 aralığında DMABUF renderer'ın Arch/Fedora gibi
 /// güncel dağıtımlarda (AMD/Intel dahil) yaygın çökme ve beyaz ekran
-/// sorunları raporlanmıştır. Bu sürümlerde varsayılan olarak DMABUF
-/// renderer devre dışı bırakılmalıdır.
+/// sorunları raporlanmıştır. 2.50+ sürümlerde bu hatalar giderildi;
+/// blanket kapatma orada yalnızca yazılımsal compositing'e düşürüp UI
+/// lag'i üretir (sahada webkit 2.52'de gözlendi). Bu yüzden riskli aralık
+/// dar tutulur.
 pub fn dmabuf_renderer_is_risky() -> bool {
     let (major, minor, _) = version();
-    major > 2 || (major == 2 && minor >= 44)
+    major == 2 && (44..50).contains(&minor)
 }

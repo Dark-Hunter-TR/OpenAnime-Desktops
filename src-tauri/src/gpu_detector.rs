@@ -1,41 +1,12 @@
 use std::fs;
 use std::process::Command;
 
-#[derive(Debug, serde::Serialize, Clone)]
-pub struct GpuReport {
-    pub vendor: String,
-    pub vulkan_supported: bool,
-    pub driver_version: String,
-    pub recommended_command: String,
-    pub recommended_packages: String,
-}
 
 #[allow(dead_code)]
 pub fn detect_vendor_only() -> String {
     determine_vendor()
 }
 
-pub fn detect_gpu() -> GpuReport {
-    let vendor = determine_vendor();
-    let distro = determine_distro();
-    
-    // Check Vulkan support via wgpu (which is our rendering backend)
-    let (vulkan_supported, driver_version) = check_vulkan_support();
-
-    let (recommended_packages, recommended_command) = if !vulkan_supported {
-        get_install_instructions(&vendor, &distro)
-    } else {
-        (String::new(), String::new())
-    };
-
-    GpuReport {
-        vendor,
-        vulkan_supported,
-        driver_version,
-        recommended_command,
-        recommended_packages,
-    }
-}
 
 fn determine_vendor() -> String {
     // 1. Try reading /sys/class/drm/card*/device/vendor
@@ -73,110 +44,8 @@ fn determine_vendor() -> String {
     "Unknown".to_string()
 }
 
-fn determine_distro() -> String {
-    if let Ok(content) = fs::read_to_string("/etc/os-release") {
-        for line in content.lines() {
-            if line.starts_with("ID=") {
-                return line.trim_start_matches("ID=").trim_matches('"').to_string();
-            }
-        }
-    }
-    "unknown".to_string()
-}
 
-fn check_vulkan_support() -> (bool, String) {
-    #[cfg(target_os = "linux")]
-    {
-        let vulkan_lib_exists = std::path::Path::new("/usr/lib/libvulkan.so.1").exists()
-            || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libvulkan.so.1").exists()
-            || std::path::Path::new("/usr/lib64/libvulkan.so.1").exists()
-            || std::path::Path::new("/usr/lib/i386-linux-gnu/libvulkan.so.1").exists()
-            || std::process::Command::new("ldconfig")
-                .arg("-p")
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).contains("libvulkan.so.1"))
-                .unwrap_or(false);
 
-        let icd_exists = std::path::Path::new("/usr/share/vulkan/icd.d").exists()
-            && std::fs::read_dir("/usr/share/vulkan/icd.d")
-                .map(|mut d| d.next().is_some())
-                .unwrap_or(false);
-
-        if vulkan_lib_exists && icd_exists {
-            return (true, "Vulkan system library and ICD driver files detected".to_string());
-        } else {
-            return (false, "libvulkan.so.1 or Vulkan ICD config files are missing".to_string());
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    (true, "Vulkan mock checked".to_string())
-}
-
-fn get_install_instructions(vendor: &str, distro: &str) -> (String, String) {
-    match distro {
-        "arch" | "manjaro" => {
-            match vendor {
-                "NVIDIA" => (
-                    "nvidia-utils, lib32-nvidia-utils, vulkan-tools".to_string(),
-                    "sudo pacman -S nvidia-utils lib32-nvidia-utils vulkan-tools".to_string(),
-                ),
-                "AMD" => (
-                    "vulkan-radeon, lib32-vulkan-radeon, vulkan-tools".to_string(),
-                    "sudo pacman -S vulkan-radeon lib32-vulkan-radeon vulkan-tools".to_string(),
-                ),
-                _ => (
-                    "vulkan-intel, lib32-vulkan-intel, vulkan-tools".to_string(),
-                    "sudo pacman -S vulkan-intel lib32-vulkan-intel vulkan-tools".to_string(),
-                ),
-            }
-        }
-        "ubuntu" | "debian" | "pop" | "mint" => {
-            match vendor {
-                "NVIDIA" => (
-                    "nvidia-driver-535, nvidia-utils-535, vulkan-tools".to_string(),
-                    "sudo apt update && sudo apt install nvidia-driver-535 nvidia-utils-535 vulkan-tools".to_string(),
-                ),
-                "AMD" => (
-                    "mesa-vulkan-drivers, vulkan-tools".to_string(),
-                    "sudo apt update && sudo apt install mesa-vulkan-drivers vulkan-tools".to_string(),
-                ),
-                _ => (
-                    "mesa-vulkan-drivers, vulkan-tools".to_string(),
-                    "sudo apt update && sudo apt install mesa-vulkan-drivers vulkan-tools".to_string(),
-                ),
-            }
-        }
-        "fedora" => {
-            match vendor {
-                "NVIDIA" => (
-                    "akmod-nvidia, xorg-x11-drv-nvidia-cuda, vulkan-tools".to_string(),
-                    "sudo dnf install akmod-nvidia xorg-x11-drv-nvidia-cuda vulkan-tools".to_string(),
-                ),
-                _ => (
-                    "mesa-vulkan-drivers, vulkan-tools".to_string(),
-                    "sudo dnf install mesa-vulkan-drivers vulkan-tools".to_string(),
-                ),
-            }
-        }
-        "opensuse" | "opensuse-tumbleweed" => {
-            match vendor {
-                "NVIDIA" => (
-                    "x11-video-nvidiaG06, nvidia-glG06".to_string(),
-                    "sudo zypper install x11-video-nvidiaG06 nvidia-glG06 vulkan-tools".to_string(),
-                ),
-                _ => (
-                    "mesa-vulkan-device-select, vulkan-tools".to_string(),
-                    "sudo zypper install mesa-vulkan-device-select vulkan-tools".to_string(),
-                ),
-            }
-        }
-        _ => (
-            "Vulkan drivers (Mesa / NVIDIA proprietary)".to_string(),
-            "Lütfen dağıtımınızın paket yöneticisinden ekran kartınıza uygun Vulkan sürücülerini kurun.".to_string(),
-        ),
-    }
-}
 
 #[allow(dead_code)]
 pub fn detect_pkg_manager() -> String {
