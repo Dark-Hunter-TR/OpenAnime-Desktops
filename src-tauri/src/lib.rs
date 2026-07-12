@@ -22,6 +22,7 @@ mod dpi_proxy;
 mod discordRPC;
 
 mod gpu_detector;
+mod gpu;
 mod updater;
 mod local_video_server;
 
@@ -372,6 +373,38 @@ fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
 #[tauri::command]
 async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
     build_new_window(&app, url)
+}
+
+/// GPU Tanılama penceresini açar. Zaten açıksa öne getirir.
+/// Yerel SvelteKit sayfası (build/gpu-diagnostics.html) yüklenir; sayfa
+/// `gpu_full_report` komutunu invoke ederek raporu gösterir.
+#[tauri::command]
+async fn open_gpu_diagnostics(app: tauri::AppHandle) -> Result<(), String> {
+    // Zaten açık bir tanı penceresi varsa yenisini açma, mevcut olanı öne getir.
+    if let Some(existing) = app.get_webview_window("gpu-diagnostics") {
+        existing
+            .set_focus()
+            .map_err(|e| format!("Tanı penceresi öne getirilemedi: {}", e))?;
+        return Ok(());
+    }
+
+    let win_builder = WebviewWindowBuilder::new(
+        &app,
+        "gpu-diagnostics",
+        WebviewUrl::App("gpu-diagnostics.html".into()),
+    )
+    .title("GPU Tanılama")
+    .inner_size(1000.0, 760.0)
+    .min_inner_size(680.0, 520.0)
+    .center()
+    .resizable(true);
+
+    win_builder
+        .build()
+        .map(|_| {
+            println!("[Tauri] GPU Tanılama penceresi açıldı");
+        })
+        .map_err(|e| format!("GPU Tanılama penceresi oluşturulamadı: {}", e))
 }
 
 #[tauri::command]
@@ -1000,51 +1033,12 @@ pub fn run() {
             }
         }
 
-        let gpu_report = gpu_detector::detect_gpu();
-        
-        // Check if any NVIDIA GPU exists on the system (supporting hybrid/Optimus configurations)
-        let has_nvidia = {
-            let mut found = false;
-            if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if name.starts_with("card") && !name.contains('-') {
-                        if let Ok(vendor_hex) = std::fs::read_to_string(entry.path().join("device/vendor")) {
-                            if vendor_hex.trim().to_lowercase().contains("10de") {
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            if !found {
-                if let Ok(output) = std::process::Command::new("lspci").output() {
-                    let lspci_str = String::from_utf8_lossy(&output.stdout).to_lowercase();
-                    if lspci_str.contains("nvidia") {
-                        found = true;
-                    }
-                }
-            }
-            found
-        };
-
-        let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
-
-        if !gpu_report.vulkan_supported {
-            println!("[Tauri GPU] Vulkan is not supported. Disabling WebKit compositing mode.");
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        }
-        
-        if has_nvidia {
-            println!("[Tauri GPU] NVIDIA GPU detected on Linux. Disabling DMABUF renderer for stability.");
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            
-            if is_wayland {
-                println!("[Tauri GPU] Wayland + NVIDIA detected. Setting explicit sync workaround.");
-                std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
-            }
-        }
+        // GPU/display server'a göre WebKit/DRM ortam değişkenlerini yeni GPU
+        // tanılama sistemi üzerinden yapılandır. Bu fonksiyon vendor tespiti,
+        // Vulkan ICD kontrolü, NVIDIA DMA-BUF/explicit-sync, Wayland GBM backend
+        // ve VirtIO/VMware workaround'larını tek yerde toplar
+        // (eski inline blok bunun daha kapsamlı sürümüyle değiştirildi).
+        gpu::configure_linux_gpu_env();
     }
 
     let builder = tauri::Builder::default()
@@ -1313,6 +1307,14 @@ pub fn run() {
             get_gst_report,
             install_missing_gstreamer,
             gpu_detector::install_gpu_packages,
+            // 🖥️ Yeni GPU tanılama sistemi (src/gpu/)
+            gpu::gpu_full_report,
+            gpu::gpu_vulkan_status,
+            gpu::gpu_backend_info,
+            gpu::gpu_refresh_report,
+            gpu::gpu_fallback_status,
+            gpu::gpu_activate_fallback,
+            open_gpu_diagnostics,
             logger::get_session_log,
             updater::get_app_version,
             updater::check_for_updates,
