@@ -139,6 +139,13 @@
   let cachedAdapterPromise = null;
 
   class GPU {
+    // Surface'ların Linux/Vulkan'da fiilen desteklediği format budur. Bu
+    // fonksiyon eksikken site kendi formatını (örn. rgba16float) seçiyor,
+    // surface reddediyor ve canvas hiç kurulamıyordu (siyah ekran + ses).
+    getPreferredCanvasFormat() {
+      return "bgra8unorm";
+    }
+
     async requestAdapter(options) {
       if (cachedAdapterPromise) {
         return cachedAdapterPromise;
@@ -1036,10 +1043,17 @@
         this.__id = id;
         activeCanvasContexts.add(this);
 
-        await window.__TAURI__.core.invoke("gpu_canvas_configure", {
+        // Rust, istenen format desteklenmiyorsa surface'ın desteklediği bir
+        // formata kelepçeler ve GERÇEK formatı döndürür — mock texture'lar
+        // ve site tarafı doğru formatı görsün diye geri yazıyoruz.
+        const actualFormat = await window.__TAURI__.core.invoke("gpu_canvas_configure", {
           contextId: this.__id,
           format: this.format
         });
+        if (actualFormat && actualFormat !== this.format) {
+          console.warn(`[WebGPU Shim] Canvas format ${this.format} desteklenmiyor; ${actualFormat} kullanılıyor.`);
+          this.format = actualFormat;
+        }
 
         // Set up observers to sync overlay bounds
         this.setupObservers();

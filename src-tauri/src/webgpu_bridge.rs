@@ -1608,6 +1608,8 @@ pub mod inner {
                 .transparent(true)
                 .shadow(false)
                 .always_on_top(true)
+                .focused(false)
+                .skip_taskbar(true)
                 .position(x as f64, y as f64)
                 .inner_size(width.max(1) as f64, height.max(1) as f64)
                 .build();
@@ -1661,10 +1663,43 @@ pub mod inner {
         Ok(ctx_id)
     }
 
+    /// wgpu surface formatını WebGPU spec adına çevirir (canvas formatları).
+    fn texture_format_to_string(f: wgpu::TextureFormat) -> &'static str {
+        match f {
+            wgpu::TextureFormat::Bgra8Unorm => "bgra8unorm",
+            wgpu::TextureFormat::Bgra8UnormSrgb => "bgra8unorm-srgb",
+            wgpu::TextureFormat::Rgba8Unorm => "rgba8unorm",
+            wgpu::TextureFormat::Rgba8UnormSrgb => "rgba8unorm-srgb",
+            wgpu::TextureFormat::Rgba16Float => "rgba16float",
+            wgpu::TextureFormat::Rgb10a2Unorm => "rgb10a2unorm",
+            _ => "bgra8unorm",
+        }
+    }
+
+    /// İstenen formatı surface'ın GERÇEKTEN desteklediği listeye kelepçeler.
+    /// wgpu, desteklenmeyen formatla configure() çağrısında handle_error_fatal
+    /// ile panic'ler (on_uncaptured_error'a düşmez) — sahada görülen
+    /// "Requested format Rgba16Float is not in list of supported formats"
+    /// siyah ekranının kökü buydu.
+    fn clamp_surface_format(
+        requested: wgpu::TextureFormat,
+        supported: &[wgpu::TextureFormat],
+    ) -> wgpu::TextureFormat {
+        if supported.contains(&requested) {
+            return requested;
+        }
+        if supported.contains(&wgpu::TextureFormat::Bgra8Unorm) {
+            return wgpu::TextureFormat::Bgra8Unorm;
+        }
+        supported.first().copied().unwrap_or(wgpu::TextureFormat::Bgra8Unorm)
+    }
+
+    /// Canvas'ı yapılandırır; gerçekten kullanılan formatı (spec adıyla)
+    /// döndürür — shim bunu kendi format alanına geri yazar.
     #[tauri::command]
-    pub async fn gpu_canvas_configure(context_id: u64, format: String) -> Result<(), String> {
+    pub async fn gpu_canvas_configure(context_id: u64, format: String) -> Result<String, String> {
         let dev = device()?;
-        let tex_format = parse_texture_format(&format)?;
+        let requested_format = parse_texture_format(&format)?;
 
         let (overlay, width, height) = {
             let state = lock();
@@ -1683,6 +1718,13 @@ pub mod inner {
         };
 
         let caps = surface.get_capabilities(&adapter);
+        let tex_format = clamp_surface_format(requested_format, &caps.formats);
+        if tex_format != requested_format {
+            crate::log!(
+                "[WebGPU Bridge] Canvas formatı {} desteklenmiyor (desteklenen: {:?}) — {} kullanılıyor",
+                format, caps.formats, texture_format_to_string(tex_format)
+            );
+        }
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: tex_format,
@@ -1708,7 +1750,7 @@ pub mod inner {
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         ctx.surface = Some(surface);
         ctx.format = tex_format;
-        Ok(())
+        Ok(texture_format_to_string(tex_format).to_string())
     }
 
     #[tauri::command]
@@ -2080,7 +2122,7 @@ pub mod inner {
     }
 
     #[tauri::command]
-    pub async fn gpu_canvas_configure(_context_id: u64, _format: String) -> Result<(), String> {
+    pub async fn gpu_canvas_configure(_context_id: u64, _format: String) -> Result<String, String> {
         Err("WebGPU bridge is only supported on Linux".to_string())
     }
 
