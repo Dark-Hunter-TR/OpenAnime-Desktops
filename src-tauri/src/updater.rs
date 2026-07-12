@@ -212,7 +212,4 @@ pub async fn start_update_download(
     Ok(())
 }
 
-#[tauri::command]
-pub fn debug_log(msg: String) {
-    println!("[JS_DEBUG] {}", msg);
-}
+// (debug_log kaldırıldı — hiçbir JS tarafından çağrılmıyordu.)

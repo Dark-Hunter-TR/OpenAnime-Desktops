@@ -20,7 +20,6 @@
 ///   - ✅ Range byte → seeking desteği
 /// ────────────────────────────────────────────────────────────
 
-use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -33,14 +32,12 @@ use tiny_http::{Header, Response, Server, StatusCode};
 /// Paylaşılan durum — port + videoId → dosya yolu eşlemesi
 pub struct LocalVideoState {
     pub port: Mutex<u16>,
-    pub video_map: Mutex<HashMap<String, String>>,
 }
 
 impl LocalVideoState {
     pub fn new() -> Self {
         Self {
             port: Mutex::new(0),
-            video_map: Mutex::new(HashMap::new()),
         }
     }
 }

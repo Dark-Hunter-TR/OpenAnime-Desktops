@@ -10,20 +10,6 @@ use super::types::*;
 /// Log adımlarını terminal için okunabilir formata çevirir.
 /// Hem uygulamanın iç log sistemine hem de frontend'e gönderilmek üzere
 /// kullanılabilir.
-pub fn format_log_as_text(entries: &[LogEntry]) -> String {
-    entries
-        .iter()
-        .map(|e| {
-            let symbol = if e.ok { "✓" } else { "✗" };
-            if let Some(detail) = &e.detail {
-                format!("  {} {}: {}", symbol, e.label, detail)
-            } else {
-                format!("  {} {}", symbol, e.label)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 /// FullGpuReport için default (boş) rapor oluşturucu.
 /// Bir hata oluştuğunda ya da Linux dışı platformlarda kullanılır.

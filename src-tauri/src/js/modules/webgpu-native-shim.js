@@ -3,6 +3,14 @@
   const isLinux = navigator.userAgent.toLowerCase().includes("linux");
   if (!isLinux) return;
 
+  // Overlay pencereleri konumlandırılamıyorsa (saf Wayland, XWayland yok)
+  // WebGPU sunumu imkânsızdır — navigator.gpu HİÇ kurulmaz ve site kendi
+  // HTML5/HLS yoluna döner. Player %100 çalışır, upscale devre dışı kalır.
+  if (window.__OA_OVERLAY_OK__ === false) {
+    console.log("[WebGPU Shim] Overlay konumlandırma yok (saf Wayland) — navigator.gpu kurulmuyor, HTML5 player modu.");
+    return;
+  }
+
   console.log("[WebGPU Shim] Initializing native WebGPU shim for Linux...");
 
   // ─────────────────────────────────────────────────────────────────
@@ -122,6 +130,25 @@
 
   const activeCanvasContexts = new Set();
 
+  // Tek pipeline kuralı: native GStreamer player aktifleştiğinde sitenin
+  // canvas overlay'leri yıkılır — iki overlay aynı anda asla var olamaz.
+  window.addEventListener("oa-native-state", (ev) => {
+    if (!(ev && ev.detail && ev.detail.active)) return;
+    activeCanvasContexts.forEach(ctx => {
+      const id = ctx.__id;
+      ctx.__id = 0;
+      if (ctx.resizeObserver) {
+        ctx.resizeObserver.disconnect();
+        ctx.resizeObserver = null;
+      }
+      if (id) {
+        orderedInvoke("gpu_destroy_resource", { kind: "canvas_context", id }).catch(() => {});
+      }
+    });
+    activeCanvasContexts.clear();
+    console.log("[WebGPU Shim] Native player aktif — canvas overlay'leri kapatıldı (tek pipeline).");
+  });
+
   // ─────────────────────────────────────────────────────────────────
   // WebGPU Classes
   // ─────────────────────────────────────────────────────────────────
@@ -218,7 +245,14 @@
           adapterId: this.__id,
           descriptor
         });
-        return auditWrap(new GPUDevice(deviceInfo, this), "GPUDevice");
+        const device = new GPUDevice(deviceInfo, this);
+        // CPU-only (software adapter): upscale/filtre yolu baştan kapalı —
+        // video düz HTML5 ile akar, IPC/upscale yükü hiç binmez.
+        if (window.__IS_SOFTWARE_ADAPTER__) {
+          device.__externalUploadDisabled = true;
+          console.log("[WebGPU Shim] Software adapter — upscale yolu devre dışı (CPU optimizasyonu).");
+        }
+        return auditWrap(device, "GPUDevice");
       } catch (e) {
         console.error("[WebGPU Shim] requestDevice failed:", e);
         throw e;
@@ -1057,6 +1091,15 @@
       this.device = descriptor.device;
       this.format = descriptor.format || "bgra8unorm";
 
+      // Tek pipeline kuralı: native player video çiziyorken sitenin canvas
+      // overlay'i HİÇ yaratılmaz (sessiz no-op). Aksi halde iki overlay üst
+      // üste biner ve siyah ekran/senkron kaosu doğar.
+      if (window.__NATIVE_PLAYER_ACTIVE__) {
+        console.log("[WebGPU Shim] Native player aktif — canvas configure no-op (tek pipeline).");
+        this.__id = 0;
+        return;
+      }
+
       const rect = this.canvas.getBoundingClientRect();
       const x = Math.round(rect.left);
       const y = Math.round(rect.top);
@@ -1099,10 +1142,14 @@
       // texture'a karşı gpu_texture_create_view çağırıyordu — canvas render
       // pass'leri her zaman "Unknown texture view id" ile bozuktu.)
       const viewId = nextId();
-      orderedInvoke("gpu_canvas_get_current_texture", {
-        contextId: this.__id,
-        viewId
-      }).catch(e => console.error("[WebGPU Shim] getCurrentTexture IPC error:", e));
+      // Context devre dışıysa (native player aktif / configure edilmedi)
+      // IPC'ye hiç gitme — kayıtsız sahte texture döndür, site akışı bozulmaz.
+      if (this.__id) {
+        orderedInvoke("gpu_canvas_get_current_texture", {
+          contextId: this.__id,
+          viewId
+        }).catch(e => console.error("[WebGPU Shim] getCurrentTexture IPC error:", e));
+      }
 
       const mockDescriptor = {
         size: [this.canvas.width || 640, this.canvas.height || 360, 1],

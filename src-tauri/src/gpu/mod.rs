@@ -305,12 +305,15 @@ pub fn create_instance_safe(backends: wgpu::Backends) -> wgpu::Instance {
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
     let mk = |b: wgpu::Backends| {
-        catch_unwind(AssertUnwindSafe(|| {
-            wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends: b,
-                ..Default::default()
-            })
-        }))
+        // Beklenen panic (bozuk EGL) — hook'un backtrace/crash.log maliyeti bastırılır.
+        crate::with_suppressed_panic_log(|| {
+            catch_unwind(AssertUnwindSafe(|| {
+                wgpu::Instance::new(wgpu::InstanceDescriptor {
+                    backends: b,
+                    ..Default::default()
+                })
+            }))
+        })
     };
 
     if let Ok(instance) = mk(backends) {
@@ -331,6 +334,16 @@ pub fn create_instance_safe(backends: wgpu::Backends) -> wgpu::Instance {
         // pratikte imkânsızdır.
         panic!("wgpu instance boş backend setiyle bile oluşturulamadı")
     })
+}
+
+/// Uygulama genelinde TEK wgpu Instance. Önceden her native player
+/// başlatmada yeni instance kuruluyordu — bozuk EGL'li sistemlerde her
+/// bölüm başına yeniden panic + yeniden sürücü taraması demekti (lag +
+/// açılış gecikmesi). Instance Arc tabanlıdır, clone ucuzdur.
+#[cfg(target_os = "linux")]
+pub fn shared_instance() -> &'static wgpu::Instance {
+    static SHARED: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
+    SHARED.get_or_init(|| create_instance_safe(wgpu::Backends::VULKAN | wgpu::Backends::GL))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -416,9 +429,10 @@ pub fn configure_linux_gpu_env() {
     let is_wayland = matches!(detection.display_server, DisplayServer::Wayland);
 
     // ── WebKit sürüm tespiti + DMABUF renderer koruması ─────────────────────
-    // webkit2gtk >= 2.44'te DMABUF renderer, vendor'dan bağımsız (AMD/Intel
-    // dahil) açılışta çökme ve beyaz ekran sorunlarına yol açabiliyor.
-    // OPENANIME_ENABLE_DMABUF=1 ile bilinçli opt-out mümkündür.
+    // Yalnızca bilinen kötü aralıkta (2.44–2.48) VE X11 backend'i altında
+    // DEĞİLKEN blanket kapatma uygulanır. 2.50+ sürümlerde DMABUF sağlıklı;
+    // kapatmak webkit'i yazılımsal compositing'e düşürüp UI lag'i üretiyor
+    // (sahada 2.52'de gözlendi). OPENANIME_ENABLE_DMABUF=1 ile opt-out sürer.
     let (wk_major, wk_minor, wk_micro) = linux::webkit::version();
     println!("[GPU Env] webkit2gtk sürümü: {wk_major}.{wk_minor}.{wk_micro}");
 
@@ -426,11 +440,16 @@ pub fn configure_linux_gpu_env() {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    if linux::webkit::dmabuf_renderer_is_risky() && !dmabuf_opt_in {
+    // GDK_BACKEND=x11 zorlandıysa ya da oturum zaten X11 ise webkit X11
+    // yolundadır — DMABUF sorunları büyük ölçüde Wayland yoluna özgüdür.
+    let on_x11 = std::env::var_os("WAYLAND_DISPLAY").is_none()
+        || std::env::var("GDK_BACKEND").map(|v| v.contains("x11")).unwrap_or(false);
+
+    if linux::webkit::dmabuf_renderer_is_risky() && !on_x11 && !dmabuf_opt_in {
         set_env_if_unset(
             "WEBKIT_DISABLE_DMABUF_RENDERER",
             "1",
-            &format!("webkit2gtk {wk_major}.{wk_minor} (>= 2.44) DMABUF renderer riskli"),
+            &format!("webkit2gtk {wk_major}.{wk_minor} (2.44-2.48 aralığı, Wayland) DMABUF renderer riskli"),
         );
     } else if dmabuf_opt_in {
         println!("[GPU Env] OPENANIME_ENABLE_DMABUF=1 — DMABUF renderer korumaları atlandı");
