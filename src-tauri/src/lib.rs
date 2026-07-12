@@ -952,7 +952,76 @@ async fn read_file_head(path: String, max_bytes: u32) -> Result<Vec<u8>, String>
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Panic mesajı + backtrace'i hem session log'a hem de kalıcı bir crash
+/// dosyasına yazar; "uygulama sessizce çöküyor" raporları böylece kanıtlı gelir.
+fn install_crash_logger() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let report = format!(
+            "===== OPENANIME PANIC =====\n{}\n\nBacktrace:\n{}\n",
+            info, backtrace
+        );
+        log!("{}", report);
+
+        let crash_path = dirs_cache_path().join("crash.log");
+        if let Some(parent) = crash_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&crash_path, &report);
+
+        default_hook(info);
+    }));
+}
+
+/// ~/.cache/openanime (veya platform eşdeğeri; bulunamazsa temp dizini).
+fn dirs_cache_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    let base = std::env::var("LOCALAPPDATA").map(std::path::PathBuf::from).ok();
+    #[cfg(not(target_os = "windows"))]
+    let base = std::env::var("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .or_else(|| std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".cache")));
+
+    base.unwrap_or_else(std::env::temp_dir).join("openanime")
+}
+
+/// Uygulama hiç açılamadan ölürse kullanıcıya ne yapacağını söyleyen native
+/// diyalog. Linux'ta en sık neden eksik webview/GTK yığınıdır; dağıtıma göre
+/// kurulum komutu öneririz.
+fn show_fatal_startup_error(err: &dyn std::fmt::Display) {
+    let mut message = format!(
+        "OpenAnime başlatılamadı / OpenAnime failed to start:\n\n{}\n",
+        err
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let install_hint = match gpu::linux::detector::detect_pkg_manager_by_binary() {
+            "pacman" => "sudo pacman -S webkit2gtk-4.1 gtk3",
+            "apt" => "sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0",
+            "dnf" => "sudo dnf install webkit2gtk4.1 gtk3",
+            "zypper" => "sudo zypper install libwebkit2gtk-4_1-0 gtk3",
+            _ => "webkit2gtk-4.1 ve gtk3 paketlerini kurun",
+        };
+        message.push_str(&format!(
+            "\nBu uygulama webkit2gtk-4.1 (GTK3) gerektirir. webkitgtk-6.0 tek başına \
+             YETERLİ DEĞİLDİR — iki paket yan yana kurulabilir.\n\nKurulum / Install:\n  {}\n",
+            install_hint
+        ));
+    }
+
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("OpenAnime")
+        .set_description(&message)
+        .show();
+}
+
 pub fn run() {
+    install_crash_logger();
+
     #[cfg(target_os = "windows")]
     {
         setup_windows_gpu_preference();
@@ -1024,6 +1093,10 @@ pub fn run() {
     let builder = builder.setup(|app| {
         // Logger'ı en başta başlat
         logger::init(app.handle());
+
+        // Linux: wgpu device hata/lost event'lerinin frontend'e ulaşabilmesi için
+        #[cfg(target_os = "linux")]
+        renderer::device::set_app_handle(app.handle().clone());
         log!("===== OPENANIME SETUP BAŞLADI =====");
         log!("[Setup] Build modu: {}", if cfg!(debug_assertions) { "DEBUG" } else { "RELEASE" });
         log!("[Setup] Platform: {}", std::env::consts::OS);
@@ -1245,7 +1318,7 @@ pub fn run() {
             }
         });
 
-        builder.invoke_handler(tauri::generate_handler![
+        let run_result = builder.invoke_handler(tauri::generate_handler![
             open_new_window,
             update_discord_presence,
             clear_discord_presence,
@@ -1334,12 +1407,30 @@ pub fn run() {
             webgpu_bridge::inner::gpu_encoder_copy_texture_to_texture,
             webgpu_bridge::inner::gpu_encoder_finish,
             webgpu_bridge::inner::gpu_queue_submit,
+            webgpu_bridge::inner::gpu_queue_on_submitted_work_done,
             webgpu_bridge::inner::gpu_canvas_get_context,
             webgpu_bridge::inner::gpu_canvas_configure,
             webgpu_bridge::inner::gpu_canvas_get_current_texture,
             webgpu_bridge::inner::gpu_canvas_present,
-            webgpu_bridge::inner::gpu_canvas_sync_bounds
+            webgpu_bridge::inner::gpu_canvas_sync_bounds,
+            // Binary IPC + gerçek WebGPU genişletmeleri
+            webgpu_bridge::inner::gpu_write_buffer_bin,
+            webgpu_bridge::inner::gpu_write_texture_bin,
+            webgpu_bridge::inner::gpu_buffer_read_bin,
+            webgpu_bridge::inner::gpu_import_video_frame,
+            webgpu_bridge::inner::gpu_destroy_resource,
+            webgpu_bridge::inner::gpu_push_error_scope,
+            webgpu_bridge::inner::gpu_pop_error_scope,
+            webgpu_bridge::inner::gpu_reset_bridge,
+            webgpu_bridge::inner::gpu_encoder_set_vertex_buffer,
+            webgpu_bridge::inner::gpu_encoder_set_index_buffer,
+            webgpu_bridge::inner::gpu_encoder_draw_indexed
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    if let Err(err) = run_result {
+        log!("[Fatal] Tauri uygulaması başlatılamadı: {}", err);
+        show_fatal_startup_error(&err);
+        std::process::exit(1);
+    }
 }

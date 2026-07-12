@@ -7,7 +7,7 @@ pub mod inner {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
-    use tauri::{Manager, WebviewWindow, WebviewWindowBuilder, WebviewUrl, Emitter};
+    use tauri::{Manager, WebviewWindow, Window, window::WindowBuilder, Emitter};
 
     // ─────────────────────────────────────────────────────────────────
     // ID allocation + generic registries
@@ -59,12 +59,16 @@ pub mod inner {
     }
 
     struct CanvasContext {
-        overlay: WebviewWindow,
+        overlay: Window,
         surface: Option<wgpu::Surface<'static>>,
         format: wgpu::TextureFormat,
         width: u32,
         height: u32,
         pending_surface_texture: Option<wgpu::SurfaceTexture>,
+        /// Kare başına registry sızıntısını önlemek için: bir önceki
+        /// getCurrentTexture()'ın view id'si — yenisi kaydedilmeden ve
+        /// present()'te temizlenir.
+        current_view_id: Option<u64>,
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -80,7 +84,10 @@ pub mod inner {
         BeginRenderPass { view: u64, clear: Option<[f64; 4]> },
         SetRenderPipeline(u64),
         SetRenderBindGroup { index: u32, bind_group: u64 },
+        SetVertexBuffer { slot: u32, buffer: u64, offset: u64 },
+        SetIndexBuffer { buffer: u64, format_u32: bool, offset: u64 },
         Draw { vertex_count: u32, instance_count: u32 },
+        DrawIndexed { index_count: u32, instance_count: u32 },
         EndRenderPass,
         CopyBufferToTexture { src: u64, dst_texture: u64, bytes_per_row: u32, width: u32, height: u32 },
         CopyTextureToTexture { src: u64, dst: u64, width: u32, height: u32 },
@@ -550,13 +557,14 @@ pub mod inner {
         height: u32,
         format: String,
         usage: u32,
+        mip_level_count: Option<u32>,
     ) -> Result<(), String> {
         let dev = device()?;
         let tex_format = parse_texture_format(&format)?;
         let tex = dev.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
+            mip_level_count: mip_level_count.unwrap_or(1).max(1),
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: tex_format,
@@ -621,16 +629,32 @@ pub mod inner {
         Ok(())
     }
 
+    #[derive(serde::Deserialize, Default)]
+    #[serde(rename_all = "camelCase", default)]
+    pub struct SamplerDesc {
+        pub mag_filter: Option<String>,
+        pub min_filter: Option<String>,
+        pub mipmap_filter: Option<String>,
+        pub address_mode_u: Option<String>,
+        pub address_mode_v: Option<String>,
+        pub address_mode_w: Option<String>,
+    }
+
     #[tauri::command]
-    pub async fn gpu_create_sampler(id: u64) -> Result<(), String> {
+    pub async fn gpu_create_sampler(id: u64, descriptor: Option<SamplerDesc>) -> Result<(), String> {
         let dev = device()?;
+        let d = descriptor.unwrap_or_default();
+        let mipmap_filter = match d.mipmap_filter.as_deref() {
+            Some("linear") => wgpu::FilterMode::Linear,
+            _ => wgpu::FilterMode::Nearest,
+        };
         let sampler = dev.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: parse_address_mode(d.address_mode_u.as_deref()),
+            address_mode_v: parse_address_mode(d.address_mode_v.as_deref()),
+            address_mode_w: parse_address_mode(d.address_mode_w.as_deref()),
+            mag_filter: parse_filter_mode(d.mag_filter.as_deref()),
+            min_filter: parse_filter_mode(d.min_filter.as_deref()),
+            mipmap_filter,
             ..Default::default()
         });
         lock().registries.samplers.insert(id, sampler);
@@ -641,15 +665,26 @@ pub mod inner {
     // Shader modules
     // ─────────────────────────────────────────────────────────────────
 
+    /// Shader modülü oluşturur. Derleme/doğrulama hatası varsa panic yerine
+    /// error scope ile yakalanıp mesaj olarak döndürülür — shim bunu
+    /// getCompilationInfo() için saklar.
     #[tauri::command]
-    pub async fn gpu_create_shader_module(id: u64, code: String) -> Result<(), String> {
+    pub async fn gpu_create_shader_module(id: u64, code: String) -> Result<Option<String>, String> {
         let dev = device()?;
+        dev.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = dev.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(code.into()),
         });
         lock().registries.shader_modules.insert(id, module);
-        Ok(())
+
+        let fut = dev.pop_error_scope();
+        dev.poll(wgpu::Maintain::Poll);
+        let compile_error = fut.await.map(|e| e.to_string());
+        if let Some(ref err) = compile_error {
+            crate::log!("[WebGPU Bridge] Shader derleme hatası (id {}): {}", id, err);
+        }
+        Ok(compile_error)
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -740,6 +775,10 @@ pub mod inner {
         pub binding: u32,
         pub kind: String,
         pub resource_id: u64,
+        /// Buffer binding'leri için isteğe bağlı offset/size (WebGPU
+        /// GPUBufferBinding.offset/size karşılığı).
+        pub offset: Option<u64>,
+        pub size: Option<u64>,
     }
 
     #[tauri::command]
@@ -762,7 +801,15 @@ pub mod inner {
                 let resource = match e.kind.as_str() {
                     "buffer" => {
                         let buf = state.registries.buffers.get(&e.resource_id).ok_or("Unknown buffer id")?;
-                        wgpu::BindingResource::Buffer(buf.as_entire_buffer_binding())
+                        if e.offset.is_some() || e.size.is_some() {
+                            wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: buf,
+                                offset: e.offset.unwrap_or(0),
+                                size: e.size.and_then(std::num::NonZeroU64::new),
+                            })
+                        } else {
+                            wgpu::BindingResource::Buffer(buf.as_entire_buffer_binding())
+                        }
                     }
                     "sampler" => {
                         let s = state.registries.samplers.get(&e.resource_id).ok_or("Unknown sampler id")?;
@@ -828,6 +875,44 @@ pub mod inner {
         Ok(())
     }
 
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct VertexAttributeDesc {
+        pub format: String,
+        pub offset: u64,
+        pub shader_location: u32,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct VertexBufferLayoutDesc {
+        pub array_stride: u64,
+        #[serde(default)]
+        pub step_mode: Option<String>,
+        pub attributes: Vec<VertexAttributeDesc>,
+    }
+
+    fn parse_vertex_format(s: &str) -> Result<wgpu::VertexFormat, String> {
+        Ok(match s {
+            "float32" => wgpu::VertexFormat::Float32,
+            "float32x2" => wgpu::VertexFormat::Float32x2,
+            "float32x3" => wgpu::VertexFormat::Float32x3,
+            "float32x4" => wgpu::VertexFormat::Float32x4,
+            "uint32" => wgpu::VertexFormat::Uint32,
+            "uint32x2" => wgpu::VertexFormat::Uint32x2,
+            "uint32x4" => wgpu::VertexFormat::Uint32x4,
+            "sint32" => wgpu::VertexFormat::Sint32,
+            "sint32x2" => wgpu::VertexFormat::Sint32x2,
+            "sint32x4" => wgpu::VertexFormat::Sint32x4,
+            "unorm8x4" => wgpu::VertexFormat::Unorm8x4,
+            "snorm8x4" => wgpu::VertexFormat::Snorm8x4,
+            "uint8x4" => wgpu::VertexFormat::Uint8x4,
+            "float16x2" => wgpu::VertexFormat::Float16x2,
+            "float16x4" => wgpu::VertexFormat::Float16x4,
+            other => return Err(format!("Unsupported vertex format: {}", other)),
+        })
+    }
+
     #[tauri::command]
     pub async fn gpu_create_render_pipeline(
         id: u64,
@@ -836,6 +921,8 @@ pub mod inner {
         vs_entry: String,
         fs_entry: String,
         target_format: String,
+        vertex_buffers: Option<Vec<VertexBufferLayoutDesc>>,
+        topology: Option<String>,
     ) -> Result<(), String> {
         let dev = device()?;
         let state = lock();
@@ -851,13 +938,53 @@ pub mod inner {
             .ok_or("Unknown shader module id")?;
         let format = parse_texture_format(&target_format)?;
 
+        // JS'ten gelen vertex buffer layout'larını wgpu tiplerine çevir.
+        // Attribute dizileri, layout struct'ları onlara referans verdiği için
+        // ayrı bir Vec'te sabit tutulmalı.
+        let vb_descs = vertex_buffers.unwrap_or_default();
+        let attr_lists: Vec<Vec<wgpu::VertexAttribute>> = vb_descs
+            .iter()
+            .map(|vb| {
+                vb.attributes
+                    .iter()
+                    .map(|a| {
+                        Ok(wgpu::VertexAttribute {
+                            format: parse_vertex_format(&a.format)?,
+                            offset: a.offset,
+                            shader_location: a.shader_location,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let vb_layouts: Vec<wgpu::VertexBufferLayout> = vb_descs
+            .iter()
+            .zip(attr_lists.iter())
+            .map(|(vb, attrs)| wgpu::VertexBufferLayout {
+                array_stride: vb.array_stride,
+                step_mode: match vb.step_mode.as_deref() {
+                    Some("instance") => wgpu::VertexStepMode::Instance,
+                    _ => wgpu::VertexStepMode::Vertex,
+                },
+                attributes: attrs,
+            })
+            .collect();
+
+        let topology = match topology.as_deref() {
+            Some("point-list") => wgpu::PrimitiveTopology::PointList,
+            Some("line-list") => wgpu::PrimitiveTopology::LineList,
+            Some("line-strip") => wgpu::PrimitiveTopology::LineStrip,
+            Some("triangle-strip") => wgpu::PrimitiveTopology::TriangleStrip,
+            _ => wgpu::PrimitiveTopology::TriangleList,
+        };
+
         let pipeline = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(layout),
             vertex: wgpu::VertexState {
                 module,
                 entry_point: &vs_entry,
-                buffers: &[],
+                buffers: &vb_layouts,
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -871,7 +998,7 @@ pub mod inner {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
+                topology,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -932,8 +1059,24 @@ pub mod inner {
         push_op(encoder_id, RecordedOp::SetRenderBindGroup { index, bind_group: bind_group_id })
     }
     #[tauri::command]
+    pub async fn gpu_encoder_set_vertex_buffer(encoder_id: u64, slot: u32, buffer_id: u64, offset: Option<u64>) -> Result<(), String> {
+        push_op(encoder_id, RecordedOp::SetVertexBuffer { slot, buffer: buffer_id, offset: offset.unwrap_or(0) })
+    }
+    #[tauri::command]
+    pub async fn gpu_encoder_set_index_buffer(encoder_id: u64, buffer_id: u64, format: String, offset: Option<u64>) -> Result<(), String> {
+        push_op(encoder_id, RecordedOp::SetIndexBuffer {
+            buffer: buffer_id,
+            format_u32: format == "uint32",
+            offset: offset.unwrap_or(0),
+        })
+    }
+    #[tauri::command]
     pub async fn gpu_encoder_draw(encoder_id: u64, vertex_count: u32, instance_count: u32) -> Result<(), String> {
         push_op(encoder_id, RecordedOp::Draw { vertex_count, instance_count })
+    }
+    #[tauri::command]
+    pub async fn gpu_encoder_draw_indexed(encoder_id: u64, index_count: u32, instance_count: u32) -> Result<(), String> {
+        push_op(encoder_id, RecordedOp::DrawIndexed { index_count, instance_count })
     }
     #[tauri::command]
     pub async fn gpu_encoder_end_render_pass(encoder_id: u64) -> Result<(), String> {
@@ -1063,8 +1206,20 @@ pub mod inner {
                                 let bg = state.registries.bind_groups.get(bind_group).ok_or("Unknown bind group id")?;
                                 pass.set_bind_group(*index, bg, &[]);
                             }
+                            RecordedOp::SetVertexBuffer { slot, buffer, offset } => {
+                                let buf = state.registries.buffers.get(buffer).ok_or("Unknown vertex buffer id")?;
+                                pass.set_vertex_buffer(*slot, buf.slice(*offset..));
+                            }
+                            RecordedOp::SetIndexBuffer { buffer, format_u32, offset } => {
+                                let buf = state.registries.buffers.get(buffer).ok_or("Unknown index buffer id")?;
+                                let fmt = if *format_u32 { wgpu::IndexFormat::Uint32 } else { wgpu::IndexFormat::Uint16 };
+                                pass.set_index_buffer(buf.slice(*offset..), fmt);
+                            }
                             RecordedOp::Draw { vertex_count, instance_count } => {
                                 pass.draw(0..*vertex_count, 0..*instance_count);
+                            }
+                            RecordedOp::DrawIndexed { index_count, instance_count } => {
+                                pass.draw_indexed(0..*index_count, 0, 0..*instance_count);
                             }
                             RecordedOp::EndRenderPass => {
                                 i += 1;
@@ -1141,6 +1296,288 @@ pub mod inner {
         Ok(())
     }
 
+    /// queue.onSubmittedWorkDone() karşılığı: gönderilmiş işin GPU'da
+    /// tamamlanmasını bekler.
+    #[tauri::command]
+    pub async fn gpu_queue_on_submitted_work_done() -> Result<(), String> {
+        let q = queue()?;
+        let dev = device()?;
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        q.on_submitted_work_done(move || {
+            let _ = tx.send(());
+        });
+        dev.poll(wgpu::Maintain::Wait);
+        rx.await.map_err(|_| "on_submitted_work_done callback dropped".to_string())
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Binary IPC transport — base64 yerine ham byte gövdesi
+    // ─────────────────────────────────────────────────────────────────
+    // Tauri v2 raw invoke: JS `invoke(cmd, bytes, { headers })` çağrısında
+    // gövde InvokeBody::Raw olarak gelir; parametreler header'da taşınır.
+    // Base64 encode/decode ve %33 boyut şişmesi tamamen ortadan kalkar.
+
+    fn header_u64(request: &tauri::ipc::Request<'_>, name: &str) -> Result<u64, String> {
+        request
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .ok_or_else(|| format!("Missing/invalid header: {}", name))
+    }
+
+    fn raw_body<'a>(request: &'a tauri::ipc::Request<'_>) -> Result<&'a [u8], String> {
+        match request.body() {
+            tauri::ipc::InvokeBody::Raw(bytes) => Ok(bytes.as_slice()),
+            _ => Err("Expected raw binary body".to_string()),
+        }
+    }
+
+    #[tauri::command]
+    pub fn gpu_write_buffer_bin(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+        let buffer_id = header_u64(&request, "x-buffer-id")?;
+        let offset = header_u64(&request, "x-offset").unwrap_or(0);
+        let bytes = raw_body(&request)?;
+
+        let q = queue()?;
+        let state = lock();
+        let buf = state
+            .registries
+            .buffers
+            .get(&buffer_id)
+            .ok_or("Unknown buffer id")?;
+        q.write_buffer(buf, offset, bytes);
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub fn gpu_write_texture_bin(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+        // Native player aktifken IPC üzerinden gelen kare yazımlarını at
+        // (bant genişliği koruması) — base64 yolundaki davranışla aynı.
+        if let Ok(manager) = crate::native_render::inner::get_manager().try_lock() {
+            if manager.player.is_some() {
+                return Ok(());
+            }
+        }
+
+        let texture_id = header_u64(&request, "x-texture-id")?;
+        let width = header_u64(&request, "x-width")? as u32;
+        let height = header_u64(&request, "x-height")? as u32;
+        let bytes_per_row = header_u64(&request, "x-bytes-per-row")? as u32;
+        let bytes = raw_body(&request)?;
+
+        let q = queue()?;
+        let state = lock();
+        let tex = state.registries.textures.get(&texture_id).ok_or("Unknown texture id")?;
+        q.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytes,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        Ok(())
+    }
+
+    /// mapAsync + okuma: ham binary yanıt döndürür (base64 yok).
+    #[tauri::command]
+    pub async fn gpu_buffer_read_bin(
+        buffer_id: u64,
+        offset: u64,
+        size: u64,
+    ) -> Result<tauri::ipc::Response, String> {
+        let (rx, dev) = {
+            let state = lock();
+            let buf = state
+                .registries
+                .buffers
+                .get(&buffer_id)
+                .ok_or("Unknown buffer id")?;
+
+            let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), wgpu::BufferAsyncError>>();
+            buf.slice(offset..(offset + size)).map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+
+            let dev = state.device.clone().ok_or("No device")?;
+            (rx, dev)
+        };
+
+        dev.poll(wgpu::Maintain::Wait);
+
+        rx.await
+            .map_err(|_| "Channel closed".to_string())?
+            .map_err(|e| e.to_string())?;
+
+        let bytes = {
+            let state = lock();
+            let buf = state
+                .registries
+                .buffers
+                .get(&buffer_id)
+                .ok_or("Unknown buffer id")?;
+            let view = buf.slice(offset..(offset + size)).get_mapped_range();
+            let data = view.to_vec();
+            drop(view);
+            buf.unmap();
+            data
+        };
+
+        Ok(tauri::ipc::Response::new(bytes))
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Native video frame import — IPC'den sıfır byte geçer
+    // ─────────────────────────────────────────────────────────────────
+
+    /// GStreamer player aktifken son çözülmüş kareyi köprüye kayıtlı bir
+    /// wgpu::Texture'a doğrudan kopyalar. Sitenin kendi WebGPU pipeline'ı
+    /// böylece gerçek video kareleriyle beslenir (importExternalTexture).
+    /// Dönüş: kare kopyalandıysa [width, height], kare yoksa None.
+    #[tauri::command]
+    pub async fn gpu_import_video_frame(texture_id: u64) -> Result<Option<[u32; 2]>, String> {
+        let frame_signal = {
+            let manager = crate::native_render::inner::get_manager()
+                .try_lock()
+                .map_err(|_| "Native player busy".to_string())?;
+            match &manager.player {
+                Some(player) => player.get_frame_signal(),
+                None => return Ok(None),
+            }
+        };
+
+        let q = queue()?;
+        let state = lock();
+        let tex = state.registries.textures.get(&texture_id).ok_or("Unknown texture id")?;
+        let tex_w = tex.width();
+        let tex_h = tex.height();
+
+        let guard = frame_signal.frame.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(ref frame) = *guard else {
+            return Ok(None);
+        };
+        if frame.width == 0 || frame.height == 0 || frame.data.is_empty() {
+            return Ok(None);
+        }
+        if frame.width != tex_w || frame.height != tex_h {
+            // Shim texture'ı gerçek video boyutuyla yeniden oluşturabilsin
+            // diye kare boyutunu hata mesajında bildir.
+            return Err(format!(
+                "frame-size-mismatch:{}x{}", frame.width, frame.height
+            ));
+        }
+
+        q.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &frame.data,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(frame.width * 4),
+                rows_per_image: Some(frame.height),
+            },
+            wgpu::Extent3d { width: frame.width, height: frame.height, depth_or_array_layers: 1 },
+        );
+        Ok(Some([frame.width, frame.height]))
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Kaynak yaşam döngüsü + hata kapsamları + kurtarma
+    // ─────────────────────────────────────────────────────────────────
+
+    /// JS tarafındaki destroy() çağrılarının Rust registry'sini gerçekten
+    /// temizlemesi için. Önceden buffer/texture'lar bölümler arası sonsuza
+    /// dek sızıyordu.
+    #[tauri::command]
+    pub async fn gpu_destroy_resource(kind: String, id: u64) -> Result<(), String> {
+        let overlay_to_close = {
+            let mut state = lock();
+            let r = &mut state.registries;
+            match kind.as_str() {
+                "buffer" => { r.buffers.remove(&id); None }
+                "texture" => { r.textures.remove(&id); None }
+                "texture_view" => { r.texture_views.remove(&id); None }
+                "sampler" => { r.samplers.remove(&id); None }
+                "shader_module" => { r.shader_modules.remove(&id); None }
+                "bind_group" => { r.bind_groups.remove(&id); None }
+                "bind_group_layout" => { r.bind_group_layouts.remove(&id); None }
+                "pipeline_layout" => { r.pipeline_layouts.remove(&id); None }
+                "compute_pipeline" => { r.compute_pipelines.remove(&id); None }
+                "render_pipeline" => { r.render_pipelines.remove(&id); None }
+                "command_buffer" => { r.command_buffers.remove(&id); None }
+                "encoder" => { r.encoders.remove(&id); None }
+                "canvas_context" => r.canvas_contexts.remove(&id).map(|ctx| ctx.overlay),
+                other => return Err(format!("Unknown resource kind: {}", other)),
+            }
+        };
+
+        if let Some(overlay) = overlay_to_close {
+            let app = overlay.app_handle().clone();
+            let _ = app.run_on_main_thread(move || {
+                let _ = overlay.close();
+            });
+        }
+        Ok(())
+    }
+
+    /// GPUDevice.pushErrorScope() karşılığı.
+    #[tauri::command]
+    pub async fn gpu_push_error_scope(filter: String) -> Result<(), String> {
+        let dev = device()?;
+        let f = match filter.as_str() {
+            "out-of-memory" => wgpu::ErrorFilter::OutOfMemory,
+            "internal" => wgpu::ErrorFilter::Internal,
+            _ => wgpu::ErrorFilter::Validation,
+        };
+        dev.push_error_scope(f);
+        Ok(())
+    }
+
+    /// GPUDevice.popErrorScope() karşılığı: hata olduysa mesajını döndürür.
+    #[tauri::command]
+    pub async fn gpu_pop_error_scope() -> Result<Option<String>, String> {
+        let dev = device()?;
+        let fut = dev.pop_error_scope();
+        dev.poll(wgpu::Maintain::Wait);
+        Ok(fut.await.map(|e| e.to_string()))
+    }
+
+    /// Device-lost kurtarması: köprü durumunu ve paylaşılan device'ı sıfırlar.
+    /// Sonraki requestAdapter()/requestDevice() temiz bir kurulum yapar.
+    #[tauri::command]
+    pub async fn gpu_reset_bridge() -> Result<(), String> {
+        let overlays: Vec<Window> = {
+            let mut state = lock();
+            state.device = None;
+            state.queue = None;
+            let contexts = std::mem::take(&mut state.registries.canvas_contexts);
+            state.registries = Registries::default();
+            contexts.into_values().map(|ctx| ctx.overlay).collect()
+        };
+
+        for overlay in overlays {
+            let app = overlay.app_handle().clone();
+            let _ = app.run_on_main_thread(move || {
+                let _ = overlay.close();
+            });
+        }
+
+        crate::renderer::device::reset_shared_device();
+        Ok(())
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // Canvas presentation (overlay)
     // ─────────────────────────────────────────────────────────────────
@@ -1156,14 +1593,16 @@ pub mod inner {
         let app: tauri::AppHandle = main_window.app_handle().clone();
         let label = format!("gpu_canvas_{}", next_id());
 
-        let (window_tx, window_rx) = tokio::sync::oneshot::channel::<Result<WebviewWindow, String>>();
+        // Webview'sız düz pencere: wgpu surface için yalnızca raw window
+        // handle gerekir; WebKit webview başlatmak israf ve risk.
+        let (window_tx, window_rx) = tokio::sync::oneshot::channel::<Result<Window, String>>();
         let (realize_tx, realize_rx) = tokio::sync::oneshot::channel::<()>();
         let realize_tx = Arc::new(Mutex::new(Some(realize_tx)));
 
         let app_for_build = app.clone();
         let label_for_build = label.clone();
         app.run_on_main_thread(move || {
-            let build_result = WebviewWindowBuilder::new(&app_for_build, label_for_build, WebviewUrl::default())
+            let build_result = WindowBuilder::new(&app_for_build, label_for_build)
                 .title("GPU Canvas Overlay")
                 .decorations(false)
                 .transparent(true)
@@ -1216,6 +1655,7 @@ pub mod inner {
                 width,
                 height,
                 pending_surface_texture: None,
+                current_view_id: None,
             },
         );
         Ok(ctx_id)
@@ -1272,16 +1712,31 @@ pub mod inner {
     }
 
     #[tauri::command]
-    pub async fn gpu_canvas_get_current_texture(context_id: u64) -> Result<u64, String> {
+    pub async fn gpu_canvas_get_current_texture(context_id: u64, view_id: Option<u64>) -> Result<u64, String> {
         let mut state = lock();
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         let surface = ctx.surface.as_ref().ok_or("configure() not called yet")?;
+
+        // present() çağrılmadan ikinci kez istenirse eski surface texture'ı
+        // düşür — aksi halde swapchain slotu sızar.
+        ctx.pending_surface_texture = None;
+
         let output = surface.get_current_texture().map_err(|e| format!("get_current_texture failed: {}", e))?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         ctx.pending_surface_texture = Some(output);
+
+        // JS tarafının önceden ayırdığı id ile deterministik kayıt: shim'in
+        // getCurrentTexture().createView()'i tam bu id'yi döndürür.
+        let id = view_id.unwrap_or_else(next_id);
+        let old_view_id = ctx.current_view_id.replace(id);
         drop(state);
-        let id = next_id();
-        lock().registries.texture_views.insert(id, view);
+
+        let mut state = lock();
+        // Önceki karenin view'ını registry'den sil (sınırsız büyüme düzeltmesi).
+        if let Some(old_id) = old_view_id {
+            state.registries.texture_views.remove(&old_id);
+        }
+        state.registries.texture_views.insert(id, view);
         Ok(id)
     }
 
@@ -1289,7 +1744,13 @@ pub mod inner {
     pub async fn gpu_canvas_present(context_id: u64) -> Result<(), String> {
         let mut state = lock();
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
-        if let Some(output) = ctx.pending_surface_texture.take() {
+        let output = ctx.pending_surface_texture.take();
+        let view_id = ctx.current_view_id.take();
+        if let Some(id) = view_id {
+            state.registries.texture_views.remove(&id);
+        }
+        drop(state);
+        if let Some(output) = output {
             output.present();
         }
         Ok(())
@@ -1341,14 +1802,43 @@ pub mod inner {
 
     fn parse_texture_format(s: &str) -> Result<wgpu::TextureFormat, String> {
         Ok(match s {
+            "r8unorm" => wgpu::TextureFormat::R8Unorm,
+            "rg8unorm" => wgpu::TextureFormat::Rg8Unorm,
             "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
             "rgba8unorm-srgb" => wgpu::TextureFormat::Rgba8UnormSrgb,
             "bgra8unorm" => wgpu::TextureFormat::Bgra8Unorm,
-            "r32float" => wgpu::TextureFormat::R32Float,
-            "rgba32float" => wgpu::TextureFormat::Rgba32Float,
+            "bgra8unorm-srgb" => wgpu::TextureFormat::Bgra8UnormSrgb,
+            "r16float" => wgpu::TextureFormat::R16Float,
+            "rg16float" => wgpu::TextureFormat::Rg16Float,
             "rgba16float" => wgpu::TextureFormat::Rgba16Float,
+            "r32float" => wgpu::TextureFormat::R32Float,
+            "rg32float" => wgpu::TextureFormat::Rg32Float,
+            "rgba32float" => wgpu::TextureFormat::Rgba32Float,
+            "r32uint" => wgpu::TextureFormat::R32Uint,
+            "rg32uint" => wgpu::TextureFormat::Rg32Uint,
+            "rgba32uint" => wgpu::TextureFormat::Rgba32Uint,
+            "rgb10a2unorm" => wgpu::TextureFormat::Rgb10a2Unorm,
+            "rg11b10ufloat" => wgpu::TextureFormat::Rg11b10Float,
+            "depth24plus" => wgpu::TextureFormat::Depth24Plus,
+            "depth32float" => wgpu::TextureFormat::Depth32Float,
             other => return Err(format!("Unsupported/unrecognized texture format: {}", other)),
         })
+    }
+
+    fn parse_filter_mode(s: Option<&str>) -> wgpu::FilterMode {
+        match s {
+            Some("nearest") => wgpu::FilterMode::Nearest,
+            Some("linear") => wgpu::FilterMode::Linear,
+            _ => wgpu::FilterMode::Linear,
+        }
+    }
+
+    fn parse_address_mode(s: Option<&str>) -> wgpu::AddressMode {
+        match s {
+            Some("repeat") => wgpu::AddressMode::Repeat,
+            Some("mirror-repeat") => wgpu::AddressMode::MirrorRepeat,
+            _ => wgpu::AddressMode::ClampToEdge,
+        }
     }
 }
 
@@ -1420,6 +1910,7 @@ pub mod inner {
         _height: u32,
         _format: String,
         _usage: u32,
+        _mip_level_count: Option<u32>,
     ) -> Result<(), String> {
         Err("WebGPU bridge is only supported on Linux".to_string())
     }
@@ -1441,12 +1932,12 @@ pub mod inner {
     }
 
     #[tauri::command]
-    pub async fn gpu_create_sampler(_id: u64) -> Result<(), String> {
+    pub async fn gpu_create_sampler(_id: u64, _descriptor: Option<serde_json::Value>) -> Result<(), String> {
         Err("WebGPU bridge is only supported on Linux".to_string())
     }
 
     #[tauri::command]
-    pub async fn gpu_create_shader_module(_id: u64, _code: String) -> Result<(), String> {
+    pub async fn gpu_create_shader_module(_id: u64, _code: String) -> Result<Option<String>, String> {
         Err("WebGPU bridge is only supported on Linux".to_string())
     }
 
@@ -1487,6 +1978,8 @@ pub mod inner {
         _vs_entry: String,
         _fs_entry: String,
         _target_format: String,
+        _vertex_buffers: Option<serde_json::Value>,
+        _topology: Option<String>,
     ) -> Result<(), String> {
         Err("WebGPU bridge is only supported on Linux".to_string())
     }
@@ -1592,7 +2085,7 @@ pub mod inner {
     }
 
     #[tauri::command]
-    pub async fn gpu_canvas_get_current_texture(_context_id: u64) -> Result<u64, String> {
+    pub async fn gpu_canvas_get_current_texture(_context_id: u64, _view_id: Option<u64>) -> Result<u64, String> {
         Err("WebGPU bridge is only supported on Linux".to_string())
     }
 
@@ -1603,6 +2096,68 @@ pub mod inner {
 
     #[tauri::command]
     pub async fn gpu_canvas_sync_bounds(_context_id: u64, _x: i32, _y: i32, _width: u32, _height: u32) -> Result<(), String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    // ── Yeni komutların Linux dışı stub'ları ────────────────────────────
+
+    #[tauri::command]
+    pub async fn gpu_queue_on_submitted_work_done() -> Result<(), String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub fn gpu_write_buffer_bin(_request: tauri::ipc::Request<'_>) -> Result<(), String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub fn gpu_write_texture_bin(_request: tauri::ipc::Request<'_>) -> Result<(), String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn gpu_buffer_read_bin(_buffer_id: u64, _offset: u64, _size: u64) -> Result<tauri::ipc::Response, String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn gpu_import_video_frame(_texture_id: u64) -> Result<Option<[u32; 2]>, String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn gpu_destroy_resource(_kind: String, _id: u64) -> Result<(), String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn gpu_push_error_scope(_filter: String) -> Result<(), String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn gpu_pop_error_scope() -> Result<Option<String>, String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn gpu_reset_bridge() -> Result<(), String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn gpu_encoder_set_vertex_buffer(_encoder_id: u64, _slot: u32, _buffer_id: u64, _offset: Option<u64>) -> Result<(), String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn gpu_encoder_set_index_buffer(_encoder_id: u64, _buffer_id: u64, _format: String, _offset: Option<u64>) -> Result<(), String> {
+        Err("WebGPU bridge is only supported on Linux".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn gpu_encoder_draw_indexed(_encoder_id: u64, _index_count: u32, _instance_count: u32) -> Result<(), String> {
         Err("WebGPU bridge is only supported on Linux".to_string())
     }
 }

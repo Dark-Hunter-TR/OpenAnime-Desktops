@@ -9,6 +9,8 @@ arch=('x86_64')
 url="https://github.com/Dark-Hunter-TR/OpenAnime-Desktops"
 license=('MIT')
 depends=(
+    # DİKKAT: Tauri v2 yalnızca webkit2gtk-4.1 (GTK3) ile çalışır.
+    # webkitgtk-6.0 (GTK4) bu paketin yerine GEÇMEZ; ikisi yan yana kurulabilir.
     'webkit2gtk-4.1'
     'gtk3'
     'libappindicator-gtk3'
