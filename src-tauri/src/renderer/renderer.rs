@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use wgpu::{Instance, InstanceDescriptor, Backends, Device, Queue, Sampler, SamplerDescriptor, AddressMode, FilterMode, TextureFormat, TextureUsages, CommandEncoderDescriptor};
+use wgpu::{Adapter, Instance, InstanceDescriptor, Backends, Device, Queue, Sampler, SamplerDescriptor, AddressMode, FilterMode, TextureFormat, TextureUsages, CommandEncoderDescriptor};
 use tauri::WebviewWindow;
 
 use super::adapter::select_adapter;
@@ -21,6 +21,7 @@ pub enum UpscaleMode {
 }
 
 pub struct WebGpuRenderer {
+    adapter: Arc<Adapter>,
     device: Arc<Device>,
     queue: Arc<Queue>,
     surface_manager: SurfaceManager,
@@ -88,6 +89,7 @@ impl WebGpuRenderer {
         });
 
         Ok(Self {
+            adapter,
             device,
             queue,
             surface_manager,
@@ -107,7 +109,7 @@ impl WebGpuRenderer {
 
     /// Resizes the surface.
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.surface_manager.resize(&self.device, width, height);
+        self.surface_manager.resize(&self.device, &self.adapter, width, height);
     }
 
     /// Uploads CPU frame data to the input texture. Reallocates input texture on dimensions change.
@@ -145,7 +147,7 @@ impl WebGpuRenderer {
                 eprintln!("[WebGPU Renderer] Surface outdated or lost, reconfiguring surface...");
                 let w = self.surface_manager.width();
                 let h = self.surface_manager.height();
-                self.surface_manager.resize(&self.device, w, h);
+                self.surface_manager.resize(&self.device, &self.adapter, w, h);
                 // Retry once after reconfiguring
                 self.surface_manager.get_current_texture()?
             }
