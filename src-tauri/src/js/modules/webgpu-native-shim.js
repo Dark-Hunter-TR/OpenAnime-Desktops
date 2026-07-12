@@ -307,6 +307,28 @@
         code = code.replace(/textureSampleBaseClampToEdge/g, "textureSample");
       }
 
+      // naga uyumluluğu: Chrome'un Tint derleyicisi modül kapsamındaki
+      // `const` matris/dizilere dinamik indeksle erişime izin verir, wgpu'nun
+      // naga derleyicisi vermez ("The expression may only be indexed by a
+      // constant"). Sitenin dithering/LUT shader'larındaki
+      // `const bayer_matrix=mat4x4<f32>(...)` + `bayer_matrix[l][m]` deseni
+      // bu yüzden derlenemiyordu (siyah ekranın kökü buydu). `var<private>`
+      // aynı anlamı taşır ve naga'da dinamik indekslenebilir; naga module
+      // scope var için açık tip istediğinden tip de eklenir. (Dönüşüm,
+      // logdaki iki gerçek shader üzerinde naga 22 ile doğrulandı.)
+      const before = code;
+      code = code.replace(
+        /\bconst\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(mat[234]x[234](?:<[a-z0-9_]+>)?|array<[^(]+>)\s*\(/g,
+        "var<private> $1:$2=$2("
+      );
+      code = code.replace(
+        /\bconst\s+([A-Za-z_][A-Za-z0-9_]*\s*:\s*(?:mat[234]x[234](?:<[a-z0-9_]+>)?|array<[^(=]+>))\s*=/g,
+        "var<private> $1="
+      );
+      if (code !== before) {
+        console.log("[WebGPU Shim] naga uyumluluğu: const mat/array -> var<private> dönüşümü uygulandı");
+      }
+
       const module = new GPUShaderModule(id, this);
       // Rust tarafı derleme hatasını error scope ile yakalayıp döndürür;
       // getCompilationInfo() bu sonucu bekleyip gerçek mesajı verir.
