@@ -1,4 +1,4 @@
-use wgpu::{Adapter, Device, Instance, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, PresentMode, TextureUsages};
+use wgpu::{Adapter, CompositeAlphaMode, Device, Instance, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, PresentMode, TextureUsages};
 use tauri::WebviewWindow;
 
 pub struct SurfaceManager {
@@ -38,7 +38,7 @@ impl SurfaceManager {
             width,
             height,
             present_mode,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode: Self::select_alpha_mode(&caps.alpha_modes),
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -50,6 +50,24 @@ impl SurfaceManager {
             config,
             vsync,
         })
+    }
+
+    /// Selects the composite alpha mode.
+    ///
+    /// `caps.alpha_modes[0]` is not reliable on all Vulkan/Wayland drivers:
+    /// on NVIDIA, `Surface::get_capabilities()` has been observed to report
+    /// `PostMultiplied` as available while the very next `Surface::configure()`
+    /// call rejects it ("... not in the list of supported alpha modes: [Opaque]"),
+    /// which panics and aborts the whole process (`panic = "abort"`). `Opaque`
+    /// is the one mode every driver honors, so we prefer it whenever it's
+    /// present — the transparent overlay window then blends opaquely instead
+    /// of alpha-blending, which is a visual trade-off, not a crash.
+    fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
+        if available.contains(&CompositeAlphaMode::Opaque) {
+            CompositeAlphaMode::Opaque
+        } else {
+            available[0]
+        }
     }
 
     /// Selects present mode based on VSync request and hardware capabilities.
@@ -87,7 +105,7 @@ impl SurfaceManager {
         if width > 0 && height > 0 {
             let caps = self.surface.get_capabilities(adapter);
             self.config.present_mode = Self::select_present_mode(&caps.present_modes, self.vsync);
-            self.config.alpha_mode = caps.alpha_modes[0];
+            self.config.alpha_mode = Self::select_alpha_mode(&caps.alpha_modes);
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(device, &self.config);
@@ -99,7 +117,7 @@ impl SurfaceManager {
     pub fn reconfigure(&mut self, device: &Device, adapter: &Adapter) {
         let caps = self.surface.get_capabilities(adapter);
         self.config.present_mode = Self::select_present_mode(&caps.present_modes, self.vsync);
-        self.config.alpha_mode = caps.alpha_modes[0];
+        self.config.alpha_mode = Self::select_alpha_mode(&caps.alpha_modes);
         self.surface.configure(device, &self.config);
     }
 
