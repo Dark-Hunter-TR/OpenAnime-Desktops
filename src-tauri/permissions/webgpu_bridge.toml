@@ -1,0 +1,43 @@
+[[permission]]
+identifier = "allow-webgpu-bridge"
+description = "Allows invoking the WebGPU IPC bridge commands (Linux WebGPU shim: adapter/device/buffer/texture/pipeline/canvas)"
+
+[permission.commands]
+allow = [
+  "gpu_request_adapter",
+  "gpu_request_device",
+  "gpu_create_buffer",
+  "gpu_write_buffer",
+  "gpu_buffer_map_async",
+  "gpu_buffer_unmap",
+  "gpu_create_texture",
+  "gpu_texture_create_view",
+  "gpu_write_texture",
+  "gpu_create_sampler",
+  "gpu_create_shader_module",
+  "gpu_create_bind_group_layout",
+  "gpu_create_pipeline_layout",
+  "gpu_create_bind_group",
+  "gpu_create_compute_pipeline",
+  "gpu_create_render_pipeline",
+  "gpu_create_command_encoder",
+  "gpu_encoder_begin_compute_pass",
+  "gpu_encoder_set_compute_pipeline",
+  "gpu_encoder_set_bind_group",
+  "gpu_encoder_dispatch_workgroups",
+  "gpu_encoder_end_compute_pass",
+  "gpu_encoder_begin_render_pass",
+  "gpu_encoder_set_render_pipeline",
+  "gpu_encoder_set_render_bind_group",
+  "gpu_encoder_draw",
+  "gpu_encoder_end_render_pass",
+  "gpu_encoder_copy_buffer_to_texture",
+  "gpu_encoder_copy_texture_to_texture",
+  "gpu_encoder_finish",
+  "gpu_queue_submit",
+  "gpu_canvas_get_context",
+  "gpu_canvas_configure",
+  "gpu_canvas_get_current_texture",
+  "gpu_canvas_present",
+  "gpu_canvas_sync_bounds",
+]

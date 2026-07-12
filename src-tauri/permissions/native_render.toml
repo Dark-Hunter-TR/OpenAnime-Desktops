@@ -1,0 +1,12 @@
+[[permission]]
+identifier = "allow-native-render"
+description = "Allows invoking native video player and GStreamer transport control commands (Linux native render overlay)"
+
+[permission.commands]
+allow = [
+  "webgpu_state_changed",
+  "webgpu_sync_bounds",
+  "gst_control_play",
+  "gst_control_pause",
+  "gst_control_seek",
+]

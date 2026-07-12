@@ -35,6 +35,9 @@
     "os:default",
     "allow-dpi-proxy",
     "allow-session-log",
-    "allow-read-local-video"
+    "allow-read-local-video",
+    "allow-webgpu-bridge",
+    "allow-native-render",
+    "allow-gpu-diagnostics"
   ]
 }

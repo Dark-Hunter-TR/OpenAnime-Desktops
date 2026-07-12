@@ -135,6 +135,75 @@ pub mod inner {
         pub name: String,
         pub is_fallback_adapter: bool,
         pub is_software_adapter: bool,
+        /// WebGPU spec özellik adları (örn. "shader-f16", "timestamp-query").
+        /// Site tarafı `adapter.features.has(...)` ile kontrol edebilsin diye
+        /// gerçek `wgpu::Features`'tan dönüştürülür (webgpu-native-shim.js
+        /// önceden bunu her zaman boş `Set()` bırakıyordu).
+        pub features: Vec<String>,
+        /// WebGPU spec limit adları (camelCase, örn. "maxTextureDimension2D")
+        /// → değer. Gerçek `wgpu::Limits`'ten dönüştürülür.
+        pub limits: HashMap<String, u64>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    pub struct DeviceInfo {
+        pub id: u64,
+        pub features: Vec<String>,
+        pub limits: HashMap<String, u64>,
+    }
+
+    /// `wgpu::Features` bitmask'ını WebGPU spesifikasyonundaki resmi
+    /// (kebab-case) özellik adlarına dönüştürür. Yalnızca 1:1 spec karşılığı
+    /// olan bayraklar dahil edilir.
+    fn wgpu_features_to_names(features: wgpu::Features) -> Vec<String> {
+        let table: &[(wgpu::Features, &str)] = &[
+            (wgpu::Features::DEPTH_CLIP_CONTROL, "depth-clip-control"),
+            (wgpu::Features::TIMESTAMP_QUERY, "timestamp-query"),
+            (wgpu::Features::TEXTURE_COMPRESSION_BC, "texture-compression-bc"),
+            (wgpu::Features::TEXTURE_COMPRESSION_ETC2, "texture-compression-etc2"),
+            (wgpu::Features::TEXTURE_COMPRESSION_ASTC, "texture-compression-astc"),
+            (wgpu::Features::INDIRECT_FIRST_INSTANCE, "indirect-first-instance"),
+            (wgpu::Features::SHADER_F16, "shader-f16"),
+            (wgpu::Features::RG11B10UFLOAT_RENDERABLE, "rg11b10ufloat-renderable"),
+            (wgpu::Features::BGRA8UNORM_STORAGE, "bgra8unorm-storage"),
+            (wgpu::Features::FLOAT32_FILTERABLE, "float32-filterable"),
+        ];
+        table
+            .iter()
+            .filter(|(flag, _)| features.contains(*flag))
+            .map(|(_, name)| name.to_string())
+            .collect()
+    }
+
+    /// `wgpu::Limits`'i WebGPU spesifikasyonundaki camelCase limit adlarına
+    /// dönüştürür. Compute/render pipeline kurulumu için en çok kontrol edilen
+    /// alanlar kapsanır (tam liste değil — site tarafının pratikte baktığı
+    /// çekirdek limitler).
+    fn wgpu_limits_to_map(limits: &wgpu::Limits) -> HashMap<String, u64> {
+        let mut map = HashMap::new();
+        map.insert("maxTextureDimension1D".to_string(), limits.max_texture_dimension_1d as u64);
+        map.insert("maxTextureDimension2D".to_string(), limits.max_texture_dimension_2d as u64);
+        map.insert("maxTextureDimension3D".to_string(), limits.max_texture_dimension_3d as u64);
+        map.insert("maxTextureArrayLayers".to_string(), limits.max_texture_array_layers as u64);
+        map.insert("maxBindGroups".to_string(), limits.max_bind_groups as u64);
+        map.insert("maxSampledTexturesPerShaderStage".to_string(), limits.max_sampled_textures_per_shader_stage as u64);
+        map.insert("maxSamplersPerShaderStage".to_string(), limits.max_samplers_per_shader_stage as u64);
+        map.insert("maxStorageBuffersPerShaderStage".to_string(), limits.max_storage_buffers_per_shader_stage as u64);
+        map.insert("maxStorageTexturesPerShaderStage".to_string(), limits.max_storage_textures_per_shader_stage as u64);
+        map.insert("maxUniformBuffersPerShaderStage".to_string(), limits.max_uniform_buffers_per_shader_stage as u64);
+        map.insert("maxUniformBufferBindingSize".to_string(), limits.max_uniform_buffer_binding_size as u64);
+        map.insert("maxStorageBufferBindingSize".to_string(), limits.max_storage_buffer_binding_size as u64);
+        map.insert("maxVertexBuffers".to_string(), limits.max_vertex_buffers as u64);
+        map.insert("maxBufferSize".to_string(), limits.max_buffer_size);
+        map.insert("maxVertexAttributes".to_string(), limits.max_vertex_attributes as u64);
+        map.insert("maxVertexBufferArrayStride".to_string(), limits.max_vertex_buffer_array_stride as u64);
+        map.insert("maxComputeWorkgroupStorageSize".to_string(), limits.max_compute_workgroup_storage_size as u64);
+        map.insert("maxComputeInvocationsPerWorkgroup".to_string(), limits.max_compute_invocations_per_workgroup as u64);
+        map.insert("maxComputeWorkgroupSizeX".to_string(), limits.max_compute_workgroup_size_x as u64);
+        map.insert("maxComputeWorkgroupSizeY".to_string(), limits.max_compute_workgroup_size_y as u64);
+        map.insert("maxComputeWorkgroupSizeZ".to_string(), limits.max_compute_workgroup_size_z as u64);
+        map.insert("maxComputeWorkgroupsPerDimension".to_string(), limits.max_compute_workgroups_per_dimension as u64);
+        map
     }
 
     #[derive(serde::Serialize)]
@@ -309,6 +378,10 @@ pub mod inner {
         let info = adapter.get_info();
         let is_software_adapter = is_software_fallback || info.device_type == wgpu::DeviceType::Cpu;
         let is_gl_fallback = info.backend == wgpu::Backend::Gl;
+        // Adapter'ı state'e taşımadan önce gerçek features/limits'i oku —
+        // önceden bu veri hiç toplanmıyor, JS tarafı her zaman boş görüyordu.
+        let features = wgpu_features_to_names(adapter.features());
+        let limits = wgpu_limits_to_map(&adapter.limits());
 
         // Emit warnings to frontend if software rendering or OpenGL fallback is used
         if is_software_adapter {
@@ -328,11 +401,13 @@ pub mod inner {
             name: info.name,
             is_fallback_adapter: is_software_fallback,
             is_software_adapter,
+            features,
+            limits,
         })
     }
 
     #[tauri::command]
-    pub async fn gpu_request_device() -> Result<u64, String> {
+    pub async fn gpu_request_device() -> Result<DeviceInfo, String> {
         let adapter = {
             let state = lock();
             state
@@ -344,11 +419,15 @@ pub mod inner {
 
         // Share the single device/queue instance generated by the renderer module
         let (device, queue) = crate::renderer::device::create_device_and_queue(&adapter).await?;
+        // Gerçek device features/limits'ini oku — önceden JS tarafı hiç
+        // görmüyordu, GPUDevice her zaman boş Set()/{} ile kuruluyordu.
+        let features = wgpu_features_to_names(device.features());
+        let limits = wgpu_limits_to_map(&device.limits());
 
         let mut state = lock();
         state.device = Some(device);
         state.queue = Some(queue);
-        Ok(0)
+        Ok(DeviceInfo { id: 0, features, limits })
     }
 
     fn device() -> Result<Arc<wgpu::Device>, String> {

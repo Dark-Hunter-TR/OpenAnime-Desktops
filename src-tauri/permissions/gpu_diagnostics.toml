@@ -1,0 +1,16 @@
+[[permission]]
+identifier = "allow-gpu-diagnostics"
+description = "Allows invoking GPU/GStreamer diagnostics and report commands"
+
+[permission.commands]
+allow = [
+  "get_gpu_report",
+  "get_gst_report",
+  "install_missing_gstreamer",
+  "gpu_full_report",
+  "gpu_vulkan_status",
+  "gpu_backend_info",
+  "gpu_refresh_report",
+  "gpu_fallback_status",
+  "gpu_activate_fallback",
+]
