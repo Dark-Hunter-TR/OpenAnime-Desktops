@@ -289,6 +289,51 @@ async fn compute_macos_report() -> FullGpuReport {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Panik-korumalı wgpu Instance oluşturma
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// wgpu Instance'ı panic'e karşı korumalı oluşturur.
+///
+/// wgpu-hal'ın GL backend'i, bozuk/eksik EGL kurulumlarında (ör. AppImage +
+/// host EGL uyumsuzluğu) init sırasında khronos-egl içinde
+/// `Option::unwrap() on None` ile PANIC'ler — sahada bunun sonucu,
+/// gpu_request_adapter promise'inin hiç çözülmemesi ve sitenin splash
+/// ekranında sonsuza dek takılı kalmasıydı. Sıra: istenen backend seti →
+/// GL çıkarılmış set → boş set (adapter bulunmaz ama uygulama yaşar).
+#[cfg(target_os = "linux")]
+pub fn create_instance_safe(backends: wgpu::Backends) -> wgpu::Instance {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let mk = |b: wgpu::Backends| {
+        catch_unwind(AssertUnwindSafe(|| {
+            wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: b,
+                ..Default::default()
+            })
+        }))
+    };
+
+    if let Ok(instance) = mk(backends) {
+        return instance;
+    }
+
+    let without_gl = backends - wgpu::Backends::GL;
+    if without_gl != backends {
+        crate::log!("[GPU] wgpu instance init panic'ledi (muhtemel bozuk EGL) — GL backend'siz deneniyor");
+        if let Ok(instance) = mk(without_gl) {
+            return instance;
+        }
+    }
+
+    crate::log!("[GPU] wgpu instance hiçbir backend ile kurulamadı — boş backend seti ile devam (WebGPU devre dışı)");
+    mk(wgpu::Backends::empty()).unwrap_or_else(|_| {
+        // Boş backend setiyle init hiçbir sürücüye dokunmaz; buraya düşmek
+        // pratikte imkânsızdır.
+        panic!("wgpu instance boş backend setiyle bile oluşturulamadı")
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // wgpu Adapter Bilgisi (her platformda kullanılabilir)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -306,10 +351,7 @@ async fn try_get_wgpu_adapter_info(
         _ => wgpu::Backends::all(),
     };
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu_backends,
-        ..Default::default()
-    });
+    let instance = create_instance_safe(wgpu_backends);
 
     let adapter_opt = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
