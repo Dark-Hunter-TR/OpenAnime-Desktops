@@ -325,7 +325,7 @@ install_arch_pkgbuild() {
     makepkg -o --noconfirm 2>/dev/null || true
 
     if [[ ! -f "$pkgbuild_dir/openanime-desktops-$LATEST_TAG.deb" ]]; then
-        local deb_url="$BASE_URL/openanime_$LATEST_TAG\_amd64.deb"
+        local deb_url="$BASE_URL/openanime_${LATEST_TAG}_amd64.deb"
         local deb_file="$pkgbuild_dir/openanime-desktops-$LATEST_TAG.deb"
         info "makepkg ile indirme başarısız, doğrudan release .deb indiriliyor..."
         wget -q "$deb_url" -O "$deb_file" || curl -sL "$deb_url" -o "$deb_file"
@@ -391,7 +391,7 @@ install_deb() {
     tmpdir=$(mktemp -d)
     TMPDIR="$tmpdir"
 
-    local deb_url="$BASE_URL/openanime_$LATEST_TAG\_amd64.deb"
+    local deb_url="$BASE_URL/openanime_${LATEST_TAG}_amd64.deb"
     local deb_file="$tmpdir/openanime.deb"
 
     info "İndiriliyor: $deb_url"

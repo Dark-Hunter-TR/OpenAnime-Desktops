@@ -29,7 +29,7 @@ optdepends=(
 # Derleme gerekmez — direkt binary indir
 makedepends=()
 # GitHub Releases'den hazır .deb binary'si
-source=("$pkgname-$pkgver.deb::https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v$_pkgver/openanime_$_pkgver\_amd64.deb")
+source=("$pkgname-$pkgver.deb::https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v$_pkgver/openanime_${_pkgver}_amd64.deb")
 sha256sums=('SKIP')
 
 # Binary olduğu için build() boş — derleme yok
