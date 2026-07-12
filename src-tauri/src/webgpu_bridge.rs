@@ -1253,7 +1253,12 @@ pub mod inner {
             } else {
                 wgpu::PresentMode::Fifo
             },
-            alpha_mode: caps.alpha_modes[0],
+            // Auto: wgpu configure() sırasında sürücünün O ANKİ desteklediği moda
+            // çözümlenir. Önceden `caps.alpha_modes[0]` kullanılıyordu; NVIDIA/
+            // Wayland'da get_capabilities() PostMultiplied raporlayıp configure()
+            // reddedebiliyor ("not in the list of supported alpha modes: [Opaque]")
+            // ve panic=abort tüm uygulamayı çökertiyordu.
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -1313,7 +1318,14 @@ pub mod inner {
                     width: width.max(1),
                     height: height.max(1),
                     present_mode: wgpu::PresentMode::Fifo,
-                    alpha_mode: wgpu::CompositeAlphaMode::PostMultiplied,
+                    // Önceden hardcoded PostMultiplied idi — NVIDIA/Wayland'da
+                    // sürücü yalnızca Opaque destekleyince configure() panikliyor
+                    // ve panic=abort tüm uygulamayı çökertiyordu ("Requested alpha
+                    // mode PostMultiplied is not in the list of supported alpha
+                    // modes: [Opaque]"). Auto, configure() içinde taze yetenek
+                    // listesine karşı çözümlendiği için doğrulamadan geçemez hale
+                    // gelmez.
+                    alpha_mode: wgpu::CompositeAlphaMode::Auto,
                     view_formats: vec![],
                     desired_maximum_frame_latency: 2,
                 };

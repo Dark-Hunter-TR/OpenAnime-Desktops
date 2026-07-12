@@ -54,20 +54,16 @@ impl SurfaceManager {
 
     /// Selects the composite alpha mode.
     ///
-    /// `caps.alpha_modes[0]` is not reliable on all Vulkan/Wayland drivers:
-    /// on NVIDIA, `Surface::get_capabilities()` has been observed to report
-    /// `PostMultiplied` as available while the very next `Surface::configure()`
-    /// call rejects it ("... not in the list of supported alpha modes: [Opaque]"),
-    /// which panics and aborts the whole process (`panic = "abort"`). `Opaque`
-    /// is the one mode every driver honors, so we prefer it whenever it's
-    /// present — the transparent overlay window then blends opaquely instead
-    /// of alpha-blending, which is a visual trade-off, not a crash.
-    fn select_alpha_mode(available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
-        if available.contains(&CompositeAlphaMode::Opaque) {
-            CompositeAlphaMode::Opaque
-        } else {
-            available[0]
-        }
+    /// Always `Auto`: pre-queried `caps.alpha_modes` is not reliable on all
+    /// Vulkan/Wayland drivers — on NVIDIA, `Surface::get_capabilities()` has
+    /// been observed to report `PostMultiplied` while the very next
+    /// `Surface::configure()` call rejects it ("... not in the list of
+    /// supported alpha modes: [Opaque]"), which panics and aborts the whole
+    /// process (`panic = "abort"`). `Auto` is resolved by wgpu *inside*
+    /// `configure()` against the capabilities it validates with, so it can
+    /// never fail that validation.
+    fn select_alpha_mode(_available: &[CompositeAlphaMode]) -> CompositeAlphaMode {
+        CompositeAlphaMode::Auto
     }
 
     /// Selects present mode based on VSync request and hardware capabilities.
@@ -93,14 +89,9 @@ impl SurfaceManager {
 
     /// Configures/recreates surface for a new size.
     ///
-    /// Re-queries surface capabilities and re-selects `alpha_mode`/`present_mode`
-    /// from the fresh result before configuring. On Wayland (notably NVIDIA),
-    /// the capabilities reported by an early `get_capabilities()` call (e.g. in
-    /// `new()`, before the compositor has fully mapped the surface) can be wider
-    /// than what a later `configure()` actually validates against — reusing a
-    /// stale `alpha_mode` here caused a hard panic ("Requested alpha mode
-    /// PostMultiplied is not in the list of supported alpha modes: [Opaque]")
-    /// that aborted the whole process (`panic = "abort"`).
+    /// Re-queries surface capabilities and re-selects `present_mode`/`alpha_mode`
+    /// from the fresh result before configuring — on Wayland the supported set
+    /// can change after the compositor maps/remaps the surface.
     pub fn resize(&mut self, device: &Device, adapter: &Adapter, width: u32, height: u32) {
         if width > 0 && height > 0 {
             let caps = self.surface.get_capabilities(adapter);
