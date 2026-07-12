@@ -172,13 +172,13 @@ bash <(curl -s https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Deskto
 | **CachyOS / Arch / Manjaro / EndeavourOS** | Repodaki PKGBUILD ile binary kurulum | **~15 MB** |
 | **Ubuntu / Debian / Mint / Pop!_OS** | `.deb` indir + `dpkg -i` | **~15 MB** |
 | **Fedora / RHEL** | `.rpm` indir + `dnf install` | **~15 MB** |
-| **Diğer (NixOS, Void, Solus, Gentoo)** | `.deb` içinden binary çıkar, olmazsa AppImage | **~15–120 MB** |
+| **Diğer (NixOS, Void, Solus, Gentoo)** | Release `.deb` içinden binary çıkar, yalnızca gerekirse AppImage | **~15–120 MB** |
 
 Kullanıcı kurulumu (`--user`) için: `bash install.sh --user`
 
 ---
 
-#### 🏃 AppImage (Taşınabilir — Her Dağıtımda Çalışır)
+#### 🏃 AppImage (Son Çare — Taşınabilir)
 
 ```bash
 wget https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/OpenAnime_*.AppImage
@@ -191,13 +191,13 @@ chmod +x OpenAnime_*.AppImage
 | `x86_64` | ✅ Evet |
 | `aarch64` (ARM64) | ✅ Evet |
 
-> **Not:** AppImage tüm bağımlılıkları içinde taşır (~200 MB). En kolay ama en büyük yöntemdir.
+> **Not:** AppImage tüm bağımlılıkları tek dosyada taşır; bu yüzden en büyük seçenektir ve yalnızca diğer Linux kurulum yolları başarısızsa önerilir.
 
 ---
 
-#### 🗿 CachyOS / Arch Linux (Repodan Binary)
+#### 🗿 CachyOS / Arch Linux (Release `.deb` + launcher alias)
 
-AUR'a gitmez, doğrudan bu repodaki [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) ile kurulum:
+AUR'a gitmez, doğrudan GitHub Releases'deki `.deb` paketini indirip açar ve `openanime-desktops` komutunu kurar:
 
 ```bash
 git clone https://github.com/Dark-Hunter-TR/OpenAnime-Desktops.git
@@ -205,7 +205,7 @@ cd OpenAnime-Desktops/packaging/arch
 makepkg -si    # 5 saniye, derleme yok!
 ```
 
-`PKGBUILD`, GitHub Releases'den hazır `.deb` binary'sini indirir, sisteme uygulama olarak kurar. `pacman -R openanime-desktops` ile kaldırılır.
+`PKGBUILD`, GitHub Releases'den hazır `.deb` binary'sini indirir, sistemde çalıştırılabilir komutu ve `openanime-desktops` alias'ını kurar. `pacman -R openanime-desktops` ile kaldırılır.
 
 | Mimariler | Durum |
 |-----------|-------|
@@ -246,7 +246,7 @@ sudo dnf install https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/l
 # flatpak install openanime com.darkhunter.openanime-desktops
 ```
 
-> Flatpak altyapısı kurulum aşamasındadır. Şimdilik `install.sh` veya AppImage kullanın.
+> Flatpak altyapısı kurulum aşamasındadır. Şimdilik `install.sh` veya release tabanlı Linux kurulumu kullanın.
 
 ---
 
