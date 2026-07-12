@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use wgpu::{Adapter, Instance, InstanceDescriptor, Backends, Device, Queue, Sampler, SamplerDescriptor, AddressMode, FilterMode, TextureFormat, TextureUsages, CommandEncoderDescriptor};
+use wgpu::{Adapter, Backends, Device, Queue, Sampler, SamplerDescriptor, AddressMode, FilterMode, TextureFormat, TextureUsages, CommandEncoderDescriptor};
 use tauri::Window;
 
 use super::adapter::select_adapter;
@@ -50,11 +50,8 @@ pub struct WebGpuRenderer {
 
 impl WebGpuRenderer {
     pub async fn new(window: Window, vsync: bool) -> Result<Self, String> {
-        // Create WGPU Instance
-        let instance = Instance::new(InstanceDescriptor {
-            backends: Backends::VULKAN | Backends::GL,
-            ..Default::default()
-        });
+        // Create WGPU Instance (panik-korumalı — bozuk EGL'de GL init çökebilir)
+        let instance = crate::gpu::create_instance_safe(Backends::VULKAN | Backends::GL);
 
         // Select compatible Vulkan adapter
         let adapter = select_adapter(&instance).await?;
