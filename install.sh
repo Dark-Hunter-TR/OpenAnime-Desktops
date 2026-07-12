@@ -145,6 +145,158 @@ install_deps_debian() {
     fi
 }
 
+find_installed_launcher() {
+    local candidate
+
+    for candidate in \
+        "$(command -v openanime-desktops 2>/dev/null || true)" \
+        "$(command -v openanime 2>/dev/null || true)" \
+        "$(command -v OpenAnime 2>/dev/null || true)"; do
+        if [[ -n "$candidate" && -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    for candidate in \
+        /usr/bin/openanime-desktops \
+        /usr/bin/openanime \
+        /usr/bin/OpenAnime \
+        /usr/local/bin/openanime-desktops \
+        /usr/local/bin/openanime \
+        /usr/local/bin/OpenAnime \
+        "$HOME/.local/bin/openanime-desktops" \
+        "$HOME/.local/bin/openanime" \
+        "$HOME/.local/bin/OpenAnime"; do
+        if [[ -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+install_launcher_alias() {
+    local source_bin="${1:-}"
+    local target_bin
+
+    if [[ -z "$source_bin" || ! -x "$source_bin" ]]; then
+        return 1
+    fi
+
+    if [[ "${INSTALL_MODE:-system}" == "user" ]]; then
+        mkdir -p "$HOME/.local/bin"
+        target_bin="$HOME/.local/bin/openanime-desktops"
+        ln -sfn "$source_bin" "$target_bin"
+    else
+        sudo mkdir -p /usr/bin
+        target_bin="/usr/bin/openanime-desktops"
+        sudo ln -sfn "$source_bin" "$target_bin"
+        sudo mkdir -p /usr/local/bin
+        sudo ln -sfn "$source_bin" /usr/local/bin/openanime-desktops 2>/dev/null || true
+    fi
+
+    echo "$target_bin"
+}
+
+extract_deb_payload() {
+    local deb_path="$1"
+    local extract_dir="$2"
+
+    mkdir -p "$extract_dir"
+
+    if command -v bsdtar &>/dev/null; then
+        bsdtar -xf "$deb_path" -C "$extract_dir"
+    elif command -v ar &>/dev/null; then
+        (cd "$extract_dir" && ar x "$deb_path")
+    else
+        err "Deb paketini açmak için bsdtar veya ar gerekli."
+        return 1
+    fi
+
+    local data_tar
+    data_tar=$(find "$extract_dir" -maxdepth 1 -type f -name 'data.tar.*' | head -1)
+    if [[ -z "$data_tar" ]]; then
+        err "Deb veri katmanı bulunamadı."
+        return 1
+    fi
+
+    if command -v bsdtar &>/dev/null; then
+        bsdtar -xf "$data_tar" -C "$extract_dir"
+    else
+        tar -xf "$data_tar" -C "$extract_dir"
+    fi
+}
+
+find_release_binary() {
+    local root_dir="$1"
+    local candidate
+
+    for candidate in \
+        "$root_dir/usr/bin/openanime-desktops" \
+        "$root_dir/usr/bin/openanime" \
+        "$root_dir/usr/bin/OpenAnime" \
+        "$root_dir/usr/lib/openanime-desktops/openanime-desktops" \
+        "$root_dir/usr/lib/openanime/openanime"; do
+        if [[ -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    if [[ -d "$root_dir/usr/bin" ]]; then
+        while IFS= read -r candidate; do
+            if [[ -x "$candidate" ]]; then
+                echo "$candidate"
+                return 0
+            fi
+        done < <(find "$root_dir/usr/bin" -maxdepth 1 -type f -perm -111 2>/dev/null)
+    fi
+
+    return 1
+}
+
+install_desktop_entry() {
+    local exec_line="$1"
+    local icon_line="${2:-openanime-desktops}"
+    local resolved_exec="$exec_line"
+
+    if [[ "$exec_line" == "openanime-desktops" ]]; then
+        if [[ "${INSTALL_MODE:-system}" == "user" ]]; then
+            resolved_exec="$HOME/.local/bin/openanime-desktops"
+        else
+            resolved_exec="/usr/bin/openanime-desktops"
+        fi
+    fi
+
+    if [[ "${INSTALL_MODE:-system}" == "user" ]]; then
+        mkdir -p "$HOME/.local/share/applications"
+        cat > "$HOME/.local/share/applications/openanime-desktops.desktop" << EOF
+[Desktop Entry]
+Name=OpenAnime Desktop
+Comment=OpenAnime masaüstü istemcisi
+Exec=$resolved_exec
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+Icon=$icon_line
+EOF
+    else
+        sudo mkdir -p /usr/share/applications
+        sudo tee /usr/share/applications/openanime-desktops.desktop > /dev/null << EOF
+[Desktop Entry]
+Name=OpenAnime Desktop
+Comment=OpenAnime masaüstü istemcisi
+Exec=$resolved_exec
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+Icon=$icon_line
+EOF
+    fi
+}
+
 # ─── Yöntem 1: Arch tabanlı (PKGBUILD binary) ──────────────
 install_arch_pkgbuild() {
     info "Arch tabanlı sistem tespit edildi. PKGBUILD ile binary kurulum..."
@@ -170,13 +322,14 @@ install_arch_pkgbuild() {
 
     # Sadece binary source'u indir (build atla)
     info "Binary indiriliyor (15 MB)..."
-    makepkg -o --noconfirm 2>/dev/null || {
-        # makepkg -o başarısız olursa direkt wget dene
+    makepkg -o --noconfirm 2>/dev/null || true
+
+    if [[ ! -f "$pkgbuild_dir/openanime-desktops-$LATEST_TAG.deb" ]]; then
         local deb_url="$BASE_URL/openanime_$LATEST_TAG\_amd64.deb"
         local deb_file="$pkgbuild_dir/openanime-desktops-$LATEST_TAG.deb"
-        info "makepkg ile indirme başarısız, direkt indiriliyor..."
+        info "makepkg ile indirme başarısız, doğrudan release .deb indiriliyor..."
         wget -q "$deb_url" -O "$deb_file" || curl -sL "$deb_url" -o "$deb_file"
-    }
+    fi
 
     # PKGBUILD'i düzenle: source'u güncelle
     sed -i "s/pkgver=.*/pkgver=${LATEST_TAG//-/_}/" "$pkgbuild_dir/PKGBUILD"
@@ -184,20 +337,47 @@ install_arch_pkgbuild() {
 
     info "Paket kuruluyor (sudo gerekebilir)..."
     makepkg -si --noconfirm 2>/dev/null || {
-        warn "makepkg -si başarısız. Alternatif yöntem deneniyor..."
-        # Fallback: direkt .deb ayıkla
+        warn "makepkg -si başarısız. Doğrudan .deb çıkarılıyor..."
+
         local deb_path
+        local extract_dir
+        local release_binary
+
         deb_path=$(ls "$pkgbuild_dir/"*.deb 2>/dev/null | head -1)
-        if [[ -n "$deb_path" ]]; then
-            sudo bsdtar -xf "$deb_path" -C "$pkgbuild_dir/pkg" 2>/dev/null || mkdir -p "$pkgbuild_dir/pkg"
-            sudo bsdtar -xf "$pkgbuild_dir/data.tar."* -C "$pkgbuild_dir/pkg" 2>/dev/null || true
-            if [[ -f "$pkgbuild_dir/pkg/usr/openanime/openanime-desktops" ]]; then
-                sudo install -Dm755 "$pkgbuild_dir/pkg/usr/openanime/openanime-desktops" /usr/bin/openanime-desktops
-                sudo install -Dm644 "$pkgbuild_dir/pkg/usr/share/applications/"* /usr/share/applications/ 2>/dev/null || true
-                sudo install -Dm644 "$pkgbuild_dir/pkg/usr/share/icons/"* /usr/share/icons/ 2>/dev/null || true
-            fi
+        if [[ -z "$deb_path" ]]; then
+            err "Kurulum için .deb dosyası bulunamadı."
+            exit 1
+        fi
+
+        extract_dir="$pkgbuild_dir/extracted"
+        extract_deb_payload "$deb_path" "$extract_dir" || {
+            err "Deb paketi açılamadı."
+            exit 1
+        }
+
+        release_binary=$(find_release_binary "$extract_dir") || {
+            err "Çıkarılan paket içinde çalıştırılabilir binary bulunamadı."
+            exit 1
+        }
+
+        if [[ "${INSTALL_MODE:-system}" == "user" ]]; then
+            mkdir -p "$HOME/.local/bin"
+            install -Dm755 "$release_binary" "$HOME/.local/bin/$(basename "$release_binary")"
+            install_launcher_alias "$HOME/.local/bin/$(basename "$release_binary")"
+            install_desktop_entry "openanime-desktops"
+        else
+            sudo mkdir -p /usr/bin
+            sudo install -Dm755 "$release_binary" "/usr/bin/$(basename "$release_binary")"
+            install_launcher_alias "/usr/bin/$(basename "$release_binary")"
+            install_desktop_entry "openanime-desktops"
         fi
     }
+
+    if ! install_launcher_alias "$(find_installed_launcher)" >/dev/null 2>&1; then
+        warn "Çalıştırılabilir komut bulunamadı; openanime-desktops kısayolu oluşturulamadı."
+    fi
+
+    install_desktop_entry "openanime-desktops"
 
     ok "OpenAnime Desktop başarıyla kuruldu!"
     info "Çalıştırmak için: openanime-desktops"
@@ -231,6 +411,10 @@ install_deb() {
         warn "Bağımlılık hatası oluştu. Tamamlanıyor..."
         sudo apt-get install -f -y -qq
     }
+
+    if ! install_launcher_alias "$(find_installed_launcher)" >/dev/null 2>&1; then
+        warn "Kurulu binary bulunamadı; openanime-desktops kısayolu oluşturulamadı."
+    fi
 
     ok "OpenAnime Desktop başarıyla kuruldu!"
     info "Çalıştırmak için: openanime-desktops"
@@ -345,7 +529,10 @@ EOF
 
     if [[ "${INSTALL_MODE:-system}" != "user" ]]; then
         # Symlink
+        sudo mkdir -p /usr/bin
         sudo ln -sf "$dest" /usr/bin/openanime-desktops 2>/dev/null || true
+        sudo mkdir -p /usr/local/bin
+        sudo ln -sf "$dest" /usr/local/bin/openanime-desktops 2>/dev/null || true
     fi
 
     # Desktop entry
@@ -353,11 +540,11 @@ EOF
     local bin_path
     if [[ "${INSTALL_MODE:-system}" == "user" ]]; then
         desktop_dest="$HOME/.local/share/applications"
-        bin_path="$HOME/.local/bin/OpenAnime.AppImage"
+        bin_path="openanime-desktops"
         mkdir -p "$desktop_dest"
     else
         desktop_dest="/usr/share/applications"
-        bin_path="/opt/openanime/OpenAnime.AppImage"
+        bin_path="openanime-desktops"
         sudo mkdir -p "$desktop_dest"
     fi
 
@@ -393,6 +580,15 @@ EOF
             fi
         fi
         rm -rf squashfs-root
+    fi
+
+    if ! install_launcher_alias "$(find_installed_launcher)" >/dev/null 2>&1; then
+        if [[ "${INSTALL_MODE:-system}" == "user" ]]; then
+            ln -sfn "$dest" "$HOME/.local/bin/openanime-desktops" 2>/dev/null || true
+        else
+            sudo ln -sfn "$dest" /usr/bin/openanime-desktops 2>/dev/null || true
+            sudo ln -sfn "$dest" /usr/local/bin/openanime-desktops 2>/dev/null || true
+        fi
     fi
 
     ok "OpenAnime Desktop kuruldu!"
