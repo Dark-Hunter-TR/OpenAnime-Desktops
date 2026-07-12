@@ -14,13 +14,110 @@
   }
 
   function arrayBufferToBase64(buffer) {
-    let binary = "";
+    // 64 KB'lık chunk'larla String.fromCharCode.apply: byte-byte string
+    // birleştirmeye göre kare başına saniyeler yerine milisaniyeler sürer.
     const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    const CHUNK = 0x10000;
+    const parts = [];
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
     }
-    return window.btoa(binary);
+    return window.btoa(parts.join(""));
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Sıralı IPC kuyruğu
+  // ─────────────────────────────────────────────────────────────────
+  // Async Tauri komutlarının çapraz çağrı sıralama garantisi yoktur:
+  // fire-and-forget gpu_create_buffer, gpu_write_buffer'dan SONRA
+  // işlenebilir ("Unknown buffer id" yarışı). Durum değiştiren tüm
+  // çağrılar tek bir promise zincirine bağlanarak sıra garanti edilir.
+  let ipcChain = Promise.resolve();
+  function orderedInvoke(cmd, args, options) {
+    const p = ipcChain.then(() => window.__TAURI__.core.invoke(cmd, args, options));
+    // Hata zinciri koparmasın; her çağrının kendi .catch'i hatayı görür.
+    ipcChain = p.catch(() => {});
+    return p;
+  }
+
+  // Binary IPC desteği: ilk başarısızlıkta base64 komutlarına düşer
+  // (eski webkit sürümlerinde raw invoke gövdesi sorun çıkarırsa).
+  let binaryIpcBroken = false;
+
+  // Audit modu: localStorage.openanime_webgpu_audit=1 iken, sitenin erişip de
+  // shim'de implement edilmemiş olan üyeleri loglar — gerçek eksik listesi
+  // tahmin yerine ölçümle çıkarılır.
+  const AUDIT_MODE = (() => {
+    try { return localStorage.getItem("openanime_webgpu_audit") === "1"; } catch (e) { return false; }
+  })();
+  const auditReported = new Set();
+  function auditWrap(obj, label) {
+    if (!AUDIT_MODE || !obj) return obj;
+    return new Proxy(obj, {
+      get(target, prop, receiver) {
+        if (typeof prop === "string" && !(prop in target) && !prop.startsWith("__")) {
+          const key = `${label}.${prop}`;
+          if (!auditReported.has(key)) {
+            auditReported.add(key);
+            console.warn(`[WebGPU Audit] Implement edilmemiş üyeye erişim: ${key}`);
+          }
+        }
+        return Reflect.get(target, prop, receiver);
+      }
+    });
+  }
+
+  // Uint8Array'i sıralı kuyruk üzerinden ham gövde olarak gönderir.
+  function orderedInvokeBinary(cmd, bytes, headers) {
+    return orderedInvoke(cmd, bytes, { headers });
+  }
+
+  // Transport seviyesinde binary IPC arızası mı, uygulama hatası mı?
+  function isBinaryTransportFailure(e) {
+    const m = String(e);
+    return m.includes("Expected raw binary body")
+      || m.includes("Missing/invalid header")
+      || m.includes("invalid args");
+  }
+
+  // Texture'a byte yükle: önce binary, transport arızasında base64 fallback.
+  function uploadTextureBytes(textureId, width, height, bytesPerRow, subArray) {
+    if (!binaryIpcBroken) {
+      return orderedInvokeBinary("gpu_write_texture_bin", subArray, {
+        "x-texture-id": String(textureId),
+        "x-width": String(width),
+        "x-height": String(height),
+        "x-bytes-per-row": String(bytesPerRow)
+      }).catch(e => {
+        if (!isBinaryTransportFailure(e)) throw e;
+        console.warn("[WebGPU Shim] Binary IPC unavailable, falling back to base64:", e);
+        binaryIpcBroken = true;
+        return uploadTextureBytes(textureId, width, height, bytesPerRow, subArray);
+      });
+    }
+    return orderedInvoke("gpu_write_texture", {
+      textureId, width, height, bytesPerRow,
+      dataBase64: arrayBufferToBase64(subArray.buffer.slice(subArray.byteOffset, subArray.byteOffset + subArray.byteLength))
+    });
+  }
+
+  // Buffer'a byte yükle: önce binary, transport arızasında base64 fallback.
+  function uploadBufferBytes(bufferId, offset, subArray) {
+    if (!binaryIpcBroken) {
+      return orderedInvokeBinary("gpu_write_buffer_bin", subArray, {
+        "x-buffer-id": String(bufferId),
+        "x-offset": String(offset)
+      }).catch(e => {
+        if (!isBinaryTransportFailure(e)) throw e;
+        console.warn("[WebGPU Shim] Binary IPC unavailable, falling back to base64:", e);
+        binaryIpcBroken = true;
+        return uploadBufferBytes(bufferId, offset, subArray);
+      });
+    }
+    return orderedInvoke("gpu_write_buffer", {
+      bufferId, offset,
+      dataBase64: arrayBufferToBase64(subArray.buffer.slice(subArray.byteOffset, subArray.byteOffset + subArray.byteLength))
+    });
   }
 
   const activeCanvasContexts = new Set();
@@ -106,7 +203,7 @@
           adapterId: this.__id,
           descriptor
         });
-        return new GPUDevice(deviceInfo, this);
+        return auditWrap(new GPUDevice(deviceInfo, this), "GPUDevice");
       } catch (e) {
         console.error("[WebGPU Shim] requestDevice failed:", e);
         throw e;
@@ -118,17 +215,38 @@
     constructor(info, adapter) {
       this.__id = info.id;
       this.adapter = adapter;
-      this.queue = new GPUQueue(this);
+      this.queue = auditWrap(new GPUQueue(this), "GPUQueue");
       this.features = new Set(info.features ?? []);
       this.limits = { ...(info.limits ?? {}) };
-      this.lost = new Promise(() => {});
       this.__lastShaderUsedExternal = false;
       this.__externalTextureCache = new Map(); // videoElement -> { texture, textureView, width, height }
+
+      // device.lost: Rust'tan gelen device-lost event'i ile çözülür.
+      this.onuncapturederror = null;
+      let resolveLost;
+      this.lost = new Promise(resolve => { resolveLost = resolve; });
+      this.__resolveLost = resolveLost;
+
+      if (window.__TAURI__?.event?.listen) {
+        window.__TAURI__.event.listen("openanime://webgpu-uncaptured-error", (ev) => {
+          const errorEvent = { error: { message: String(ev.payload || "GPU error") } };
+          if (typeof this.onuncapturederror === "function") {
+            this.onuncapturederror(errorEvent);
+          }
+        });
+        window.__TAURI__.event.listen("openanime://webgpu-device-lost", (ev) => {
+          this.__resolveLost({ reason: "unknown", message: String(ev.payload || "device lost") });
+          // Kurtarma döngüsü: köprü durumunu sıfırla, adapter cache'ini boşalt;
+          // sitenin bir sonraki requestAdapter/requestDevice çağrısı temiz kurar.
+          cachedAdapterPromise = null;
+          window.__TAURI__.core.invoke("gpu_reset_bridge").catch(() => {});
+        });
+      }
     }
 
     createBuffer(descriptor) {
       const id = nextId();
-      window.__TAURI__.core.invoke("gpu_create_buffer", {
+      orderedInvoke("gpu_create_buffer", {
         id,
         size: descriptor.size,
         usage: descriptor.usage,
@@ -142,12 +260,13 @@
       const id = nextId();
       const width = descriptor.size[0] || descriptor.size.width || 1;
       const height = descriptor.size[1] || descriptor.size.height || 1;
-      window.__TAURI__.core.invoke("gpu_create_texture", {
+      orderedInvoke("gpu_create_texture", {
         id,
         width,
         height,
         format: descriptor.format,
-        usage: descriptor.usage
+        usage: descriptor.usage,
+        mipLevelCount: descriptor.mipLevelCount || 1
       }).catch(e => console.error("[WebGPU Shim] createTexture IPC error:", e));
 
       return new GPUTexture(id, this, descriptor);
@@ -155,8 +274,18 @@
 
     createSampler(descriptor) {
       const id = nextId();
-      window.__TAURI__.core.invoke("gpu_create_sampler", { id })
-        .catch(e => console.error("[WebGPU Shim] createSampler IPC error:", e));
+      const d = descriptor || {};
+      orderedInvoke("gpu_create_sampler", {
+        id,
+        descriptor: {
+          magFilter: d.magFilter || null,
+          minFilter: d.minFilter || null,
+          mipmapFilter: d.mipmapFilter || null,
+          addressModeU: d.addressModeU || null,
+          addressModeV: d.addressModeV || null,
+          addressModeW: d.addressModeW || null
+        }
+      }).catch(e => console.error("[WebGPU Shim] createSampler IPC error:", e));
       return new GPUSampler(id, this);
     }
 
@@ -171,10 +300,40 @@
         code = code.replace(/textureSampleBaseClampToEdge/g, "textureSample");
       }
 
-      window.__TAURI__.core.invoke("gpu_create_shader_module", { id, code })
-        .catch(e => console.error("[WebGPU Shim] createShaderModule IPC error:", e));
+      const module = new GPUShaderModule(id, this);
+      // Rust tarafı derleme hatasını error scope ile yakalayıp döndürür;
+      // getCompilationInfo() bu sonucu bekleyip gerçek mesajı verir.
+      module.__compilePromise = orderedInvoke("gpu_create_shader_module", { id, code })
+        .then(err => {
+          module.__compileError = err || null;
+          if (err) console.error("[WebGPU Shim] Shader compile error:", err);
+          return err || null;
+        })
+        .catch(e => {
+          console.error("[WebGPU Shim] createShaderModule IPC error:", e);
+          return String(e);
+        });
 
-      return new GPUShaderModule(id, this);
+      return module;
+    }
+
+    pushErrorScope(filter) {
+      orderedInvoke("gpu_push_error_scope", { filter: filter || "validation" })
+        .catch(e => console.error("[WebGPU Shim] pushErrorScope IPC error:", e));
+    }
+
+    async popErrorScope() {
+      try {
+        const msg = await orderedInvoke("gpu_pop_error_scope", {});
+        return msg ? { message: msg } : null;
+      } catch (e) {
+        console.error("[WebGPU Shim] popErrorScope IPC error:", e);
+        return null;
+      }
+    }
+
+    destroy() {
+      window.__TAURI__.core.invoke("gpu_reset_bridge").catch(() => {});
     }
 
     createBindGroupLayout(descriptor) {
@@ -212,7 +371,7 @@
         };
       });
 
-      window.__TAURI__.core.invoke("gpu_create_bind_group_layout", { id, entries })
+      orderedInvoke("gpu_create_bind_group_layout", { id, entries })
         .catch(e => console.error("[WebGPU Shim] createBindGroupLayout IPC error:", e));
 
       return new GPUBindGroupLayout(id, this);
@@ -220,8 +379,11 @@
 
     createPipelineLayout(descriptor) {
       const id = nextId();
+      // DÜZELTME: önceden burada "bindGroupLayoutLayoutIds" yazım hatası vardı —
+      // tanımsız değişken ReferenceError fırlatıyor ve sitenin TÜM pipeline
+      // kurulumu daha layout aşamasında çöküyordu.
       const bindGroupLayoutIds = (descriptor.bindGroupLayouts || []).map(l => l.__id);
-      window.__TAURI__.core.invoke("gpu_create_pipeline_layout", { id, bindGroupLayoutLayoutIds })
+      orderedInvoke("gpu_create_pipeline_layout", { id, bindGroupLayoutIds })
         .catch(e => console.error("[WebGPU Shim] createPipelineLayout IPC error:", e));
 
       return new GPUPipelineLayout(id, this);
@@ -232,6 +394,8 @@
       const entries = (descriptor.entries || []).map(entry => {
         let kind = "buffer";
         let resourceId = 0;
+        let offset = null;
+        let size = null;
 
         if (entry.resource instanceof GPUBuffer) {
           kind = "buffer";
@@ -249,16 +413,20 @@
           // Buffer binding descriptor (e.g. { buffer, offset, size })
           kind = "buffer";
           resourceId = entry.resource.buffer.__id;
+          offset = entry.resource.offset ?? null;
+          size = entry.resource.size ?? null;
         }
 
         return {
           binding: entry.binding,
           kind,
-          resource_id: resourceId
+          resource_id: resourceId,
+          offset,
+          size
         };
       });
 
-      window.__TAURI__.core.invoke("gpu_create_bind_group", {
+      orderedInvoke("gpu_create_bind_group", {
         id,
         layoutId: descriptor.layout.__id,
         entries
@@ -269,7 +437,7 @@
 
     createComputePipeline(descriptor) {
       const id = nextId();
-      window.__TAURI__.core.invoke("gpu_create_compute_pipeline", {
+      orderedInvoke("gpu_create_compute_pipeline", {
         id,
         pipelineLayoutId: descriptor.layout.__id,
         shaderModuleId: descriptor.compute.module.__id,
@@ -287,13 +455,27 @@
       const fs_entry = descriptor.fragment.entryPoint;
       const target_format = descriptor.fragment.targets[0].format;
 
-      window.__TAURI__.core.invoke("gpu_create_render_pipeline", {
+      // Vertex buffer layout'larını Rust tarafına aktar (önceden buffers:&[]
+      // hardcode'du — vertex buffer kullanan her pipeline sessizce bozuktu).
+      const vertexBuffers = (descriptor.vertex.buffers || []).map(vb => ({
+        arrayStride: vb.arrayStride,
+        stepMode: vb.stepMode || null,
+        attributes: (vb.attributes || []).map(a => ({
+          format: a.format,
+          offset: a.offset,
+          shaderLocation: a.shaderLocation
+        }))
+      }));
+
+      orderedInvoke("gpu_create_render_pipeline", {
         id,
         pipelineLayoutId,
         shaderModuleId,
         vs_entry,
         fs_entry,
-        target_format
+        target_format,
+        vertexBuffers: vertexBuffers.length ? vertexBuffers : null,
+        topology: (descriptor.primitive && descriptor.primitive.topology) || null
       }).catch(e => console.error("[WebGPU Shim] createRenderPipeline IPC error:", e));
 
       return new GPURenderPipeline(id, this);
@@ -301,9 +483,9 @@
 
     createCommandEncoder(descriptor) {
       const id = nextId();
-      window.__TAURI__.core.invoke("gpu_create_command_encoder", { id })
+      orderedInvoke("gpu_create_command_encoder", { id })
         .catch(e => console.error("[WebGPU Shim] createCommandEncoder IPC error:", e));
-      return new GPUCommandEncoder(id, this);
+      return auditWrap(new GPUCommandEncoder(id, this), "GPUCommandEncoder");
     }
 
     importExternalTexture(descriptor) {
@@ -313,8 +495,19 @@
         return null;
       }
 
-      const w = video.videoWidth || 640;
-      const h = video.videoHeight || 360;
+      const nativeActive = !!window.__NATIVE_PLAYER_ACTIVE__;
+
+      // Yakalama çözünürlüğü sınırı (yalnızca base64/canvas fallback yolu):
+      // bu yoldan tam çözünürlük geçirmenin upscale kalitesine katkısı yok,
+      // IPC maliyeti ise devasa. Native yolda kareler IPC'den hiç geçmediği
+      // için tam çözünürlük kullanılır.
+      const MAX_CAPTURE_W = 1280;
+      const MAX_CAPTURE_H = 720;
+      const srcW = video.videoWidth || 640;
+      const srcH = video.videoHeight || 360;
+      const scale = nativeActive ? 1 : Math.min(1, MAX_CAPTURE_W / srcW, MAX_CAPTURE_H / srcH);
+      const w = Math.max(2, Math.round(srcW * scale) & ~1);
+      const h = Math.max(2, Math.round(srcH * scale) & ~1);
 
       let cached = this.__externalTextureCache.get(video);
       if (!cached || cached.width !== w || cached.height !== h) {
@@ -337,16 +530,54 @@
           width: w,
           height: h,
           canvas2d: document.createElement("canvas"),
+          uploadInFlight: false,
+          lastUploadTs: 0,
+          slowSamples: 0,
         };
         cached.canvas2d.width = w;
         cached.canvas2d.height = h;
-        cached.ctx2d = cached.canvas2d.getContext("2d");
+        cached.ctx2d = cached.canvas2d.getContext("2d", { willReadFrequently: true });
 
         this.__externalTextureCache.set(video, cached);
       }
 
-      // If native player is active, bypass heavy Base64 capture/upload steps to avoid CPU/IPC congestion
-      if (window.__NATIVE_PLAYER_ACTIVE__) {
+      // Native player aktif: kareyi GStreamer'dan doğrudan wgpu texture'a
+      // kopyalat (gpu_import_video_frame) — IPC'den sıfır byte geçer ve
+      // sitenin kendi WebGPU pipeline'ı GERÇEK video kareleriyle beslenir.
+      if (nativeActive) {
+        if (!cached.uploadInFlight) {
+          cached.uploadInFlight = true;
+          window.__TAURI__.core.invoke("gpu_import_video_frame", {
+            textureId: cached.texture.__id
+          }).catch(e => {
+            const msg = String(e);
+            // Kare boyutu texture'dan farklıysa bir sonraki çağrıda doğru
+            // boyutla yeniden oluşturulsun diye cache'i geçersiz kıl.
+            if (msg.includes("frame-size-mismatch")) {
+              this.__externalTextureCache.delete(video);
+            }
+          }).finally(() => {
+            cached.uploadInFlight = false;
+          });
+        }
+        return new GPUExternalTexture(cached.textureView.__id);
+      }
+
+      // Aşırı yük sigortası atmışsa bu oturumda bir daha upload denemeyiz;
+      // video upscale'siz ama akıcı oynamaya devam eder.
+      if (this.__externalUploadDisabled) {
+        return new GPUExternalTexture(cached.textureView.__id);
+      }
+
+      // In-flight kapısı: önceki upload bitmeden yenisini başlatma (IPC
+      // kuyruğu derinliği 1'de sabitlenir, birikme ve donma engellenir).
+      if (cached.uploadInFlight) {
+        return new GPUExternalTexture(cached.textureView.__id);
+      }
+
+      // FPS sınırı: bu yol üzerinden en fazla ~12 kare/sn.
+      const now = performance.now();
+      if (now - cached.lastUploadTs < 83) {
         return new GPUExternalTexture(cached.textureView.__id);
       }
 
@@ -362,17 +593,32 @@
 
         cached.ctx2d.drawImage(video, 0, 0, w, h);
         const imgData = cached.ctx2d.getImageData(0, 0, w, h);
-        const base64Data = arrayBufferToBase64(imgData.data.buffer);
+        const frameBytes = new Uint8Array(imgData.data.buffer);
 
-        // Upload frame data in the background (fire-and-forget)
-        window.__TAURI__.core.invoke("gpu_write_texture", {
-          textureId: cached.texture.__id,
-          width: w,
-          height: h,
-          bytesPerRow: w * 4,
-          dataBase64: base64Data
-        }).catch(e => console.error("[WebGPU Shim] Frame write texture error:", e));
+        cached.uploadInFlight = true;
+        cached.lastUploadTs = now;
+        const t0 = performance.now();
+
+        uploadTextureBytes(cached.texture.__id, w, h, w * 4, frameBytes).then(() => {
+          // Sigorta: gidiş-dönüş sürekli >250ms ise IPC boğulmuş demektir —
+          // bu yolu oturum boyunca kapat.
+          const rtt = performance.now() - t0;
+          if (rtt > 250) {
+            cached.slowSamples++;
+            if (cached.slowSamples >= 30) {
+              this.__externalUploadDisabled = true;
+              console.warn("[WebGPU Shim] External texture upload path disabled: IPC too slow (avg > 250ms). Video will play without upscaling.");
+            }
+          } else {
+            cached.slowSamples = 0;
+          }
+        }).catch(e => {
+          console.error("[WebGPU Shim] Frame write texture error:", e);
+        }).finally(() => {
+          cached.uploadInFlight = false;
+        });
       } catch (err) {
+        cached.uploadInFlight = false;
         console.error("[WebGPU Shim] Failed to capture video frame:", err);
       }
 
@@ -386,12 +632,12 @@
     }
     submit(commandBuffers) {
       const ids = commandBuffers.map(cb => cb.__id);
-      window.__TAURI__.core.invoke("gpu_queue_submit", { commandBufferIds: ids })
+      orderedInvoke("gpu_queue_submit", { commandBufferIds: ids })
         .catch(e => console.error("[WebGPU Shim] queue submit IPC error:", e));
 
       // Implicitly present all active canvas overlay windows
       activeCanvasContexts.forEach(ctx => {
-        window.__TAURI__.core.invoke("gpu_canvas_present", { contextId: ctx.__id })
+        orderedInvoke("gpu_canvas_present", { contextId: ctx.__id })
           .catch(() => {});
       });
     }
@@ -410,12 +656,8 @@
         subArray = subArray.subarray(dataOffset, dataOffset + actualSize);
       }
 
-      const base64Data = arrayBufferToBase64(subArray.buffer);
-      window.__TAURI__.core.invoke("gpu_write_buffer", {
-        bufferId: buffer.__id,
-        offset: bufferOffset,
-        dataBase64: base64Data
-      }).catch(e => console.error("[WebGPU Shim] queue writeBuffer IPC error:", e));
+      uploadBufferBytes(buffer.__id, bufferOffset, subArray)
+        .catch(e => console.error("[WebGPU Shim] queue writeBuffer IPC error:", e));
     }
     writeTexture(destination, data, dataLayout, size) {
       const textureId = destination.texture.__id;
@@ -432,14 +674,15 @@
         subArray = new Uint8Array(data);
       }
 
-      const base64Data = arrayBufferToBase64(subArray.buffer);
-      window.__TAURI__.core.invoke("gpu_write_texture", {
-        textureId,
-        width,
-        height,
-        bytesPerRow,
-        dataBase64: base64Data
-      }).catch(e => console.error("[WebGPU Shim] queue writeTexture IPC error:", e));
+      uploadTextureBytes(textureId, width, height, bytesPerRow, subArray)
+        .catch(e => console.error("[WebGPU Shim] queue writeTexture IPC error:", e));
+    }
+    async onSubmittedWorkDone() {
+      try {
+        await orderedInvoke("gpu_queue_on_submitted_work_done", {});
+      } catch (e) {
+        console.error("[WebGPU Shim] onSubmittedWorkDone IPC error:", e);
+      }
     }
   }
 
@@ -457,7 +700,20 @@
     async mapAsync(mode, offset = 0, size = 0) {
       const actualSize = size > 0 ? size : this.size - offset;
       try {
-        const base64Data = await window.__TAURI__.core.invoke("gpu_buffer_map_async", {
+        if (!binaryIpcBroken && mode === 1 /* READ */) {
+          // Binary okuma yolu: ham ArrayBuffer yanıtı, base64 yok.
+          const buf = await orderedInvoke("gpu_buffer_read_bin", {
+            bufferId: this.__id,
+            offset,
+            size: actualSize
+          });
+          if (buf instanceof ArrayBuffer) {
+            this.__mappedData = buf;
+            return;
+          }
+          // Beklenmedik yanıt tipi — base64 yoluna düş.
+        }
+        const base64Data = await orderedInvoke("gpu_buffer_map_async", {
           bufferId: this.__id,
           mode,
           offset,
@@ -486,14 +742,17 @@
       if (this.__mappedData) {
         base64Data = arrayBufferToBase64(this.__mappedData);
       }
-      window.__TAURI__.core.invoke("gpu_buffer_unmap", {
+      orderedInvoke("gpu_buffer_unmap", {
         bufferId: this.__id,
         dataBase64: base64Data
       }).catch(e => console.error("[WebGPU Shim] unmap IPC error:", e));
       this.__mappedData = null;
     }
     destroy() {
-      // Destructor can be mapped to a clean-up command if necessary
+      // Rust registry'sinden gerçekten sil — önceden buffer'lar bölümler
+      // arası sonsuza dek sızıyordu.
+      orderedInvoke("gpu_destroy_resource", { kind: "buffer", id: this.__id })
+        .catch(() => {});
     }
   }
 
@@ -508,14 +767,17 @@
     }
     createView(descriptor) {
       const viewId = nextId();
-      window.__TAURI__.core.invoke("gpu_texture_create_view", {
+      orderedInvoke("gpu_texture_create_view", {
         id: viewId,
         textureId: this.__id
       }).catch(e => console.error("[WebGPU Shim] createView IPC error:", e));
 
       return new GPUTextureView(viewId, this);
     }
-    destroy() {}
+    destroy() {
+      orderedInvoke("gpu_destroy_resource", { kind: "texture", id: this.__id })
+        .catch(() => {});
+    }
   }
 
   class GPUTextureView {
@@ -563,6 +825,20 @@
     constructor(id, device) {
       this.__id = id;
       this.device = device;
+      this.__compilePromise = Promise.resolve(null);
+      this.__compileError = null;
+    }
+    async getCompilationInfo() {
+      const err = await this.__compilePromise;
+      return {
+        messages: err
+          ? [{ type: "error", message: String(err), lineNum: 0, linePos: 0, offset: 0, length: 0 }]
+          : []
+      };
+    }
+    // Eski API adı (bazı kütüphaneler hâlâ kullanır)
+    compilationInfo() {
+      return this.getCompilationInfo();
     }
   }
 
@@ -586,9 +862,9 @@
       this.device = device;
     }
     beginComputePass(descriptor) {
-      window.__TAURI__.core.invoke("gpu_encoder_begin_compute_pass", { encoderId: this.__id })
+      orderedInvoke("gpu_encoder_begin_compute_pass", { encoderId: this.__id })
         .catch(e => console.error("[WebGPU Shim] beginComputePass IPC error:", e));
-      return new GPUComputePassEncoder(this);
+      return auditWrap(new GPUComputePassEncoder(this), "GPUComputePassEncoder");
     }
     beginRenderPass(descriptor) {
       const viewId = descriptor.colorAttachments[0].view.__id;
@@ -600,16 +876,16 @@
         clear = [0.0, 0.0, 0.0, 1.0];
       }
 
-      window.__TAURI__.core.invoke("gpu_encoder_begin_render_pass", {
+      orderedInvoke("gpu_encoder_begin_render_pass", {
         encoderId: this.__id,
         viewId,
         clear
       }).catch(e => console.error("[WebGPU Shim] beginRenderPass IPC error:", e));
 
-      return new GPURenderPassEncoder(this);
+      return auditWrap(new GPURenderPassEncoder(this), "GPURenderPassEncoder");
     }
     copyBufferToTexture(source, destination, copySize) {
-      window.__TAURI__.core.invoke("gpu_encoder_copy_buffer_to_texture", {
+      orderedInvoke("gpu_encoder_copy_buffer_to_texture", {
         encoderId: this.__id,
         src: source.buffer.__id,
         dstTexture: destination.texture.__id,
@@ -619,7 +895,7 @@
       }).catch(e => console.error("[WebGPU Shim] copyBufferToTexture IPC error:", e));
     }
     copyTextureToTexture(source, destination, copySize) {
-      window.__TAURI__.core.invoke("gpu_encoder_copy_texture_to_texture", {
+      orderedInvoke("gpu_encoder_copy_texture_to_texture", {
         encoderId: this.__id,
         src: source.texture.__id,
         dst: destination.texture.__id,
@@ -629,7 +905,7 @@
     }
     finish(descriptor) {
       const id = nextId();
-      window.__TAURI__.core.invoke("gpu_encoder_finish", { id, encoderId: this.__id })
+      orderedInvoke("gpu_encoder_finish", { id, encoderId: this.__id })
         .catch(e => console.error("[WebGPU Shim] finish IPC error:", e));
       return new GPUCommandBuffer(id);
     }
@@ -640,20 +916,20 @@
       this.encoder = encoder;
     }
     setPipeline(pipeline) {
-      window.__TAURI__.core.invoke("gpu_encoder_set_compute_pipeline", {
+      orderedInvoke("gpu_encoder_set_compute_pipeline", {
         encoderId: this.encoder.__id,
         pipelineId: pipeline.__id
       }).catch(e => console.error("[WebGPU Shim] setPipeline IPC error:", e));
     }
     setBindGroup(index, bindGroup, dynamicOffsets) {
-      window.__TAURI__.core.invoke("gpu_encoder_set_bind_group", {
+      orderedInvoke("gpu_encoder_set_bind_group", {
         encoderId: this.encoder.__id,
         index,
         bindGroupId: bindGroup.__id
       }).catch(e => console.error("[WebGPU Shim] setBindGroup IPC error:", e));
     }
     dispatchWorkgroups(x, y = 1, z = 1) {
-      window.__TAURI__.core.invoke("gpu_encoder_dispatch_workgroups", {
+      orderedInvoke("gpu_encoder_dispatch_workgroups", {
         encoderId: this.encoder.__id,
         x,
         y,
@@ -664,7 +940,7 @@
       this.dispatchWorkgroups(x, y, z);
     }
     end() {
-      window.__TAURI__.core.invoke("gpu_encoder_end_compute_pass", { encoderId: this.encoder.__id })
+      orderedInvoke("gpu_encoder_end_compute_pass", { encoderId: this.encoder.__id })
         .catch(e => console.error("[WebGPU Shim] end (compute) IPC error:", e));
     }
   }
@@ -674,28 +950,54 @@
       this.encoder = encoder;
     }
     setPipeline(pipeline) {
-      window.__TAURI__.core.invoke("gpu_encoder_set_render_pipeline", {
+      orderedInvoke("gpu_encoder_set_render_pipeline", {
         encoderId: this.encoder.__id,
         pipelineId: pipeline.__id
       }).catch(e => console.error("[WebGPU Shim] setPipeline (render) IPC error:", e));
     }
     setBindGroup(index, bindGroup, dynamicOffsets) {
-      window.__TAURI__.core.invoke("gpu_encoder_set_render_bind_group", {
+      orderedInvoke("gpu_encoder_set_render_bind_group", {
         encoderId: this.encoder.__id,
         index,
         bindGroupId: bindGroup.__id
       }).catch(e => console.error("[WebGPU Shim] setBindGroup (render) IPC error:", e));
     }
+    setVertexBuffer(slot, buffer, offset = 0) {
+      orderedInvoke("gpu_encoder_set_vertex_buffer", {
+        encoderId: this.encoder.__id,
+        slot,
+        bufferId: buffer.__id,
+        offset
+      }).catch(e => console.error("[WebGPU Shim] setVertexBuffer IPC error:", e));
+    }
+    setIndexBuffer(buffer, format, offset = 0) {
+      orderedInvoke("gpu_encoder_set_index_buffer", {
+        encoderId: this.encoder.__id,
+        bufferId: buffer.__id,
+        format: format || "uint16",
+        offset
+      }).catch(e => console.error("[WebGPU Shim] setIndexBuffer IPC error:", e));
+    }
     draw(vertexCount, instanceCount = 1, firstVertex = 0, firstInstance = 0) {
-      window.__TAURI__.core.invoke("gpu_encoder_draw", {
+      orderedInvoke("gpu_encoder_draw", {
         encoderId: this.encoder.__id,
         vertexCount,
         instanceCount
       }).catch(e => console.error("[WebGPU Shim] draw IPC error:", e));
     }
+    drawIndexed(indexCount, instanceCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0) {
+      orderedInvoke("gpu_encoder_draw_indexed", {
+        encoderId: this.encoder.__id,
+        indexCount,
+        instanceCount
+      }).catch(e => console.error("[WebGPU Shim] drawIndexed IPC error:", e));
+    }
     end() {
-      window.__TAURI__.core.invoke("gpu_encoder_end_render_pass", { encoderId: this.encoder.__id })
+      orderedInvoke("gpu_encoder_end_render_pass", { encoderId: this.encoder.__id })
         .catch(e => console.error("[WebGPU Shim] end (render) IPC error:", e));
+    }
+    endPass() {
+      this.end();
     }
   }
 
@@ -748,35 +1050,29 @@
 
     getCurrentTexture() {
       const textureId = nextId();
-      // Synchronously return a mock texture containing a view
-      // Hand it over asynchronously to Rust context first
-      window.__TAURI__.core.invoke("gpu_canvas_get_current_texture", { contextId: this.__id })
-        .then(viewId => {
-          // Map local viewId to the view registry inside Rust
-          // The texture wrapper will link viewId as a proxy view when needed
-        })
-        .catch(e => console.error("[WebGPU Shim] getCurrentTexture IPC error:", e));
+      // Deterministik view id: JS önceden ayırır, Rust surface view'ı TAM bu
+      // id ile kaydeder. (Önceki mock, Rust'ta hiç kayıtlı olmayan bir
+      // texture'a karşı gpu_texture_create_view çağırıyordu — canvas render
+      // pass'leri her zaman "Unknown texture view id" ile bozuktu.)
+      const viewId = nextId();
+      orderedInvoke("gpu_canvas_get_current_texture", {
+        contextId: this.__id,
+        viewId
+      }).catch(e => console.error("[WebGPU Shim] getCurrentTexture IPC error:", e));
 
-      // Build and return a dummy GPUTexture that wraps the canvas presentation texture view
       const mockDescriptor = {
         size: [this.canvas.width || 640, this.canvas.height || 360, 1],
         format: this.format,
         usage: 16 // RENDER_ATTACHMENT
       };
-      const mockTexture = new GPUTexture(textureId, this.device, mockDescriptor);
-      
-      // Override createView to return a view ID that matches the current surface texture view on Rust
-      mockTexture.createView = () => {
-        const viewId = nextId();
-        // Link viewId directly to surface texture view in Rust
-        window.__TAURI__.core.invoke("gpu_texture_create_view", {
-          id: viewId,
-          textureId: mockTexture.__id
-        }).catch(() => {});
-        return new GPUTextureView(viewId, mockTexture);
-      };
+      const surfaceTexture = new GPUTexture(textureId, this.device, mockDescriptor);
+      const surfaceView = new GPUTextureView(viewId, surfaceTexture);
+      surfaceTexture.createView = () => surfaceView;
+      // Surface texture'ının destroy'u registry'de kayıtlı olmayan id'yi
+      // silmeye çalışmasın.
+      surfaceTexture.destroy = () => {};
 
-      return mockTexture;
+      return surfaceTexture;
     }
 
     setupObservers() {

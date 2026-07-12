@@ -354,12 +354,45 @@ async fn try_get_wgpu_adapter_info(
 
 /// Linux'ta GPU'ya ve display server'a göre WebKit/DRM ortam değişkenlerini ayarlar.
 /// Bu fonksiyon `run()` başlamadan önce çağrılmalı (Tauri setup öncesi).
+/// Ortam değişkenini yalnızca kullanıcı tarafından önceden ayarlanmamışsa
+/// ayarlar; böylece kullanıcı override'ları her zaman kazanır.
+#[cfg(target_os = "linux")]
+fn set_env_if_unset(key: &str, value: &str, reason: &str) {
+    if std::env::var_os(key).is_some() {
+        println!("[GPU Env] {key} kullanıcı tarafından ayarlanmış — dokunulmadı");
+        return;
+    }
+    std::env::set_var(key, value);
+    println!("[GPU Env] {reason} — {key}={value} ayarlandı");
+}
+
 #[cfg(target_os = "linux")]
 pub fn configure_linux_gpu_env() {
     println!("[GPU Env] Linux GPU ortam değişkenleri yapılandırılıyor...");
 
     let detection = linux::detector::detect();
     let is_wayland = matches!(detection.display_server, DisplayServer::Wayland);
+
+    // ── WebKit sürüm tespiti + DMABUF renderer koruması ─────────────────────
+    // webkit2gtk >= 2.44'te DMABUF renderer, vendor'dan bağımsız (AMD/Intel
+    // dahil) açılışta çökme ve beyaz ekran sorunlarına yol açabiliyor.
+    // OPENANIME_ENABLE_DMABUF=1 ile bilinçli opt-out mümkündür.
+    let (wk_major, wk_minor, wk_micro) = linux::webkit::version();
+    println!("[GPU Env] webkit2gtk sürümü: {wk_major}.{wk_minor}.{wk_micro}");
+
+    let dmabuf_opt_in = std::env::var("OPENANIME_ENABLE_DMABUF")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if linux::webkit::dmabuf_renderer_is_risky() && !dmabuf_opt_in {
+        set_env_if_unset(
+            "WEBKIT_DISABLE_DMABUF_RENDERER",
+            "1",
+            &format!("webkit2gtk {wk_major}.{wk_minor} (>= 2.44) DMABUF renderer riskli"),
+        );
+    } else if dmabuf_opt_in {
+        println!("[GPU Env] OPENANIME_ENABLE_DMABUF=1 — DMABUF renderer korumaları atlandı");
+    }
 
     // ── Vulkan desteği yoksa WebKit compositing'i kapat ─────────────────────
     // Asenkron Vulkan probe'u burada çalıştırmak maliyetli olduğundan
@@ -370,8 +403,7 @@ pub fn configure_linux_gpu_env() {
             || std::path::Path::new("/usr/lib64/libvulkan.so.1").exists());
 
     if !vulkan_available {
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        println!("[GPU Env] Vulkan yok — WEBKIT_DISABLE_COMPOSITING_MODE=1 ayarlandı");
+        set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1", "Vulkan yok");
     }
 
     // ── NVIDIA spesifik workaround'lar ─────────────────────────────────────
@@ -379,15 +411,13 @@ pub fn configure_linux_gpu_env() {
 
     if is_nvidia {
         // DMA-BUF: NVIDIA < 555 sürümde DMA-BUF sorunlu
-        if !detection.dmabuf_supported {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            println!("[GPU Env] NVIDIA (eski driver) — WEBKIT_DISABLE_DMABUF_RENDERER=1 ayarlandı");
+        if !detection.dmabuf_supported && !dmabuf_opt_in {
+            set_env_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1", "NVIDIA (eski driver)");
         }
 
         // Wayland + NVIDIA: explicit sync workaround (driver < 555)
         if is_wayland && !detection.dmabuf_supported {
-            std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
-            println!("[GPU Env] Wayland + NVIDIA (eski) — __NV_DISABLE_EXPLICIT_SYNC=1 ayarlandı");
+            set_env_if_unset("__NV_DISABLE_EXPLICIT_SYNC", "1", "Wayland + NVIDIA (eski)");
         }
 
         // NVIDIA proprietary + Wayland: GBM backend zorla
@@ -398,9 +428,10 @@ pub fn configure_linux_gpu_env() {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(0);
                 if major >= 525 {
-                    std::env::set_var("GBM_BACKEND", "nvidia-drm");
-                    std::env::set_var("__GLX_VENDOR_LIBRARY_NAME", "nvidia");
-                    println!("[GPU Env] NVIDIA {} Wayland GBM backend ayarlandı", ver_str);
+                    set_env_if_unset("GBM_BACKEND", "nvidia-drm",
+                        &format!("NVIDIA {ver_str} Wayland GBM backend"));
+                    set_env_if_unset("__GLX_VENDOR_LIBRARY_NAME", "nvidia",
+                        &format!("NVIDIA {ver_str} Wayland GLX vendor"));
                 }
             }
         }
@@ -409,12 +440,11 @@ pub fn configure_linux_gpu_env() {
     // ── VirtIO GPU (VM ortamı) ──────────────────────────────────────────────
     if matches!(detection.vendor, GpuVendor::VirtIo | GpuVendor::Vmware) {
         // VM'de hardware compositing sorunlu olabilir
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        println!("[GPU Env] VM GPU tespit edildi — WEBKIT_DISABLE_COMPOSITING_MODE=1 ayarlandı");
+        set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1", "VM GPU tespit edildi");
     }
 
-    println!("[GPU Env] ✓ Yapılandırma tamamlandı (vendor={}, wayland={}, dmabuf={})",
-        detection.vendor, is_wayland, detection.dmabuf_supported);
+    println!("[GPU Env] ✓ Yapılandırma tamamlandı (vendor={}, wayland={}, dmabuf={}, webkit={}.{}.{})",
+        detection.vendor, is_wayland, detection.dmabuf_supported, wk_major, wk_minor, wk_micro);
 }
 
 #[cfg(not(target_os = "linux"))]

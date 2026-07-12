@@ -262,12 +262,9 @@ jobs:
           ARCH=x86_64 "$APPIMAGETOOL_PATH" squashfs-root "$APPIMAGE_FILE"
           rm -rf squashfs-root appimagetool
 
-      - name: Compress x64 AppImage with UPX (only full release)
-        if: github.event.inputs.build_mode == 'release'
-        run: |
-          sudo apt-get install -y upx-ucl
-          upx --best --lzma \
-            src-tauri/target/release/bundle/appimage/OpenAnime_*.AppImage
+      # NOT: Nihai AppImage UPX ile SIKIŞTIRILMAZ. Type-2 AppImage runtime'ı
+      # squashfs offset'ini ELF boyutundan hesaplar; UPX bu yapıyı bozarak
+      # bazı sistemlerde (özellikle Arch) sessiz açılış çökmelerine yol açar.
 
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'

@@ -224,6 +224,10 @@ sudo apt-get install -f
 
 Bağımlılıklar: `libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libappindicator3-1`, `gstreamer1.0-*`
 
+> ⚠️ **Önemli:** Uygulama **webkit2gtk-4.1 (GTK3)** gerektirir. `webkitgtk-6.0` (GTK4) tek başına
+> **yeterli değildir** — Tauri v2 yalnızca webkit2gtk-4.1 ile çalışır. İki paket sorunsuz şekilde
+> yan yana kurulabilir. Arch tabanlı dağıtımlarda: `sudo pacman -S webkit2gtk-4.1 gtk3`
+
 ---
 
 #### 💿 Fedora / RHEL (.rpm)

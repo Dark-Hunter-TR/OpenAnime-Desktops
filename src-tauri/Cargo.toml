@@ -13,7 +13,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["native-tls-vendored"] }
+# "unstable": webview'sız düz pencere (tauri::window::WindowBuilder) için —
+# GPU overlay pencereleri yalnızca wgpu surface handle'ı ister; her overlay'in
+# tam bir WebKit webview başlatması hem ~100 MB israftı hem de webkit 2.44+
+# renderer bug'larına gereksiz maruziyetti.
+tauri = { version = "2", features = ["native-tls-vendored", "unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-os = "2"
 tauri-plugin-updater = "2"
@@ -42,12 +46,14 @@ gstreamer-app = "0.22"
 gstreamer-video = "0.22"
 raw-window-handle = "0.6.2"
 
+# panic = "abort" KULLANILMAZ: wgpu doğrulama hataları ve GStreamer panic'leri
+# tüm uygulamayı öldürmesin diye unwinding açık kalır. Async Tauri komutundaki
+# bir panic yalnızca o task'ı düşürür; uygulama yaşamaya devam eder.
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
-panic = "abort"
 
 # Test/build CI için hafif profil — LTO kapalı, daha hızlı derlenir
 [profile.test-release]
