@@ -111,10 +111,16 @@ pub mod inner {
                 .transparent(true)
                 .shadow(false)
                 .always_on_top(true)
+                .focused(false)
+                .skip_taskbar(true)
                 .build();
 
             match build_result {
                 Ok(overlay) => {
+                    // Overlay yalnızca görüntü çizer: fare olaylarını YUTMASIN —
+                    // altındaki player kontrollerine tıklanabilsin. ("player'da
+                    // bazı yerlere tıklanmıyor" sorununun kökü buydu.)
+                    let _ = overlay.set_ignore_cursor_events(true);
                     let realize_tx_for_event = realize_tx.clone();
                     overlay.on_window_event(move |event| {
                         if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)) {
