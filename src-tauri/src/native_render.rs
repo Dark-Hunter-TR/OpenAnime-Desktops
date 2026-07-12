@@ -172,7 +172,11 @@ pub mod inner {
         // deadlock -- cancel the native path and fall back to the HTML5
         // player via the same event the GStreamer error handler uses.
         match tokio::time::timeout(std::time::Duration::from_millis(500), realize_rx).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                // Realize sonrası yeniden uygula: Wayland/GTK giriş bölgesini
+                // haritalama sırasında sıfırlayabiliyor.
+                let _ = overlay.set_ignore_cursor_events(true);
+            }
             _ => {
                 cleanup_on_error("Overlay window did not realize in time".to_string());
                 let _ = main_window.emit(
@@ -365,6 +369,8 @@ pub mod inner {
 
             let _ = overlay.set_position(tauri::Position::Physical(physical_pos));
             let _ = overlay.set_size(tauri::Size::Physical(physical_size));
+            // Tıklama geçirgenliğini her bounds senkronunda yeniden garanti et.
+            let _ = overlay.set_ignore_cursor_events(true);
 
             // Resize wgpu surface configuration
             if let Some(rs_shared) = rs_shared_opt {

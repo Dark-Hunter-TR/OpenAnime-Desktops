@@ -1640,7 +1640,12 @@ pub mod inner {
             .map_err(|_| "Main thread dropped the overlay window channel".to_string())??;
 
         match tokio::time::timeout(std::time::Duration::from_millis(500), realize_rx).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                // Wayland/GTK'da giriş bölgesi pencere haritalandığında
+                // sıfırlanabiliyor — realize SONRASI yeniden uygula ki
+                // overlay fare olaylarını yutmasın (player tıklanabilsin).
+                let _ = overlay.set_ignore_cursor_events(true);
+            }
             _ => {
                 let _ = overlay.close();
                 return Err("GPU canvas overlay did not realize in time".to_string());
@@ -1809,6 +1814,9 @@ pub mod inner {
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         let _ = ctx.overlay.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x as f64, y as f64)));
         let _ = ctx.overlay.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width as f64, height as f64)));
+        // Boyut/pozisyon değişimi giriş bölgesini sıfırlayabilir — tıklama
+        // geçirgenliğini her senkronda yeniden garanti et.
+        let _ = ctx.overlay.set_ignore_cursor_events(true);
         
         ctx.width = width;
         ctx.height = height;
