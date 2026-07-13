@@ -231,67 +231,75 @@ pub mod inner {
         pub recommended_packages_id: String,
     }
 
-    /// Sunum-uyumluluk probe'u için 1x1'lik ekran dışı düz pencere yaratır.
-    /// KRİTİK: probe surface webkit'in KENDİ penceresinde AÇILMAZ — webkit'in
-    /// EGL/GL bağlamıyla aynı X11 penceresine Vulkan surface açıp kapatmak
-    /// webkit'in boyamasını öldürüyordu (sahada ana sayfada donma).
-    async fn create_probe_window(app: &tauri::AppHandle) -> Option<Window> {
-        let (window_tx, window_rx) = tokio::sync::oneshot::channel::<Result<Window, String>>();
-        let (realize_tx, realize_rx) = tokio::sync::oneshot::channel::<()>();
-        let realize_tx = Arc::new(Mutex::new(Some(realize_tx)));
+    /// Sunum-uyumluluk probe'u için pencere: GTK/webkit'ten TAMAMEN bağımsız,
+    /// XOpenDisplay ile açılan AYRI bir Xlib bağlantısı üzerinde map'lenmemiş
+    /// 1x1 pencere. Neden tauri (GTK) penceresi değil: GTK'nın Xlib bağlantısı
+    /// thread-safe DEĞİLDİR (XInitThreads çağrılmaz) ve bu probe tokio
+    /// thread'inde koşar — aynı bağlantıya iki thread'den dokunmak webkit
+    /// dahil TÜM UI'ı kilitleyebiliyordu (saha: donma tam enumerate
+    /// satırlarından sonra + NeedDebuggerBreak trap). Ayrı bağlantı + hiç
+    /// map'lenmeyen pencereyle ana thread, GTK ve webkit işin içine hiç
+    /// girmez. (vkCreateXlibSurfaceKHR map'lenmemiş pencereyle çalışır;
+    /// yalnızca destek sorgulanır, hiçbir şey çizilmez.)
+    struct X11ProbeWindow {
+        xlib: x11_dl::xlib::Xlib,
+        display: *mut x11_dl::xlib::Display,
+        window: x11_dl::xlib::Window,
+        screen: std::os::raw::c_int,
+    }
 
-        let app_for_build = app.clone();
-        let label = format!("gpu_probe_{}", next_id());
-        if app
-            .run_on_main_thread(move || {
-                let mut builder = WindowBuilder::new(&app_for_build, label)
-                    .title("GPU Probe")
-                    .decorations(false)
-                    .transparent(true)
-                    .shadow(false)
-                    .skip_taskbar(true)
-                    .focused(false)
-                    .inner_size(1.0, 1.0);
-                if let Some(parent) = app_for_build.get_window("main") {
-                    builder = match builder.parent(&parent) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            let _ = window_tx.send(Err(format!("probe parent: {}", e)));
-                            return;
-                        }
-                    };
-                }
-                match builder.build() {
-                    Ok(w) => {
-                        let realize_tx_for_event = realize_tx.clone();
-                        w.on_window_event(move |event| {
-                            if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)) {
-                                if let Some(tx) = realize_tx_for_event.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                                    let _ = tx.send(());
-                                }
-                            }
-                        });
-                        // Ekran dışına taşı (X11'de çalışır; saf Wayland'da bu
-                        // yol zaten hiç koşmaz — navigator.gpu kurulmuyor).
-                        let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(-300, -300)));
-                        let _ = window_tx.send(Ok(w));
-                    }
-                    Err(e) => {
-                        let _ = window_tx.send(Err(format!("probe build: {}", e)));
-                    }
-                }
-            })
-            .is_err()
-        {
-            return None;
+    impl X11ProbeWindow {
+        fn open() -> Option<Self> {
+            let xlib = x11_dl::xlib::Xlib::open().ok()?;
+            let display = unsafe { (xlib.XOpenDisplay)(std::ptr::null()) };
+            if display.is_null() {
+                return None;
+            }
+            let (screen, window) = unsafe {
+                let screen = (xlib.XDefaultScreen)(display);
+                let root = (xlib.XRootWindow)(display, screen);
+                let window = (xlib.XCreateSimpleWindow)(display, root, 0, 0, 1, 1, 0, 0, 0);
+                (xlib.XSync)(display, x11_dl::xlib::False);
+                (screen, window)
+            };
+            if window == 0 {
+                unsafe { (xlib.XCloseDisplay)(display) };
+                return None;
+            }
+            Some(Self { xlib, display, window, screen })
         }
 
-        let w = match window_rx.await {
-            Ok(Ok(w)) => w,
-            _ => return None,
-        };
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(300), realize_rx).await;
-        Some(w)
+        fn create_wgpu_surface(&self, instance: &wgpu::Instance) -> Option<wgpu::Surface<'static>> {
+            use raw_window_handle::{RawDisplayHandle, RawWindowHandle, XlibDisplayHandle, XlibWindowHandle};
+            let display_handle = RawDisplayHandle::Xlib(XlibDisplayHandle::new(
+                std::ptr::NonNull::new(self.display as *mut std::ffi::c_void),
+                self.screen,
+            ));
+            let window_handle = RawWindowHandle::Xlib(XlibWindowHandle::new(self.window));
+            // SAFETY: handle'lar self (display+pencere) yaşadığı sürece geçerli;
+            // dönen surface, çağıran blokta self'ten ÖNCE düşürülür.
+            match unsafe {
+                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: display_handle,
+                    raw_window_handle: window_handle,
+                })
+            } {
+                Ok(sf) => Some(sf),
+                Err(e) => {
+                    println!("[WebGPU Bridge] Probe surface açılamadı ({}): sunum uyumluluğu skorlanamayacak", e);
+                    None
+                }
+            }
+        }
+    }
+
+    impl Drop for X11ProbeWindow {
+        fn drop(&mut self) {
+            unsafe {
+                (self.xlib.XDestroyWindow)(self.display, self.window);
+                (self.xlib.XCloseDisplay)(self.display);
+            }
+        }
     }
 
     #[tauri::command]
@@ -341,24 +349,31 @@ pub mod inner {
         };
 
         // KÖK NEDEN DÜZELTMESİ (hibrit PRIME): adapter'ın gerçekten sunum
-        // yapıp yapamadığını ölç. Probe surface, webkit'in penceresine ASLA
-        // dokunmadan, 1x1'lik ekran dışı ayrı bir pencerede açılır
-        // (yalnızca sorgulanır, configure edilmez, sonra pencereyle birlikte
-        // kapatılır). Önceden skor körlemesine Discrete'i (NVIDIA) seçiyordu;
-        // pencere iGPU'da yaşadığında NVIDIA sunum yapamayabilir → pipeline
-        // çalışır ama tek kare basılamaz ("ses var, görüntü yok").
-        let _ = &main_window;
-        let probe_window = create_probe_window(&app).await;
-        let probe_surface = probe_window.as_ref().and_then(|w| {
-            let state = lock();
-            match state.instance.create_surface(w.clone()) {
-                Ok(sf) => Some(sf),
-                Err(e) => {
-                    println!("[WebGPU Bridge] Probe surface açılamadı ({}): sunum uyumluluğu skorlanamayacak", e);
-                    None
-                }
+        // yapıp yapamadığını ölç. Probe artık GTK/webkit'ten TAMAMEN kopuk
+        // (X11ProbeWindow: ayrı XOpenDisplay bağlantısı, map'lenmemiş 1x1
+        // pencere) ve baştan sona senkron — ana thread'e hiç uğramaz.
+        // Sunum yapamayan "güçlü" GPU yerine sunum yapabilen iGPU seçilir.
+        let _ = (&app, &main_window);
+        let present_flags: Vec<bool> = {
+            let instance = { lock().instance };
+            let probe = X11ProbeWindow::open();
+            if probe.is_none() {
+                println!("[WebGPU Bridge] Probe: ayrı X11 bağlantısı açılamadı — sunum uyumluluğu skorlanamayacak (saf Wayland?)");
             }
-        });
+            let probe_surface = probe.as_ref().and_then(|p| p.create_wgpu_surface(instance));
+            if probe.is_some() {
+                println!("[WebGPU Bridge] Probe: ayrı X11 bağlantısı + 1x1 pencere hazır, surface={} (GTK/webkit'e dokunulmadı)", probe_surface.is_some());
+            }
+            let flags: Vec<bool> = all_adapters
+                .iter()
+                .map(|a| probe_surface.as_ref().map(|sf| a.is_surface_supported(sf)).unwrap_or(false))
+                .collect();
+            // Düşürme sırası kritik: önce surface, sonra pencere+display.
+            drop(probe_surface);
+            drop(probe);
+            flags
+        };
+        println!("[WebGPU Bridge] Probe tamam — pencere ve X bağlantısı kapatıldı.");
 
         println!("[WebGPU Bridge] Enumerate Adapters found {} devices:", all_adapters.len());
         let mut adapter_names = Vec::new();
@@ -368,10 +383,7 @@ pub mod inner {
             let info = adapter.get_info();
             let backend_str = format!("{:?}", info.backend);
             let type_str = format!("{:?}", info.device_type);
-            let present_ok = probe_surface
-                .as_ref()
-                .map(|sf| adapter.is_surface_supported(sf))
-                .unwrap_or(false);
+            let present_ok = present_flags.get(index).copied().unwrap_or(false);
             println!("  [#{}] Name: '{}', Backend: {}, Type: {}, present={}", index, info.name, backend_str, type_str, present_ok);
             adapter_names.push(format!("{} ({})", info.name, backend_str));
             match info.backend {
@@ -387,12 +399,9 @@ pub mod inner {
         let chosen_idx = all_adapters
             .iter()
             .enumerate()
-            .max_by_key(|(_, a)| {
+            .max_by_key(|(idx, a)| {
                 let info = a.get_info();
-                let present_score = probe_surface
-                    .as_ref()
-                    .map(|sf| if a.is_surface_supported(sf) { 100 } else { 0 })
-                    .unwrap_or(0);
+                let present_score = if present_flags.get(*idx).copied().unwrap_or(false) { 100 } else { 0 };
                 let backend_score = match info.backend {
                     wgpu::Backend::Vulkan => 3,
                     wgpu::Backend::Gl => 0,
@@ -406,13 +415,6 @@ pub mod inner {
                 present_score + backend_score + type_score
             })
             .map(|(idx, _)| idx);
-        drop(probe_surface);
-        if let Some(w) = probe_window {
-            let app_for_close = app.clone();
-            let _ = app_for_close.run_on_main_thread(move || {
-                let _ = w.close();
-            });
-        }
 
         let mut chosen = chosen_idx.map(|idx| all_adapters.remove(idx));
         let mut is_software_fallback = false;
@@ -488,6 +490,7 @@ pub mod inner {
         };
 
         let info = adapter.get_info();
+        println!("[WebGPU Bridge] Seçilen adapter: '{}' ({:?}, {:?})", info.name, info.backend, info.device_type);
         let is_software_adapter = is_software_fallback || info.device_type == wgpu::DeviceType::Cpu;
         let is_gl_fallback = info.backend == wgpu::Backend::Gl;
         // Adapter'ı state'e taşımadan önce gerçek features/limits'i oku —
@@ -529,8 +532,10 @@ pub mod inner {
                 .ok_or("requestDevice() called before requestAdapter()".to_string())?
         };
 
+        println!("[WebGPU Bridge] requestDevice başladı — adapter: '{}'", adapter.get_info().name);
         // Share the single device/queue instance generated by the renderer module
         let (device, queue) = crate::renderer::device::create_device_and_queue(&adapter).await?;
+        println!("[WebGPU Bridge] requestDevice tamam — device/queue hazır.");
         // Gerçek device features/limits'ini oku — önceden JS tarafı hiç
         // görmüyordu, GPUDevice her zaman boş Set()/{} ile kuruluyordu.
         let features = wgpu_features_to_names(device.features());
