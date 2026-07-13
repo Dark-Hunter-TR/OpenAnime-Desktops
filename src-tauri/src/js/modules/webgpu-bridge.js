@@ -201,9 +201,13 @@
     }
 
     if (keyLower === "openanime_experimental_native_gpu") {
-      const isDisabled = (value === "false" || value === "0" || value === false);
-      console.log("[WebGPU Bridge] Experimental Native GPU toggle:", key, "value:", value, "-> enabled:", !isDisabled);
-      is4kActive = !isDisabled;
+      // YALNIZCA açık onay ("true"/"1") native player'ı açar. Önceden
+      // `!isDisabled` kullanılıyordu: anahtar hiç set edilmemişken (value
+      // null) bile true oluyordu — site anahtarı getItem ile yokladığı anda
+      // native player istem dışı devreye giriyordu (opt-in kuralı deliniyordu).
+      const isEnabled = (value === "true" || value === "1" || value === true);
+      console.log("[WebGPU Bridge] Experimental Native GPU toggle:", key, "value:", value, "-> enabled:", isEnabled);
+      is4kActive = isEnabled;
       updateNativeState();
     }
   }
