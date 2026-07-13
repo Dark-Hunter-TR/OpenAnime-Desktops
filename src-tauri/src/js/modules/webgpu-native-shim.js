@@ -48,6 +48,22 @@
   })();
 
   // ─────────────────────────────────────────────────────────────────
+  // Kilometre taşı logları: zincirin JS tarafındaki her kritik halkası
+  // OTURUM BAŞINA 1 kez doğrudan terminale yazılır (oa_js_log, "info").
+  // Sahada F12 açmak donma yüzünden mümkün olmayabiliyor — release'de
+  // bile terminal logu tek başına zincirin nerede koptuğunu anlatmalı.
+  // ─────────────────────────────────────────────────────────────────
+  const milestonesSent = new Set();
+  function oaMilestone(key, msg, level) {
+    if (milestonesSent.has(key)) return;
+    milestonesSent.add(key);
+    console.log(`[WebGPU Shim] ${msg}`);
+    try {
+      window.__TAURI__.core.invoke("oa_js_log", { level: level || "info", msg }).catch(() => {});
+    } catch (e) {}
+  }
+
+  // ─────────────────────────────────────────────────────────────────
   // ID Allocator & IPC Helpers
   // ─────────────────────────────────────────────────────────────────
   let nextIdVal = 1;
@@ -232,6 +248,7 @@
         } else {
           window.__IS_SOFTWARE_ADAPTER__ = false;
         }
+        oaMilestone("adapter", `adapter alındı: ${(info && info.name) || "(adsız)"}${info && info.is_software_adapter ? " [SOFTWARE]" : ""}`);
         return new GPUAdapter(info);
       } catch (e) {
         console.error("[WebGPU Shim] requestAdapter failed:", e);
@@ -737,6 +754,7 @@
     }
     submit(commandBuffers) {
       const ids = commandBuffers.map(cb => cb.__id);
+      oaMilestone("submit", `ilk queue.submit — komut sayısı=${ids.length}, aktif canvas=${activeCanvasContexts.size}`);
       orderedInvoke("gpu_queue_submit", { commandBufferIds: ids })
         .catch(e => console.error("[WebGPU Shim] queue submit IPC error:", e));
 
@@ -1129,7 +1147,7 @@
       // overlay'i HİÇ yaratılmaz (sessiz no-op). Aksi halde iki overlay üst
       // üste biner ve siyah ekran/senkron kaosu doğar.
       if (window.__NATIVE_PLAYER_ACTIVE__) {
-        console.log("[WebGPU Shim] Native player aktif — canvas configure no-op (tek pipeline).");
+        oaMilestone("configure-noop", "configure: native player aktif — no-op (tek pipeline)");
         this.__id = 0;
         return;
       }
@@ -1139,6 +1157,7 @@
       const y = Math.round(rect.top);
       const w = Math.round(rect.width);
       const h = Math.round(rect.height);
+      oaMilestone("configure-start", `configure başladı — ${w}x${h} @ ${x},${y}, format=${this.format}`);
 
       try {
         const id = await window.__TAURI__.core.invoke("gpu_canvas_get_context", {
@@ -1161,6 +1180,7 @@
           console.warn(`[WebGPU Shim] Canvas format ${this.format} desteklenmiyor; ${actualFormat} kullanılıyor.`);
           this.format = actualFormat;
         }
+        oaMilestone("configure-ok", `configure bitti — ctx=${this.__id}, format=${this.format}`);
 
         // Set up observers to sync overlay bounds
         this.setupObservers();
@@ -1170,6 +1190,7 @@
     }
 
     getCurrentTexture() {
+      oaMilestone("getCurrentTexture", `ilk getCurrentTexture — ctx=${this.__id || 0}${this.__id ? "" : " (context devre dışı: IPC'ye gitmiyor)"}`);
       const textureId = nextId();
       // Deterministik view id: JS önceden ayırır, Rust surface view'ı TAM bu
       // id ile kaydeder. (Önceki mock, Rust'ta hiç kayıtlı olmayan bir
@@ -1266,16 +1287,62 @@
     writable: true,
     configurable: true
   });
+  oaMilestone("shim", "shim aktif — navigator.gpu kuruldu");
 
   // Monkey-patch HTMLCanvasElement.prototype.getContext
   const originalGetContext = HTMLCanvasElement.prototype.getContext;
   HTMLCanvasElement.prototype.getContext = function (type, attributes) {
     if (type === "webgpu") {
+      oaMilestone("getContext", `getContext('webgpu') çağrıldı — canvas ${this.width}x${this.height}`);
       console.log("[WebGPU Shim] getContext('webgpu') intercepted on canvas:", this);
       return new GPUCanvasContext(this);
     }
     return originalGetContext.apply(this, arguments);
   };
+
+  // ─────────────────────────────────────────────────────────────────
+  // OffscreenCanvas koruması: shim yalnızca HTMLCanvasElement'i yamalar.
+  // Site player'ı OffscreenCanvas/worker yoluna saparsa webkit'in gerçek
+  // getContext'i webgpu için null döner ve player HATASIZ siyah ekran
+  // bırakır. null'u burada biz döndürüp terminale kanıt yazıyoruz —
+  // site null görünce ana-thread HTMLCanvas ya da 2D fallback'ine düşer.
+  // ─────────────────────────────────────────────────────────────────
+  if (window.OffscreenCanvas && OffscreenCanvas.prototype.getContext) {
+    const origOffscreenGetContext = OffscreenCanvas.prototype.getContext;
+    OffscreenCanvas.prototype.getContext = function (type) {
+      if (type === "webgpu") {
+        oaMilestone("offscreen-webgpu", "OffscreenCanvas.getContext('webgpu') çağrıldı — desteklenmiyor, null dönüyor", "warn");
+        return null;
+      }
+      return origOffscreenGetContext.apply(this, arguments);
+    };
+  }
+
+  if (HTMLCanvasElement.prototype.transferControlToOffscreen) {
+    const origTransferControl = HTMLCanvasElement.prototype.transferControlToOffscreen;
+    HTMLCanvasElement.prototype.transferControlToOffscreen = function () {
+      oaMilestone("transfer-offscreen", `transferControlToOffscreen çağrıldı — canvas ${this.width}x${this.height} (yalnızca tespit, davranış değişmedi)`, "warn");
+      return origTransferControl.apply(this, arguments);
+    };
+  }
+
+  // Worker tespiti: video bir worker'da render ediliyorsa script URL'si
+  // kanıttır. Davranış değişmez, yalnızca ilk 10 farklı URL loglanır.
+  if (window.Worker) {
+    const OrigWorker = window.Worker;
+    const loggedWorkerUrls = new Set();
+    window.Worker = function Worker(scriptURL, options) {
+      try {
+        const url = String(scriptURL);
+        if (!loggedWorkerUrls.has(url) && loggedWorkerUrls.size < 10) {
+          loggedWorkerUrls.add(url);
+          oaMilestone(`worker:${url}`, `Worker oluşturuldu: ${url.slice(0, 200)}`);
+        }
+      } catch (e) {}
+      return new OrigWorker(scriptURL, options);
+    };
+    window.Worker.prototype = OrigWorker.prototype;
+  }
 
   function injectDiagnosticsToModal(diag) {
     try {
