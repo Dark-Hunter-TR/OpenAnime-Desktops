@@ -42,6 +42,10 @@ pub struct LinuxGpuDetection {
     pub intel_driver: Option<String>,
     pub vaapi_supported: bool,
     pub dmabuf_supported: bool,
+    /// Sistemde tespit edilen GPU sayısı (hibrit laptop tespiti için).
+    /// NVIDIA GBM/GLX zorlamaları yalnızca tek-GPU NVIDIA sistemlerde
+    /// güvenlidir; hibritte compositor iGPU'da koşar.
+    pub gpu_count: usize,
     pub pkg_manager: String,
     pub has_pkexec: bool,
     pub log: Vec<LogEntry>,
@@ -64,7 +68,7 @@ fn detect_uncached() -> LinuxGpuDetection {
     let display_server = detect_display_server(&mut log);
 
     // ── 2. PCI bilgileri ve vendor tespiti ──────────────────────────────
-    let (vendor, pci_vendor_id, pci_device_id, renderer) = detect_pci_info(&mut log);
+    let (vendor, pci_vendor_id, pci_device_id, renderer, gpu_count) = detect_pci_info(&mut log);
 
     // ── 3. OpenGL renderer (glxinfo veya EGL üzerinden) ─────────────────
     let (opengl_renderer, opengl_version, mesa_version) = detect_opengl_info(&mut log);
@@ -119,6 +123,7 @@ fn detect_uncached() -> LinuxGpuDetection {
         intel_driver,
         vaapi_supported,
         dmabuf_supported,
+        gpu_count,
         pkg_manager,
         has_pkexec,
         log,
@@ -178,7 +183,7 @@ fn vendor_priority(v: &GpuVendor) -> u8 {
     }
 }
 
-fn detect_pci_info(log: &mut Vec<LogEntry>) -> (GpuVendor, Option<String>, Option<String>, String) {
+fn detect_pci_info(log: &mut Vec<LogEntry>) -> (GpuVendor, Option<String>, Option<String>, String, usize) {
     // Önce /sys/class/drm üzerinden TÜM kartları topla (kernel doğrudan sağlar).
     // ÖNCEKİ HATA: döngü İLK kartta return ediyordu — hibrit laptop'larda
     // card0 genelde iGPU olduğundan (ör. AMD iGPU + NVIDIA RTX 3050) vendor
@@ -228,6 +233,7 @@ fn detect_pci_info(log: &mut Vec<LogEntry>) -> (GpuVendor, Option<String>, Optio
         }
 
         // Birincil seçim: vendor önceliği; eşitlikte boot_vga=0 (discrete) tercih.
+        let gpu_count = found.len();
         found.sort_by(|a, b| {
             vendor_priority(&b.0)
                 .cmp(&vendor_priority(&a.0))
@@ -236,25 +242,27 @@ fn detect_pci_info(log: &mut Vec<LogEntry>) -> (GpuVendor, Option<String>, Optio
         let (vendor_enum, vendor_hex, device_hex, _) = found.remove(0);
         let renderer = build_renderer_string_from_vendor(&vendor_enum, &device_hex);
         log.push(LogEntry::ok_detail("Birincil GPU", vendor_enum.as_str()));
-        return (vendor_enum, Some(vendor_hex), device_hex, renderer);
+        return (vendor_enum, Some(vendor_hex), device_hex, renderer, gpu_count);
     }
 
-    // Fallback: lspci çıktısını parse et
+    // Fallback: lspci çıktısını parse et. Kart sayısı bilinemediğinden
+    // 2 varsayılır (hibrit olabilir → NVIDIA GBM/GLX zorlaması yapılmaz;
+    // güvenli taraf).
     if let Ok(output) = Command::new("lspci").output() {
         let lspci = String::from_utf8_lossy(&output.stdout).to_lowercase();
         let vendor = parse_lspci_vendor(&lspci, log);
         let renderer = vendor.as_str().to_string();
-        return (vendor, None, None, renderer);
+        return (vendor, None, None, renderer, 2);
     }
 
     // Son fallback: /proc/driver/nvidia
     if Path::new("/proc/driver/nvidia").exists() {
         log.push(LogEntry::ok("NVIDIA driver tespit edildi (/proc/driver/nvidia)"));
-        return (GpuVendor::Nvidia, None, None, "NVIDIA".to_string());
+        return (GpuVendor::Nvidia, None, None, "NVIDIA".to_string(), 2);
     }
 
     log.push(LogEntry::fail("PCI Vendor", "Tespit edilemedi"));
-    (GpuVendor::Unknown, None, None, "Unknown GPU".to_string())
+    (GpuVendor::Unknown, None, None, "Unknown GPU".to_string(), 0)
 }
 
 fn build_renderer_string_from_vendor(vendor: &GpuVendor, device_id: &Option<String>) -> String {

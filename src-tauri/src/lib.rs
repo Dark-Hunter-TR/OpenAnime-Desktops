@@ -964,12 +964,21 @@ fn configure_display_backend() {
     let has_x11 = std::env::var_os("DISPLAY").is_some();
     let user_forced_backend = std::env::var_os("GDK_BACKEND").is_some();
 
+    // Karar HER dalda loglanır — sahada hangi yolun seçildiği log'dan
+    // birebir okunabilmeli (bazı AppImage GTK hook'ları GDK_BACKEND'i
+    // kendileri export eder; o durum da görünür olmalı).
     let overlays_ok = if !is_wayland_session {
-        // Zaten X11 oturumu.
+        println!("[Display] X11 oturumu — backend değişikliği gerekmedi");
         true
     } else if user_forced_backend {
-        // Kullanıcı GDK_BACKEND'i kendisi seçmiş — dokunma; x11 ise overlay çalışır.
-        std::env::var("GDK_BACKEND").map(|v| v.contains("x11")).unwrap_or(false)
+        let value = std::env::var("GDK_BACKEND").unwrap_or_default();
+        let ok = value.contains("x11");
+        println!(
+            "[Display] GDK_BACKEND önceden setli (\"{}\") — dokunulmadı{}",
+            value,
+            if ok { "" } else { " (x11 değil: overlay'ler devre dışı)" }
+        );
+        ok
     } else if native_wayland_opt_in {
         println!("[Display] OPENANIME_NATIVE_WAYLAND=1 — Wayland'da kalınıyor, overlay'ler devre dışı");
         false
@@ -982,6 +991,7 @@ fn configure_display_backend() {
         false
     };
 
+    println!("[Display] karar: overlay={}", overlays_ok);
     let _ = OVERLAYS_SUPPORTED.set(overlays_ok);
 }
 
