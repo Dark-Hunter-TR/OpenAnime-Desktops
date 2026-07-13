@@ -69,6 +69,12 @@ pub mod inner {
         /// getCurrentTexture()'ın view id'si — yenisi kaydedilmeden ve
         /// present()'te temizlenir.
         current_view_id: Option<u64>,
+        /// Son bilinen sayfa-içi (viewport) bounds — ana pencere taşındığında
+        /// ekran konumunu yeniden hesaplamak için.
+        viewport: (i32, i32, u32, u32),
+        /// Overlay ilk gerçek kare present edilene dek gizli tutulur; hiç
+        /// boyanmamış siyah kutu ekranda asla belirmesin.
+        shown: bool,
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -1578,6 +1584,51 @@ pub mod inner {
     // Canvas presentation (overlay)
     // ─────────────────────────────────────────────────────────────────
 
+    /// Sayfa-içi (viewport, CSS px) koordinatı EKRAN fiziksel koordinatına
+    /// çevirir: ekran = main.inner_position() + viewport × scale_factor.
+    /// KÖK NEDEN DÜZELTMESİ: overlay'ler önceden viewport koordinatıyla
+    /// doğrudan ekrana konumlandırılıyordu (ana pencere konumu eklenmeden) —
+    /// Wayland'da set_position no-op olduğundan gizli kalan bu bug, X11'e
+    /// geçilince overlay'leri yanlış yere (ekran sol-üstüne) yerleştiriyordu:
+    /// siyah video alanı + "donmuş UI" görüntüsünün kaynağı.
+    fn viewport_to_screen(main: &WebviewWindow, x: i32, y: i32) -> tauri::PhysicalPosition<i32> {
+        let scale = main.scale_factor().unwrap_or(1.0);
+        let origin = main
+            .inner_position()
+            .unwrap_or(tauri::PhysicalPosition::new(0, 0));
+        tauri::PhysicalPosition::new(
+            origin.x + (x as f64 * scale).round() as i32,
+            origin.y + (y as f64 * scale).round() as i32,
+        )
+    }
+
+    fn viewport_size_physical(main: &WebviewWindow, w: u32, h: u32) -> tauri::PhysicalSize<u32> {
+        let scale = main.scale_factor().unwrap_or(1.0);
+        tauri::PhysicalSize::new(
+            (w.max(1) as f64 * scale).round() as u32,
+            (h.max(1) as f64 * scale).round() as u32,
+        )
+    }
+
+    /// Ana pencere taşındığında tüm canvas overlay'lerini kayıtlı viewport
+    /// bounds'larıyla yeniden konumlandırır (lib.rs Moved event'inden çağrılır).
+    pub fn reposition_overlays(app: &tauri::AppHandle) {
+        let Some(main) = app.get_webview_window("main") else { return };
+        let items: Vec<(Window, (i32, i32, u32, u32))> = {
+            let state = lock();
+            state
+                .registries
+                .canvas_contexts
+                .values()
+                .map(|ctx| (ctx.overlay.clone(), ctx.viewport))
+                .collect()
+        };
+        for (overlay, (x, y, w, h)) in items {
+            let _ = overlay.set_position(tauri::Position::Physical(viewport_to_screen(&main, x, y)));
+            let _ = overlay.set_size(tauri::Size::Physical(viewport_size_physical(&main, w, h)));
+        }
+    }
+
     #[tauri::command]
     pub async fn gpu_canvas_get_context(
         main_window: WebviewWindow,
@@ -1598,7 +1649,7 @@ pub mod inner {
         let app_for_build = app.clone();
         let label_for_build = label.clone();
         app.run_on_main_thread(move || {
-            let build_result = WindowBuilder::new(&app_for_build, label_for_build)
+            let mut builder = WindowBuilder::new(&app_for_build, label_for_build)
                 .title("GPU Canvas Overlay")
                 .decorations(false)
                 .transparent(true)
@@ -1606,9 +1657,20 @@ pub mod inner {
                 .always_on_top(true)
                 .focused(false)
                 .skip_taskbar(true)
-                .position(x as f64, y as f64)
-                .inner_size(width.max(1) as f64, height.max(1) as f64)
-                .build();
+                .inner_size(width.max(1) as f64, height.max(1) as f64);
+            // Ana pencereye transient bağla (X11'de z-order/minimize uyumu).
+            // parent() self'i tüketir; hata pratikte yalnızca main penceresi
+            // yokken oluşur — o durumda overlay zaten anlamsızdır, hata döndür.
+            if let Some(parent) = app_for_build.get_window("main") {
+                builder = match builder.parent(&parent) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let _ = window_tx.send(Err(format!("Overlay parent bağlanamadı: {}", e)));
+                        return;
+                    }
+                };
+            }
+            let build_result = builder.build();
 
             match build_result {
                 Ok(overlay) => {
@@ -1648,6 +1710,10 @@ pub mod inner {
             }
         }
 
+        // Ekran koordinatına dönüştürerek konumlandır (viewport + ana pencere).
+        let _ = overlay.set_position(tauri::Position::Physical(viewport_to_screen(&main_window, x, y)));
+        let _ = overlay.set_size(tauri::Size::Physical(viewport_size_physical(&main_window, width, height)));
+
         let ctx_id = next_id();
         lock().registries.canvas_contexts.insert(
             ctx_id,
@@ -1659,6 +1725,8 @@ pub mod inner {
                 height,
                 pending_surface_texture: None,
                 current_view_id: None,
+                viewport: (x, y, width, height),
+                shown: false,
             },
         );
         Ok(ctx_id)
@@ -1789,12 +1857,24 @@ pub mod inner {
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         let output = ctx.pending_surface_texture.take();
         let view_id = ctx.current_view_id.take();
+        // İlk GERÇEK kare present ediliyorsa overlay'i görünür yap —
+        // o ana kadar gizli kalır (boyanmamış siyah kutu koruması).
+        let show_now = if output.is_some() && !ctx.shown {
+            ctx.shown = true;
+            Some(ctx.overlay.clone())
+        } else {
+            None
+        };
         if let Some(id) = view_id {
             state.registries.texture_views.remove(&id);
         }
         drop(state);
         if let Some(output) = output {
             output.present();
+        }
+        if let Some(overlay) = show_now {
+            let _ = overlay.show();
+            let _ = overlay.set_ignore_cursor_events(true);
         }
         Ok(())
     }
@@ -1808,8 +1888,12 @@ pub mod inner {
 
         let mut state = lock();
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
-        let _ = ctx.overlay.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x as f64, y as f64)));
-        let _ = ctx.overlay.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width as f64, height as f64)));
+        // Viewport → EKRAN dönüşümü (ana pencere konumu + ölçek dahil).
+        if let Some(main) = ctx.overlay.app_handle().get_webview_window("main") {
+            let _ = ctx.overlay.set_position(tauri::Position::Physical(viewport_to_screen(&main, x, y)));
+            let _ = ctx.overlay.set_size(tauri::Size::Physical(viewport_size_physical(&main, width, height)));
+        }
+        ctx.viewport = (x, y, width, height);
         // Boyut/pozisyon değişimi giriş bölgesini sıfırlayabilir — tıklama
         // geçirgenliğini her senkronda yeniden garanti et.
         let _ = ctx.overlay.set_ignore_cursor_events(true);
