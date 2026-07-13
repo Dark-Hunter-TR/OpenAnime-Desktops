@@ -14,6 +14,40 @@
   console.log("[WebGPU Shim] Initializing native WebGPU shim for Linux...");
 
   // ─────────────────────────────────────────────────────────────────
+  // JS hata köprüsü: console.error/warn + window.onerror +
+  // unhandledrejection → Rust (oa_js_log) → terminal/session logu.
+  // Sahadaki "sessiz" web çökmelerinin faili ancak böyle görülebilir.
+  // ─────────────────────────────────────────────────────────────────
+  (function installJsLogBridge() {
+    let sent = 0;
+    function ship(level, args) {
+      if (sent >= 200) return;
+      sent++;
+      let msg;
+      try {
+        msg = Array.from(args).map(a => {
+          if (a instanceof Error) return a.stack || String(a);
+          if (typeof a === "object") { try { return JSON.stringify(a); } catch (e) { return String(a); } }
+          return String(a);
+        }).join(" ").slice(0, 1024);
+      } catch (e) { msg = "(mesaj serileştirilemedi)"; }
+      try {
+        window.__TAURI__.core.invoke("oa_js_log", { level, msg }).catch(() => {});
+      } catch (e) {}
+    }
+    const origError = console.error.bind(console);
+    console.error = function (...args) { ship("error", args); origError(...args); };
+    const origWarn = console.warn.bind(console);
+    console.warn = function (...args) { ship("warn", args); origWarn(...args); };
+    window.addEventListener("error", (ev) => {
+      ship("onerror", [`${ev.message} @ ${ev.filename}:${ev.lineno}:${ev.colno}`]);
+    });
+    window.addEventListener("unhandledrejection", (ev) => {
+      ship("unhandledrejection", [ev.reason]);
+    });
+  })();
+
+  // ─────────────────────────────────────────────────────────────────
   // ID Allocator & IPC Helpers
   // ─────────────────────────────────────────────────────────────────
   let nextIdVal = 1;
