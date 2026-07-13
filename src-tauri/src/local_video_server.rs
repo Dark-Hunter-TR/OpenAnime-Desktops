@@ -53,7 +53,7 @@ pub fn start_server(state: &Arc<LocalVideoState>) -> Result<u16, String> {
         .map_err(|e| format!("Local video server başlatılamadı: {}", e))?;
 
     let port = server.server_addr().to_ip().unwrap().port();
-    println!("[LocalVideo] Server başlatıldı: 127.0.0.1:{}", port);
+    // (println kaldırıldı — lib.rs zaten log! ile basıyor; çift satır oluyordu.)
 
     // Port'u state'e kaydet
     *state.port.lock().map_err(|e| e.to_string())? = port;
