@@ -45,6 +45,9 @@ gstreamer = "0.22"
 gstreamer-app = "0.22"
 gstreamer-video = "0.22"
 raw-window-handle = "0.6.2"
+# GPU probe penceresi: GTK'nın Xlib bağlantısı thread-safe olmadığından probe,
+# dlopen'la açılan AYRI bir X bağlantısı üzerinde koşar (link-time bağımlılık yok).
+x11-dl = "2.21"
 
 # panic = "abort" KULLANILMAZ: wgpu doğrulama hataları ve GStreamer panic'leri
 # tüm uygulamayı öldürmesin diye unwinding açık kalır. Async Tauri komutundaki
