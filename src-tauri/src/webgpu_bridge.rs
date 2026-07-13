@@ -75,6 +75,8 @@ pub mod inner {
         /// Overlay ilk gerçek kare present edilene dek gizli tutulur; hiç
         /// boyanmamış siyah kutu ekranda asla belirmesin.
         shown: bool,
+        /// Tanılama: bu context'ten kaç kare present edildi.
+        presents: u64,
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -230,7 +232,7 @@ pub mod inner {
     }
 
     #[tauri::command]
-    pub async fn gpu_request_adapter(app: tauri::AppHandle) -> Result<AdapterInfo, String> {
+    pub async fn gpu_request_adapter(app: tauri::AppHandle, window: WebviewWindow) -> Result<AdapterInfo, String> {
         // ─── Cache check ───────────────────────────────────────────
         // Successes are cached for the whole session (the adapter itself is
         // already stored in BridgeState, so re-detecting would be redundant).
@@ -255,7 +257,7 @@ pub mod inner {
             }
         }
 
-        let result = gpu_request_adapter_uncached(app).await;
+        let result = gpu_request_adapter_uncached(app, window).await;
 
         {
             let mut cache = adapter_cache().lock().unwrap_or_else(|p| p.into_inner());
@@ -269,10 +271,28 @@ pub mod inner {
     }
 
     // The original (expensive) detection logic, now only invoked on a cache miss.
-    async fn gpu_request_adapter_uncached(app: tauri::AppHandle) -> Result<AdapterInfo, String> {
+    async fn gpu_request_adapter_uncached(app: tauri::AppHandle, main_window: WebviewWindow) -> Result<AdapterInfo, String> {
         let mut all_adapters = {
             let state = lock();
             state.instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::GL)
+        };
+
+        // KÖK NEDEN DÜZELTMESİ (hibrit PRIME): adapter'ın bu pencereye
+        // GERÇEKTEN sunum yapıp yapamadığını ölç. Ana pencereden geçici bir
+        // probe surface açılır (yalnızca sorgulanır, configure edilmez,
+        // seçimden sonra düşürülür). Önceden skor körlemesine Discrete'i
+        // (NVIDIA) seçiyordu; XWayland penceresi iGPU'da yaşadığında NVIDIA
+        // sunum yapamaz → pipeline çalışır ama tek kare basılamaz
+        // (sahadaki "ses var, görüntü yok").
+        let probe_surface = {
+            let state = lock();
+            match state.instance.create_surface(main_window.clone()) {
+                Ok(sf) => Some(sf),
+                Err(e) => {
+                    println!("[WebGPU Bridge] Probe surface açılamadı ({}): sunum uyumluluğu skorlanamayacak", e);
+                    None
+                }
+            }
         };
 
         println!("[WebGPU Bridge] Enumerate Adapters found {} devices:", all_adapters.len());
@@ -283,7 +303,11 @@ pub mod inner {
             let info = adapter.get_info();
             let backend_str = format!("{:?}", info.backend);
             let type_str = format!("{:?}", info.device_type);
-            println!("  [#{}] Name: '{}', Backend: {}, Type: {}", index, info.name, backend_str, type_str);
+            let present_ok = probe_surface
+                .as_ref()
+                .map(|sf| adapter.is_surface_supported(sf))
+                .unwrap_or(false);
+            println!("  [#{}] Name: '{}', Backend: {}, Type: {}, present={}", index, info.name, backend_str, type_str, present_ok);
             adapter_names.push(format!("{} ({})", info.name, backend_str));
             match info.backend {
                 wgpu::Backend::Vulkan => vulkan_adapters_found += 1,
@@ -292,12 +316,18 @@ pub mod inner {
             }
         }
 
-        // Score and choose the best hardware adapter
+        // Score and choose the best hardware adapter.
+        // Sunum yeteneği HER ŞEYDEN önce gelir (+100): sunum yapamayan
+        // "güçlü" GPU yerine sunum yapabilen iGPU tercih edilir.
         let chosen_idx = all_adapters
             .iter()
             .enumerate()
             .max_by_key(|(_, a)| {
                 let info = a.get_info();
+                let present_score = probe_surface
+                    .as_ref()
+                    .map(|sf| if a.is_surface_supported(sf) { 100 } else { 0 })
+                    .unwrap_or(0);
                 let backend_score = match info.backend {
                     wgpu::Backend::Vulkan => 3,
                     wgpu::Backend::Gl => 0,
@@ -308,9 +338,10 @@ pub mod inner {
                     wgpu::DeviceType::IntegratedGpu => 1,
                     _ => 0,
                 };
-                backend_score + type_score
+                present_score + backend_score + type_score
             })
             .map(|(idx, _)| idx);
+        drop(probe_surface);
 
         let mut chosen = chosen_idx.map(|idx| all_adapters.remove(idx));
         let mut is_software_fallback = false;
@@ -1638,6 +1669,19 @@ pub mod inner {
         height: u32,
     ) -> Result<u64, String> {
         let app: tauri::AppHandle = main_window.app_handle().clone();
+
+        // Canvas overlay fırtınası önlemi: menü önizlemeleri gibi ikincil
+        // canvas'lar sınırsız X11 penceresi yaratmasın. Video canvas'ı ilk
+        // context olduğundan etkilenmez.
+        {
+            let state = lock();
+            let count = state.registries.canvas_contexts.len();
+            if count >= 2 {
+                println!("[WebGPU Bridge] Canvas overlay limiti aşıldı (mevcut={}) — yeni context reddedildi", count);
+                return Err(format!("canvas overlay limit reached ({})", count));
+            }
+        }
+
         let label = format!("gpu_canvas_{}", next_id());
 
         // Webview'sız düz pencere: wgpu surface için yalnızca raw window
@@ -1727,8 +1771,10 @@ pub mod inner {
                 current_view_id: None,
                 viewport: (x, y, width, height),
                 shown: false,
+                presents: 0,
             },
         );
+        println!("[WebGPU Bridge] Canvas overlay yaratıldı: ctx={} viewport=({},{} {}x{})", ctx_id, x, y, width, height);
         Ok(ctx_id)
     }
 
@@ -1786,14 +1832,23 @@ pub mod inner {
             state.instance.create_surface(overlay).map_err(|e| e.to_string())?
         };
 
-        let caps = surface.get_capabilities(&adapter);
-        let tex_format = clamp_surface_format(requested_format, &caps.formats);
-        if tex_format != requested_format {
-            crate::log!(
-                "[WebGPU Bridge] Canvas formatı {} desteklenmiyor (desteklenen: {:?}) — {} kullanılıyor",
-                format, caps.formats, texture_format_to_string(tex_format)
-            );
+        // Uyumsuz surface koruması: adapter bu pencereye sunum yapamıyorsa
+        // configure HİÇ çağrılmaz (wgpu configure hatası fatal panic'tir).
+        if !adapter.is_surface_supported(&surface) {
+            let name = adapter.get_info().name;
+            crate::log!("[WebGPU Bridge] HATA: adapter '{}' bu pencereye sunum yapamıyor (hibrit PRIME uyumsuzluğu) — canvas devre dışı", name);
+            return Err(format!("adapter '{}' cannot present to this window", name));
         }
+        let caps = surface.get_capabilities(&adapter);
+        if caps.formats.is_empty() {
+            crate::log!("[WebGPU Bridge] HATA: surface caps boş — canvas devre dışı");
+            return Err("surface reports no supported formats".to_string());
+        }
+        let tex_format = clamp_surface_format(requested_format, &caps.formats);
+        crate::log!(
+            "[WebGPU Bridge] Canvas configure: ctx={} istek={} kullanılan={} caps={:?} adapter='{}'",
+            context_id, format, texture_format_to_string(tex_format), caps.formats, adapter.get_info().name
+        );
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: tex_format,
@@ -1832,7 +1887,14 @@ pub mod inner {
         // düşür — aksi halde swapchain slotu sızar.
         ctx.pending_surface_texture = None;
 
-        let output = surface.get_current_texture().map_err(|e| format!("get_current_texture failed: {}", e))?;
+        let output = surface.get_current_texture().map_err(|e| {
+            static ERR_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = ERR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if n == 1 || n % 100 == 0 {
+                crate::log!("[WebGPU Bridge] get_current_texture hatası (x{}): {}", n, e);
+            }
+            format!("get_current_texture failed: {}", e)
+        })?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         ctx.pending_surface_texture = Some(output);
 
@@ -1857,6 +1919,14 @@ pub mod inner {
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         let output = ctx.pending_surface_texture.take();
         let view_id = ctx.current_view_id.take();
+        if output.is_some() {
+            ctx.presents += 1;
+            if ctx.presents == 1 {
+                println!("[WebGPU Bridge] İLK KARE basıldı (ctx={})", context_id);
+            } else if ctx.presents % 300 == 0 {
+                println!("[WebGPU Bridge] present sayacı: ctx={} kare={}", context_id, ctx.presents);
+            }
+        }
         // İlk GERÇEK kare present ediliyorsa overlay'i görünür yap —
         // o ana kadar gizli kalır (boyanmamış siyah kutu koruması).
         let show_now = if output.is_some() && !ctx.shown {
@@ -2004,7 +2074,7 @@ pub mod inner {
     }
 
     #[tauri::command]
-    pub async fn gpu_request_adapter(_app: tauri::AppHandle) -> Result<AdapterInfo, String> {
+    pub async fn gpu_request_adapter(_app: tauri::AppHandle, _window: WebviewWindow) -> Result<AdapterInfo, String> {
         Err("WebGPU bridge is only supported on Linux".to_string())
     }
 
