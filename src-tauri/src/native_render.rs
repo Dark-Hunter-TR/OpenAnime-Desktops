@@ -36,6 +36,9 @@ pub mod inner {
         pub render_state: Option<Arc<Mutex<RenderState>>>,
         pub overlay_window: Option<Window>,
         pub teardown_thread: Option<std::thread::JoinHandle<()>>,
+        /// Son bilinen viewport bounds (x, y, w, h) — ana pencere taşınınca
+        /// ekran konumunu yeniden hesaplamak için.
+        pub last_bounds: Option<(i32, i32, u32, u32)>,
     }
 
     use std::sync::OnceLock;
@@ -49,6 +52,7 @@ pub mod inner {
             render_state: None,
             overlay_window: None,
             teardown_thread: None,
+            last_bounds: None,
         }))
     }
 
@@ -105,15 +109,31 @@ pub mod inner {
 
         let app_for_build = app.clone();
         app.run_on_main_thread(move || {
-            let build_result = WindowBuilder::new(&app_for_build, "gst_overlay")
+            let mut builder = WindowBuilder::new(&app_for_build, "gst_overlay")
                 .title("Video Overlay")
                 .decorations(false)
                 .transparent(true)
                 .shadow(false)
                 .always_on_top(true)
                 .focused(false)
-                .skip_taskbar(true)
-                .build();
+                .skip_taskbar(true);
+            // NOT: pencere görünür yaratılır (transparent olduğundan ilk kareye
+            // dek zaten şeffaftır). visible(false) KULLANILAMAZ: tao/GTK'da
+            // gizli pencere realize olmaz → GDK penceresi (XID) oluşmaz →
+            // wgpu surface kurulamaz ve realize beklemesi zaman aşımına düşer.
+            // Ana pencereye transient bağla (X11 z-order/minimize uyumu).
+            // parent() self'i tüketir; hata pratikte yalnızca main penceresi
+            // yokken oluşur — o durumda overlay zaten anlamsızdır, hata döndür.
+            if let Some(parent) = app_for_build.get_window("main") {
+                builder = match builder.parent(&parent) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let _ = window_tx.send(Err(format!("Overlay parent bağlanamadı: {}", e)));
+                        return;
+                    }
+                };
+            }
+            let build_result = builder.build();
 
             match build_result {
                 Ok(overlay) => {
@@ -231,6 +251,8 @@ pub mod inner {
         // and fixes UI stuttering/lag on Linux.
         let rs_ref = render_state_shared.clone();
         let main_window_for_thread = main_window.clone();
+        let overlay_for_thread = overlay.clone();
+        let mut overlay_shown = false;
         let mut local_frame_data = Vec::new();
 
         thread::spawn(move || {
@@ -275,7 +297,14 @@ pub mod inner {
                 };
 
                 match presentation_result {
-                    Ok(output) => output.present(),
+                    Ok(output) => {
+                        output.present();
+                        if !overlay_shown {
+                            overlay_shown = true;
+                            let _ = overlay_for_thread.show();
+                            let _ = overlay_for_thread.set_ignore_cursor_events(true);
+                        }
+                    }
                     // Lost/Outdated: prepare_and_submit içindeki tek seferlik
                     // reconfigure+retry de başarısız olmuş demektir — bir
                     // sonraki karede yeniden dene, kareyi atla.
@@ -345,10 +374,11 @@ pub mod inner {
     }
 
     pub fn sync_bounds(x: i32, y: i32, width: u32, height: u32, main_window: WebviewWindow) {
-        let manager_guard = match get_manager().try_lock() {
+        let mut manager_guard = match get_manager().try_lock() {
             Ok(guard) => guard,
             Err(_) => return,
         };
+        manager_guard.last_bounds = Some((x, y, width, height));
 
         let overlay_opt = manager_guard.overlay_window.clone();
         let rs_shared_opt = manager_guard.render_state.clone();
@@ -356,11 +386,15 @@ pub mod inner {
 
         if let Some(overlay) = overlay_opt {
             let scale_factor = main_window.scale_factor().unwrap_or(1.0);
-            
-            // Convert bounds relative to client area to physical screen coordinates
+            // KÖK NEDEN DÜZELTMESİ: viewport koordinatına ana pencerenin
+            // EKRANDAKİ konumu eklenir (önceden yalnız ölçek çarpılıyordu —
+            // X11'de overlay yanlış yere gidiyordu).
+            let origin = main_window
+                .inner_position()
+                .unwrap_or(tauri::PhysicalPosition::new(0, 0));
             let physical_pos = tauri::PhysicalPosition::new(
-                (x as f64 * scale_factor) as i32,
-                (y as f64 * scale_factor) as i32,
+                origin.x + (x as f64 * scale_factor).round() as i32,
+                origin.y + (y as f64 * scale_factor).round() as i32,
             );
             let physical_size = tauri::PhysicalSize::new(
                 (width as f64 * scale_factor) as u32,
@@ -384,6 +418,19 @@ pub mod inner {
                     }
                 }
             }
+        }
+    }
+
+    /// Ana pencere taşındığında overlay'i kayıtlı son bounds ile yeniden
+    /// konumlandırır (lib.rs Moved event'inden çağrılır).
+    pub fn reposition(app: &tauri::AppHandle) {
+        let Some(main) = app.get_webview_window("main") else { return };
+        let bounds = match get_manager().try_lock() {
+            Ok(g) => g.last_bounds,
+            Err(_) => return,
+        };
+        if let Some((x, y, w, h)) = bounds {
+            sync_bounds(x, y, w, h, main);
         }
     }
 
