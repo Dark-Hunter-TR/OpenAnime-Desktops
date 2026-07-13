@@ -55,8 +55,14 @@ impl WebGpuRenderer {
         // maliyeti demekti.
         let instance: &wgpu::Instance = crate::gpu::shared_instance();
 
-        // Select compatible Vulkan adapter
-        let adapter = select_adapter(&instance).await?;
+        // Surface ÖNCE yaratılır ki adapter, bu pencereye gerçekten sunum
+        // yapabilenler arasından seçilebilsin (hibrit PRIME düzeltmesi).
+        let size = window.inner_size().map_err(|e| e.to_string())?;
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|e| format!("Surface oluşturulamadı: {}", e))?;
+
+        let adapter = select_adapter(instance, Some(&surface)).await?;
 
         // Request WGPU Device and Queue
         let (device, queue) = create_device_and_queue(&adapter).await?;
@@ -67,7 +73,7 @@ impl WebGpuRenderer {
         }));
 
         // Initialize Swapchain Surface
-        let surface_manager = SurfaceManager::new(&instance, &adapter, &device, &window, vsync)?;
+        let surface_manager = SurfaceManager::new(surface, &adapter, &device, size.width, size.height, vsync)?;
 
         // Create compute pipeline executor
         let compute_pipeline = VideoComputePipeline::new(device.clone());

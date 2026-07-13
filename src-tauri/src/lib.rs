@@ -715,6 +715,24 @@ async fn gst_control_seek(time: f64) -> Result<(), String> {
 // (get_gpu_report / get_gst_report kaldırıldı — çağıran yoktu; gpu_detector ve
 // gst_detector modülleri diğer kullanıcıları üzerinden yaşamaya devam ediyor.)
 
+/// JS hata köprüsü: webview içindeki console.error/warn, window.onerror ve
+/// unhandledrejection mesajlarını terminal/session loguna akıtır — sahadaki
+/// "sessiz" web tarafı çökmelerinin faili böyle yakalanır. Oturum başına
+/// 300 mesajla sınırlıdır (flood koruması).
+#[tauri::command]
+fn oa_js_log(level: String, msg: String) {
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n < 300 {
+        let mut m = msg;
+        m.truncate(1024);
+        log!("[JS {}] {}", level, m);
+        if n == 299 {
+            log!("[JS] mesaj limiti (300) doldu — sonraki JS logları bastırılıyor");
+        }
+    }
+}
+
 #[tauri::command]
 async fn install_missing_gstreamer() -> Result<(), String> {
     #[cfg(target_os = "linux")]
@@ -1356,6 +1374,8 @@ pub fn run() {
             pick_mp4_file,
             // 📄 Dosyanın ilk N baytını oku (IndexedDB dummy blob için)
             read_file_head,
+            // JS hata köprüsü (webview console/onerror → terminal log)
+            oa_js_log,
             // WebGPU Bridge commands
             webgpu_bridge::inner::gpu_request_adapter,
             webgpu_bridge::inner::gpu_request_device,

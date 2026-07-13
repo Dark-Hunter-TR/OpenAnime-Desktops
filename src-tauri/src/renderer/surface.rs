@@ -1,5 +1,4 @@
-use wgpu::{Adapter, CompositeAlphaMode, Device, Instance, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, PresentMode, TextureUsages};
-use tauri::Window;
+use wgpu::{Adapter, CompositeAlphaMode, Device, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, PresentMode, TextureUsages};
 
 pub struct SurfaceManager {
     surface: Surface<'static>,
@@ -8,21 +7,31 @@ pub struct SurfaceManager {
 }
 
 impl SurfaceManager {
-    /// Creates a new surface for the given window (webview'sız overlay).
+    /// Önceden yaratılmış surface ile kurulum — adapter seçimi surface'a göre
+    /// yapılabilsin diye surface artık çağıran tarafta (renderer) açılır.
     pub fn new(
-        instance: &Instance,
+        surface: Surface<'static>,
         adapter: &Adapter,
         device: &Device,
-        window: &Window,
+        width: u32,
+        height: u32,
         vsync: bool,
     ) -> Result<Self, String> {
-        let size = window.inner_size().map_err(|e| e.to_string())?;
-        let width = size.width.max(1);
-        let height = size.height.max(1);
+        let width = width.max(1);
+        let height = height.max(1);
 
-        let surface = instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
+        // Uyumsuz surface koruması: configure fatal panic'e düşmesin.
+        if !adapter.is_surface_supported(&surface) {
+            return Err(format!(
+                "adapter '{}' bu pencereye sunum yapamıyor (hibrit PRIME uyumsuzluğu)",
+                adapter.get_info().name
+            ));
+        }
 
         let caps = surface.get_capabilities(adapter);
+        if caps.formats.is_empty() {
+            return Err("surface hiçbir format bildirmiyor".to_string());
+        }
         let format = caps
             .formats
             .iter()

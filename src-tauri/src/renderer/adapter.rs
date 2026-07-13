@@ -2,16 +2,23 @@ use std::sync::Arc;
 use wgpu::{Adapter, Instance, RequestAdapterOptions, PowerPreference};
 
 /// Selects the best Vulkan adapter.
-/// Prioritizes Discrete GPUs, then Integrated GPUs, and finally fallback CPU adapters.
-pub async fn select_adapter(instance: &Instance) -> Result<Arc<Adapter>, String> {
+/// Prioritizes: SUNUM YAPABİLEN adapter (>varsa probe surface) > Vulkan > Discrete.
+/// Hibrit PRIME sistemlerde pencere iGPU'da yaşar; sunum yapamayan dGPU'yu
+/// seçmek "pipeline çalışıyor ama görüntü yok" üretir.
+pub async fn select_adapter(
+    instance: &Instance,
+    probe_surface: Option<&wgpu::Surface<'_>>,
+) -> Result<Arc<Adapter>, String> {
     // We target Vulkan and GL for Linux rendering
     let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::GL);
-    
-    // Sort adapters so Vulkan is preferred over GL, DiscreteGpu preferred over Integrated.
+
     let best_adapter = adapters
         .into_iter()
         .max_by_key(|a| {
             let info = a.get_info();
+            let present_score = probe_surface
+                .map(|sf| if a.is_surface_supported(sf) { 100 } else { 0 })
+                .unwrap_or(0);
             let backend_score = match info.backend {
                 wgpu::Backend::Vulkan => 3,
                 wgpu::Backend::Gl => 0,
@@ -22,7 +29,7 @@ pub async fn select_adapter(instance: &Instance) -> Result<Arc<Adapter>, String>
                 wgpu::DeviceType::IntegratedGpu => 1,
                 _ => 0,
             };
-            backend_score + type_score
+            present_score + backend_score + type_score
         });
 
     if let Some(adapter) = best_adapter {
