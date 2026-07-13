@@ -343,7 +343,17 @@ pub fn create_instance_safe(backends: wgpu::Backends) -> wgpu::Instance {
 #[cfg(target_os = "linux")]
 pub fn shared_instance() -> &'static wgpu::Instance {
     static SHARED: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
-    SHARED.get_or_init(|| create_instance_safe(wgpu::Backends::VULKAN | wgpu::Backends::GL))
+    SHARED.get_or_init(|| {
+        // AppImage, CI'da libEGL'i stripler — GL backend AppImage altında
+        // YAPISAL olarak bozuktur (khronos-egl panic'i). Baştan Vulkan-only
+        // kurmak panic'i tamamen ortadan kaldırır ve açılışı hızlandırır.
+        if std::env::var_os("APPIMAGE").is_some() {
+            crate::log!("[GPU] AppImage ortamı — GL backend atlandı, Vulkan-only instance");
+            create_instance_safe(wgpu::Backends::VULKAN)
+        } else {
+            create_instance_safe(wgpu::Backends::VULKAN | wgpu::Backends::GL)
+        }
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -481,10 +491,15 @@ pub fn configure_linux_gpu_env() {
             set_env_if_unset("__NV_DISABLE_EXPLICIT_SYNC", "1", "Wayland + NVIDIA (eski)");
         }
 
-        // NVIDIA proprietary + Wayland: GBM backend zorla
+        // NVIDIA proprietary + Wayland: GBM backend zorla — YALNIZCA sistemdeki
+        // tek GPU NVIDIA ise. Hibrit laptop'larda (iGPU + NVIDIA dGPU)
+        // compositor iGPU'da koşar; GLX'i NVIDIA'ya zorlamak webkit'in GL
+        // bağlamını kırabilir (klasik PRIME yanlış yapılandırması).
         if is_wayland && detection.nvidia_is_proprietary {
-            // nvidia sürücüsü 525+ sürümde GBM destekliyor
-            if let Some(ref ver_str) = detection.nvidia_driver_version {
+            if detection.gpu_count > 1 {
+                println!("[GPU Env] Hibrit sistem ({} GPU) — NVIDIA GBM/GLX zorlaması atlandı", detection.gpu_count);
+            } else if let Some(ref ver_str) = detection.nvidia_driver_version {
+                // nvidia sürücüsü 525+ sürümde GBM destekliyor
                 let major: u32 = ver_str.split('.').next()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(0);
@@ -504,8 +519,9 @@ pub fn configure_linux_gpu_env() {
         set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1", "VM GPU tespit edildi");
     }
 
-    println!("[GPU Env] ✓ Yapılandırma tamamlandı (vendor={}, wayland={}, dmabuf={}, webkit={}.{}.{})",
-        detection.vendor, is_wayland, detection.dmabuf_supported, wk_major, wk_minor, wk_micro);
+    println!("[GPU Env] ✓ Yapılandırma tamamlandı (vendor={}, gpu_sayısı={}, wayland={}, dmabuf={}, webkit={}.{}.{}, overlay={})",
+        detection.vendor, detection.gpu_count, is_wayland, detection.dmabuf_supported,
+        wk_major, wk_minor, wk_micro, crate::overlays_supported());
 }
 
 #[cfg(not(target_os = "linux"))]
