@@ -1257,6 +1257,20 @@ pub fn run() {
                 _ => {}
             }
 
+            // Ana pencere taşındığında overlay'ler ekran koordinatlarını
+            // yeniden hesaplamalı — JS'in scroll/resize dinleyicileri pencere
+            // taşınmasını göremez, bu yalnızca Rust tarafında kapanabilir.
+            #[cfg(target_os = "linux")]
+            {
+                if label == "main" {
+                    if let tauri::WindowEvent::Moved(_) = event {
+                        let app_for_repos = window.app_handle().clone();
+                        webgpu_bridge::inner::reposition_overlays(&app_for_repos);
+                        native_render::inner::reposition(&app_for_repos);
+                    }
+                }
+            }
+
             #[cfg(target_os = "windows")]
             {
                 if let tauri::WindowEvent::Focused(focused) = event {
