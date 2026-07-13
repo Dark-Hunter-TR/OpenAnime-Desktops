@@ -231,6 +231,69 @@ pub mod inner {
         pub recommended_packages_id: String,
     }
 
+    /// Sunum-uyumluluk probe'u için 1x1'lik ekran dışı düz pencere yaratır.
+    /// KRİTİK: probe surface webkit'in KENDİ penceresinde AÇILMAZ — webkit'in
+    /// EGL/GL bağlamıyla aynı X11 penceresine Vulkan surface açıp kapatmak
+    /// webkit'in boyamasını öldürüyordu (sahada ana sayfada donma).
+    async fn create_probe_window(app: &tauri::AppHandle) -> Option<Window> {
+        let (window_tx, window_rx) = tokio::sync::oneshot::channel::<Result<Window, String>>();
+        let (realize_tx, realize_rx) = tokio::sync::oneshot::channel::<()>();
+        let realize_tx = Arc::new(Mutex::new(Some(realize_tx)));
+
+        let app_for_build = app.clone();
+        let label = format!("gpu_probe_{}", next_id());
+        if app
+            .run_on_main_thread(move || {
+                let mut builder = WindowBuilder::new(&app_for_build, label)
+                    .title("GPU Probe")
+                    .decorations(false)
+                    .transparent(true)
+                    .shadow(false)
+                    .skip_taskbar(true)
+                    .focused(false)
+                    .inner_size(1.0, 1.0);
+                if let Some(parent) = app_for_build.get_window("main") {
+                    builder = match builder.parent(&parent) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            let _ = window_tx.send(Err(format!("probe parent: {}", e)));
+                            return;
+                        }
+                    };
+                }
+                match builder.build() {
+                    Ok(w) => {
+                        let realize_tx_for_event = realize_tx.clone();
+                        w.on_window_event(move |event| {
+                            if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)) {
+                                if let Some(tx) = realize_tx_for_event.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                                    let _ = tx.send(());
+                                }
+                            }
+                        });
+                        // Ekran dışına taşı (X11'de çalışır; saf Wayland'da bu
+                        // yol zaten hiç koşmaz — navigator.gpu kurulmuyor).
+                        let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(-300, -300)));
+                        let _ = window_tx.send(Ok(w));
+                    }
+                    Err(e) => {
+                        let _ = window_tx.send(Err(format!("probe build: {}", e)));
+                    }
+                }
+            })
+            .is_err()
+        {
+            return None;
+        }
+
+        let w = match window_rx.await {
+            Ok(Ok(w)) => w,
+            _ => return None,
+        };
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(300), realize_rx).await;
+        Some(w)
+    }
+
     #[tauri::command]
     pub async fn gpu_request_adapter(app: tauri::AppHandle, window: WebviewWindow) -> Result<AdapterInfo, String> {
         // ─── Cache check ───────────────────────────────────────────
@@ -277,23 +340,25 @@ pub mod inner {
             state.instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::GL)
         };
 
-        // KÖK NEDEN DÜZELTMESİ (hibrit PRIME): adapter'ın bu pencereye
-        // GERÇEKTEN sunum yapıp yapamadığını ölç. Ana pencereden geçici bir
-        // probe surface açılır (yalnızca sorgulanır, configure edilmez,
-        // seçimden sonra düşürülür). Önceden skor körlemesine Discrete'i
-        // (NVIDIA) seçiyordu; XWayland penceresi iGPU'da yaşadığında NVIDIA
-        // sunum yapamaz → pipeline çalışır ama tek kare basılamaz
-        // (sahadaki "ses var, görüntü yok").
-        let probe_surface = {
+        // KÖK NEDEN DÜZELTMESİ (hibrit PRIME): adapter'ın gerçekten sunum
+        // yapıp yapamadığını ölç. Probe surface, webkit'in penceresine ASLA
+        // dokunmadan, 1x1'lik ekran dışı ayrı bir pencerede açılır
+        // (yalnızca sorgulanır, configure edilmez, sonra pencereyle birlikte
+        // kapatılır). Önceden skor körlemesine Discrete'i (NVIDIA) seçiyordu;
+        // pencere iGPU'da yaşadığında NVIDIA sunum yapamayabilir → pipeline
+        // çalışır ama tek kare basılamaz ("ses var, görüntü yok").
+        let _ = &main_window;
+        let probe_window = create_probe_window(&app).await;
+        let probe_surface = probe_window.as_ref().and_then(|w| {
             let state = lock();
-            match state.instance.create_surface(main_window.clone()) {
+            match state.instance.create_surface(w.clone()) {
                 Ok(sf) => Some(sf),
                 Err(e) => {
                     println!("[WebGPU Bridge] Probe surface açılamadı ({}): sunum uyumluluğu skorlanamayacak", e);
                     None
                 }
             }
-        };
+        });
 
         println!("[WebGPU Bridge] Enumerate Adapters found {} devices:", all_adapters.len());
         let mut adapter_names = Vec::new();
@@ -342,6 +407,12 @@ pub mod inner {
             })
             .map(|(idx, _)| idx);
         drop(probe_surface);
+        if let Some(w) = probe_window {
+            let app_for_close = app.clone();
+            let _ = app_for_close.run_on_main_thread(move || {
+                let _ = w.close();
+            });
+        }
 
         let mut chosen = chosen_idx.map(|idx| all_adapters.remove(idx));
         let mut is_software_fallback = false;
