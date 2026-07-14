@@ -76,8 +76,9 @@ pub mod inner {
         }
 
         // ── ADIM 4: wgpu Instance oluştur ─────────────────────────────────
-        // Sadece Vulkan backend — GL ile karıştırmıyoruz (panik-korumalı)
-        let instance = crate::gpu::create_instance_safe(wgpu::Backends::VULKAN);
+        // Sadece Vulkan backend — paylaşılan Vulkan-only instance (per-call
+        // instance yaratımı probe başına gereksiz sürücü taramasıydı)
+        let instance = crate::gpu::shared_instance();
 
         steps.push(VulkanProbeStep::success("Instance Create", "wgpu Vulkan instance oluşturuldu"));
 

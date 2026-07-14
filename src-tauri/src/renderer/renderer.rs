@@ -50,10 +50,10 @@ pub struct WebGpuRenderer {
 
 impl WebGpuRenderer {
     pub async fn new(window: Window, vsync: bool) -> Result<Self, String> {
-        // Uygulama geneli paylaşılan instance (&'static) — her player
-        // başlatmada yeni instance kurmak bozuk EGL'de tekrarlanan panic
-        // maliyeti demekti.
-        let instance: &wgpu::Instance = crate::gpu::shared_instance();
+        // Uygulama geneli paylaşılan instance (&'static): Vulkan varsa
+        // Vulkan-only, yoksa GL fallback — GL/EGL'nin UI process'te gereksiz
+        // init edilip webkit compositing'ini öldürmemesi için active_instance.
+        let instance: &wgpu::Instance = crate::gpu::active_instance();
 
         // Surface ÖNCE yaratılır ki adapter, bu pencereye gerçekten sunum
         // yapabilenler arasından seçilebilsin (hibrit PRIME düzeltmesi).
