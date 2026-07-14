@@ -116,7 +116,10 @@ pub mod inner {
                 .shadow(false)
                 .always_on_top(true)
                 .focused(false)
-                .skip_taskbar(true);
+                .skip_taskbar(true)
+                // Ekran dışı başlangıç: gerçek konum JS sync_bounds'tan gelene dek
+                // WM-default konumda içerik üstünde siyah kutu flaşlamasın.
+                .position(-10000.0, -10000.0);
             // NOT: pencere görünür yaratılır (transparent olduğundan ilk kareye
             // dek zaten şeffaftır). visible(false) KULLANILAMAZ: tao/GTK'da
             // gizli pencere realize olmaz → GDK penceresi (XID) oluşmaz →
