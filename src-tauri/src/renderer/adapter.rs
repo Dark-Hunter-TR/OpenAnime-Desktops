@@ -9,7 +9,9 @@ pub async fn select_adapter(
     instance: &Instance,
     probe_surface: Option<&wgpu::Surface<'_>>,
 ) -> Result<Arc<Adapter>, String> {
-    // We target Vulkan and GL for Linux rendering
+    // We target Vulkan and GL for Linux rendering. Maske geniş kalabilir:
+    // enumerate yalnızca instance'ın init ETTİĞİ backend'ler ∩ maske üzerinde
+    // döner (Vulkan-only instance'ta GL no-op).
     let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::GL);
 
     let best_adapter = adapters

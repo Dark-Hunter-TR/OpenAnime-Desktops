@@ -1328,10 +1328,13 @@
 
   // Worker tespiti: video bir worker'da render ediliyorsa script URL'si
   // kanıttır. Davranış değişmez, yalnızca ilk 10 farklı URL loglanır.
+  // Reflect.construct + new.target: `class X extends Worker` alt sınıfları
+  // kırılmaz (super() doğru prototip zinciriyle X instance'ı üretir; düz
+  // `return new OrigWorker(...)` bunu OrigWorker.prototype'a sabitliyordu).
   if (window.Worker) {
     const OrigWorker = window.Worker;
     const loggedWorkerUrls = new Set();
-    window.Worker = function Worker(scriptURL, options) {
+    function WrappedWorker(scriptURL, options) {
       try {
         const url = String(scriptURL);
         if (!loggedWorkerUrls.has(url) && loggedWorkerUrls.size < 10) {
@@ -1339,9 +1342,13 @@
           oaMilestone(`worker:${url}`, `Worker oluşturuldu: ${url.slice(0, 200)}`);
         }
       } catch (e) {}
-      return new OrigWorker(scriptURL, options);
-    };
-    window.Worker.prototype = OrigWorker.prototype;
+      return Reflect.construct(OrigWorker, arguments, new.target || WrappedWorker);
+    }
+    WrappedWorker.prototype = OrigWorker.prototype;
+    Object.setPrototypeOf(WrappedWorker, OrigWorker);
+    // Native-detection yapan kütüphaneler toString'e bakar — orijinali ilet.
+    try { WrappedWorker.toString = () => OrigWorker.toString(); } catch (e) {}
+    window.Worker = WrappedWorker;
   }
 
   function injectDiagnosticsToModal(diag) {

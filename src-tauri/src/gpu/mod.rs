@@ -336,23 +336,54 @@ pub fn create_instance_safe(backends: wgpu::Backends) -> wgpu::Instance {
     })
 }
 
-/// Uygulama genelinde TEK wgpu Instance. Önceden her native player
-/// başlatmada yeni instance kuruluyordu — bozuk EGL'li sistemlerde her
-/// bölüm başına yeniden panic + yeniden sürücü taraması demekti (lag +
-/// açılış gecikmesi). Instance Arc tabanlıdır, clone ucuzdur.
+/// Uygulama genelinde TEK wgpu Instance — her zaman VULKAN-ONLY.
+///
+/// GL backend'i burada ASLA init edilmez: wgpu'nun GL backend'i EGL'yi
+/// webkit UI process'inin İÇİNDE (tokio thread'inde) başlatır ve webkit'in
+/// kendi EGL/GLX compositing durumuyla aynı proseste çakışır — sahada
+/// requestAdapter anında tüm pencerenin siyaha dönmesinin kökü buydu
+/// (AppImage=Vulkan-only etkilenmiyordu, kaynaktan/dev VULKAN|GL kuruyordu).
+/// GL'ye gerçekten ihtiyaç duyan Vulkan'sız sistemler için tek kapı
+/// gl_fallback_instance()'tır; seçim active_instance()'ta yapılır.
 #[cfg(target_os = "linux")]
 pub fn shared_instance() -> &'static wgpu::Instance {
     static SHARED: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
-    SHARED.get_or_init(|| {
-        // AppImage, CI'da libEGL'i stripler — GL backend AppImage altında
-        // YAPISAL olarak bozuktur (khronos-egl panic'i). Baştan Vulkan-only
-        // kurmak panic'i tamamen ortadan kaldırır ve açılışı hızlandırır.
-        if std::env::var_os("APPIMAGE").is_some() {
-            crate::log!("[GPU] AppImage ortamı — GL backend atlandı, Vulkan-only instance");
-            create_instance_safe(wgpu::Backends::VULKAN)
-        } else {
-            create_instance_safe(wgpu::Backends::VULKAN | wgpu::Backends::GL)
+    SHARED.get_or_init(|| create_instance_safe(wgpu::Backends::VULKAN))
+}
+
+/// Process'te GL/EGL instance yaratımının TEK kapısı. Yalnızca Vulkan'sız
+/// sistemlerde (active_instance kararı veya GL tanılaması) çağrılmalıdır;
+/// o sistemlerde configure_linux_gpu_env zaten WEBKIT_DISABLE_COMPOSITING_MODE=1
+/// set ettiğinden webkit'le EGL çakışması riski kalmaz.
+#[cfg(target_os = "linux")]
+pub fn gl_fallback_instance() -> &'static wgpu::Instance {
+    static GL_FALLBACK: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
+    GL_FALLBACK.get_or_init(|| {
+        crate::log!("[GPU] UI process'te EGL init ediliyor (GL fallback) — yalnızca Vulkan'sız sistem yolu");
+        create_instance_safe(wgpu::Backends::GL)
+    })
+}
+
+/// Köprü ve renderer'ın kullanacağı instance: Vulkan adapter varsa Vulkan-only
+/// shared instance (EGL'ye hiç dokunulmaz); 0 Vulkan adapter'da GL fallback
+/// denenir; o da boşsa shared döner (mevcut "adapter yok" tanılama modalı
+/// akışı devreye girer). Karar oturum başına bir kez verilir.
+#[cfg(target_os = "linux")]
+pub fn active_instance() -> &'static wgpu::Instance {
+    static ACTIVE: std::sync::OnceLock<&'static wgpu::Instance> = std::sync::OnceLock::new();
+    ACTIVE.get_or_init(|| {
+        let vk = shared_instance();
+        if !vk.enumerate_adapters(wgpu::Backends::VULKAN).is_empty() {
+            crate::log!("[GPU] active_instance: Vulkan adapter mevcut — Vulkan-only instance (EGL'ye dokunulmadı)");
+            return vk;
         }
+        let gl = gl_fallback_instance();
+        if !gl.enumerate_adapters(wgpu::Backends::GL).is_empty() {
+            crate::log!("[GPU] active_instance: 0 Vulkan adapter — GL fallback instance kullanılıyor");
+            return gl;
+        }
+        crate::log!("[GPU] active_instance: hiçbir backend'de adapter yok — boş Vulkan instance (tanılama modalı akışı)");
+        vk
     })
 }
 
@@ -364,17 +395,16 @@ pub fn shared_instance() -> &'static wgpu::Instance {
 async fn try_get_wgpu_adapter_info(
     backend: &GpuBackend,
 ) -> (Option<String>, Option<webgpu::checker::WebGpuAdapterInfo>, WebGpuStatus) {
-    let wgpu_backends = match backend {
-        GpuBackend::Vulkan => wgpu::Backends::VULKAN,
-        GpuBackend::OpenGL => wgpu::Backends::GL,
-        GpuBackend::Metal => wgpu::Backends::METAL,
-        // wgpu 22'de ayrı bir DX11 backend'i yok (yalnızca DX12). Bu fonksiyon
-        // zaten Linux'a özgüdür; D3D kolları pratikte hiç seçilmez.
-        GpuBackend::Direct3D12 | GpuBackend::Direct3D11 => wgpu::Backends::DX12,
-        _ => wgpu::Backends::all(),
+    // Per-call create_instance_safe KALKTI: eski `_ => Backends::all()` kolu
+    // GL'yi de içerdiğinden UI process'te üçüncü bir EGL init noktasıydı
+    // (webkit compositing'ini öldürüyordu). Artık paylaşılan kapılar kullanılır.
+    let instance = match backend {
+        GpuBackend::Vulkan => shared_instance(),
+        // Bu fonksiyon Linux'a özgü; OpenGL dışındaki kollar (Metal/DX) pratikte
+        // hiç seçilmez — hepsi active_instance kararına düşer.
+        GpuBackend::OpenGL => gl_fallback_instance(),
+        _ => active_instance(),
     };
-
-    let instance = create_instance_safe(wgpu_backends);
 
     let adapter_opt = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
