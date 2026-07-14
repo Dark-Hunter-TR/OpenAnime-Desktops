@@ -103,8 +103,9 @@ async fn try_vulkan_backend() -> bool {
         return false;
     }
 
-    // wgpu Vulkan adapter dene (panik-korumalı)
-    let instance = crate::gpu::create_instance_safe(wgpu::Backends::VULKAN);
+    // wgpu Vulkan adapter dene (paylaşılan Vulkan-only instance; per-call
+    // instance yaratımı gereksiz sürücü taramasıydı)
+    let instance = crate::gpu::shared_instance();
 
     let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN);
     if !adapters.is_empty() {
@@ -124,9 +125,11 @@ async fn try_vulkan_backend() -> bool {
 
 #[cfg(target_os = "linux")]
 async fn try_opengl_backend() -> bool {
-    // Panik-korumalı: bozuk EGL'de GL init çöker; helper boş sete düşer ve
-    // request_adapter None döndürerek bu fonksiyonun false dönmesini sağlar.
-    let instance = crate::gpu::create_instance_safe(wgpu::Backends::GL);
+    // GL/EGL init'in tek kapısı: gl_fallback_instance (panik-korumalı).
+    // select_linux_backend sırası gereği buraya yalnızca Vulkan başarısızsa
+    // ulaşılır — UI process'te EGL init riski o nişe sıkışır (o sistemlerde
+    // webkit compositing'i configure_linux_gpu_env tarafından zaten kapatılır).
+    let instance = crate::gpu::gl_fallback_instance();
 
     instance
         .request_adapter(&wgpu::RequestAdapterOptions {

@@ -123,8 +123,10 @@ pub mod inner {
     fn bridge() -> &'static Mutex<BridgeState> {
         BRIDGE.get_or_init(|| {
             Mutex::new(BridgeState {
-                // Uygulama geneli paylaşılan instance (panik-korumalı, tek sefer).
-                instance: crate::gpu::shared_instance(),
+                // Vulkan varsa Vulkan-only, yoksa GL fallback (panik-korumalı,
+                // tek sefer). GL/EGL'nin UI process'te gereksiz init edilip
+                // webkit compositing'ini öldürmemesi için active_instance şart.
+                instance: crate::gpu::active_instance(),
                 adapter: None,
                 device: None,
                 queue: None,
@@ -345,6 +347,8 @@ pub mod inner {
     async fn gpu_request_adapter_uncached(app: tauri::AppHandle, main_window: WebviewWindow) -> Result<AdapterInfo, String> {
         let mut all_adapters = {
             let state = lock();
+            // Maske geniş kalabilir: enumerate yalnızca instance'ın init ETTİĞİ
+            // backend'ler ∩ maske üzerinde döner (Vulkan-only instance'ta GL no-op).
             state.instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::GL)
         };
 
@@ -1717,8 +1721,37 @@ pub mod inner {
         )
     }
 
+    /// Overlay konumlama/boyutlandırmayı ANA THREAD'e taşır (fire-and-forget).
+    /// scale_factor()/inner_position() getter'ları off-main çağrıldığında
+    /// rx.recv() ile çağıran thread'i bloklar; ana loop meşgulken (webkit
+    /// paint/GPU çekişmesi) tokio komut zinciri yığılıp köprüyü "donmuş"
+    /// gösteriyordu. HESAP dahil tüm pencere işleri ana thread closure'ında
+    /// yapılır — main thread'de getter'lar inline işlenir, deadlock yok.
+    fn position_overlay_on_main_thread(
+        app: &tauri::AppHandle,
+        overlay: Window,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        reassert_click_through: bool,
+    ) {
+        let app_for_task = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(main) = app_for_task.get_webview_window("main") else { return };
+            let _ = overlay.set_position(tauri::Position::Physical(viewport_to_screen(&main, x, y)));
+            let _ = overlay.set_size(tauri::Size::Physical(viewport_size_physical(&main, width, height)));
+            if reassert_click_through {
+                // Boyut/pozisyon değişimi giriş bölgesini sıfırlayabilir —
+                // tıklama geçirgenliğini her senkronda yeniden garanti et.
+                let _ = overlay.set_ignore_cursor_events(true);
+            }
+        });
+    }
+
     /// Ana pencere taşındığında tüm canvas overlay'lerini kayıtlı viewport
-    /// bounds'larıyla yeniden konumlandırır (lib.rs Moved event'inden çağrılır).
+    /// bounds'larıyla yeniden konumlandırır (lib.rs Moved event'inden çağrılır —
+    /// YALNIZCA ana thread'den: getter'lar main thread'de inline işlenir).
     pub fn reposition_overlays(app: &tauri::AppHandle) {
         let Some(main) = app.get_webview_window("main") else { return };
         let items: Vec<(Window, (i32, i32, u32, u32))> = {
@@ -1777,6 +1810,11 @@ pub mod inner {
                 .always_on_top(true)
                 .focused(false)
                 .skip_taskbar(true)
+                // Ekran dışı başlangıç: pencere build() anında görünür yaratılmak
+                // zorunda (gizli pencere realize olmaz → XID çıkmaz → surface
+                // kurulamaz); WM-default konumda içerik üstünde siyah kutu
+                // flaşlamasın diye gerçek konumlama gelene dek ekran dışında durur.
+                .position(-10000.0, -10000.0)
                 .inner_size(width.max(1) as f64, height.max(1) as f64);
             // Ana pencereye transient bağla (X11'de z-order/minimize uyumu).
             // parent() self'i tüketir; hata pratikte yalnızca main penceresi
@@ -1831,8 +1869,8 @@ pub mod inner {
         }
 
         // Ekran koordinatına dönüştürerek konumlandır (viewport + ana pencere).
-        let _ = overlay.set_position(tauri::Position::Physical(viewport_to_screen(&main_window, x, y)));
-        let _ = overlay.set_size(tauri::Size::Physical(viewport_size_physical(&main_window, width, height)));
+        // Getter'lar bloklamasın diye hesap dahil ana thread'de koşar.
+        position_overlay_on_main_thread(&app, overlay.clone(), x, y, width, height, false);
 
         let ctx_id = next_id();
         lock().registries.canvas_contexts.insert(
@@ -1995,6 +2033,17 @@ pub mod inner {
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
         let output = ctx.pending_surface_texture.take();
         let view_id = ctx.current_view_id.take();
+        if output.is_none() {
+            // Kopuk zincir tanısı: configure/getCurrentTexture başarısızken
+            // present her karede sessizce no-op kalıyordu — oturumda 1 kez logla.
+            static NOOP_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !NOOP_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                println!(
+                    "[WebGPU Bridge] present çağrıldı ama pending_surface_texture yok (ctx={}, presents={}) — configure/getCurrentTexture→present zinciri kopuk",
+                    context_id, ctx.presents
+                );
+            }
+        }
         if output.is_some() {
             ctx.presents += 1;
             if ctx.presents == 1 {
@@ -2034,16 +2083,12 @@ pub mod inner {
 
         let mut state = lock();
         let ctx = state.registries.canvas_contexts.get_mut(&context_id).ok_or("Unknown canvas context id")?;
-        // Viewport → EKRAN dönüşümü (ana pencere konumu + ölçek dahil).
-        if let Some(main) = ctx.overlay.app_handle().get_webview_window("main") {
-            let _ = ctx.overlay.set_position(tauri::Position::Physical(viewport_to_screen(&main, x, y)));
-            let _ = ctx.overlay.set_size(tauri::Size::Physical(viewport_size_physical(&main, width, height)));
-        }
+        // Viewport → EKRAN dönüşümü (ana pencere konumu + ölçek dahil) ve tüm
+        // pencere işleri ana thread'de — getter'lar komut thread'ini bloklamaz.
+        let app = ctx.overlay.app_handle().clone();
+        position_overlay_on_main_thread(&app, ctx.overlay.clone(), x, y, width, height, true);
         ctx.viewport = (x, y, width, height);
-        // Boyut/pozisyon değişimi giriş bölgesini sıfırlayabilir — tıklama
-        // geçirgenliğini her senkronda yeniden garanti et.
-        let _ = ctx.overlay.set_ignore_cursor_events(true);
-        
+
         ctx.width = width;
         ctx.height = height;
 
