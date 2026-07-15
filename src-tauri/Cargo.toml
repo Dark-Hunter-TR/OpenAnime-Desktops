@@ -13,11 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# "unstable": webview'sız düz pencere (tauri::window::WindowBuilder) için —
-# GPU overlay pencereleri yalnızca wgpu surface handle'ı ister; her overlay'in
-# tam bir WebKit webview başlatması hem ~100 MB israftı hem de webkit 2.44+
-# renderer bug'larına gereksiz maruziyetti.
-tauri = { version = "2", features = ["native-tls-vendored", "unstable"] }
+tauri = { version = "2", features = ["native-tls-vendored"] }
 tauri-plugin-opener = "2"
 tauri-plugin-os = "2"
 tauri-plugin-updater = "2"
@@ -38,20 +34,8 @@ base64 = "0.22"
 webview2-com = "0.38"
 windows-core = "0.61"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-wgpu = "22.1.0"
-gpu-allocator = "=0.28.0"
-gstreamer = "0.22"
-gstreamer-app = "0.22"
-gstreamer-video = "0.22"
-raw-window-handle = "0.6.2"
-# GPU probe penceresi: GTK'nın Xlib bağlantısı thread-safe olmadığından probe,
-# dlopen'la açılan AYRI bir X bağlantısı üzerinde koşar (link-time bağımlılık yok).
-x11-dl = "2.21"
-
-# panic = "abort" KULLANILMAZ: wgpu doğrulama hataları ve GStreamer panic'leri
-# tüm uygulamayı öldürmesin diye unwinding açık kalır. Async Tauri komutundaki
-# bir panic yalnızca o task'ı düşürür; uygulama yaşamaya devam eder.
+# panic = "abort" KULLANILMAZ: async Tauri komutundaki bir panic tüm uygulamayı
+# öldürmesin diye unwinding açık kalır — panic yalnızca o task'ı düşürür.
 [profile.release]
 opt-level = 3
 lto = "thin"

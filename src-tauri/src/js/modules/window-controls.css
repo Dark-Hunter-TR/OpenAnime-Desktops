@@ -1,5 +1,5 @@
 /* === OpenAnime — Window Controls (Fluent System Icons) === */
-/* Platform classes: .platform-windows | .platform-macos | .platform-linux */
+/* Platform classes: .platform-windows | .platform-macos */
 
 /* ── Design tokens ── */
 .tauri-window-controls {
@@ -172,27 +172,6 @@
 }
 .tauri-window-controls.platform-macos .tauri-window-control-btn.maximize:hover {
   background-color: #1db934 !important;
-}
-
-/* ═══════════════════════════════════════════════════
-   Platform: Linux (GTK/KDE — neutral monochrome)
-   ═══════════════════════════════════════════════════ */
-.tauri-window-controls.platform-linux {
-  --wc-btn-width: 38px;
-  --wc-btn-height: 34px;
-  --wc-icon-size: 16px;
-  --wc-border-radius: 8px;
-  --wc-btn-bg-hover: rgba(255, 255, 255, 0.12);
-  right: 4px !important;
-  left: auto !important;
-  top: 4px !important;
-  gap: 2px !important;
-  flex-direction: row !important;
-  align-items: center !important;
-}
-
-.tauri-window-controls.platform-linux .tauri-window-control-btn {
-  border-radius: var(--wc-border-radius) !important;
 }
 
 /* ═══════════════════════════════════════════════════

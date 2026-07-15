@@ -10,7 +10,6 @@ Tauri v2 · Rust · Svelte v5 · WebGPU
 
 ![Windows](https://img.shields.io/badge/Windows-Supported-0078D4?style=for-the-badge&logo=windows&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-Supported-000000?style=for-the-badge&logo=apple&logoColor=white)
-![Linux](https://img.shields.io/badge/Linux-Deneysel-FCC624?style=for-the-badge&logo=linux&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 </div>
@@ -21,7 +20,7 @@ Tauri v2 · Rust · Svelte v5 · WebGPU
 
 Bu depo, **[OpenAnime](https://openani.me)** platformu için geliştirilmiş, resmî olmayan ama sitenin kurucularının bilgisi ve onayı dahilinde hazırlanmış bir masaüstü istemcisidir.
 
-OpenAnime'ın resmî masaüstü uygulaması yalnızca **Windows** için sunulmaktadır ([resmî indirme sayfası](https://ors.openani.me/tr)). Bu proje ise aynı web deneyimini; **Tauri v2 (Rust)** çekirdeği üzerine inşa edilmiş, donanım hızlandırmalı bir kabuk (shell) içine alarak **Windows** ve **macOS**'ta native bir uygulama haline getirir, **Linux** desteği ise aktif geliştirme aşamasındadır.
+OpenAnime'ın resmî masaüstü uygulaması yalnızca **Windows** için sunulmaktadır ([resmî indirme sayfası](https://ors.openani.me/tr)). Bu proje ise aynı web deneyimini; **Tauri v2 (Rust)** çekirdeği üzerine inşa edilmiş, donanım hızlandırmalı bir kabuk (shell) içine alarak **Windows** ve **macOS**'ta native bir uygulama haline getirir.
 
 Web, resmî Windows uygulaması veya bu istemci — içerik ve işlevsellik olarak aralarında fark yoktur. Bu proje; donanım anahtarlama (GPU switching), çerçevesiz pencere yönetimi, özel klavye kısayolları ve Discord Zengin Varlık (Rich Presence) entegrasyonu gibi ekstra bir katman sunar.
 
@@ -153,133 +152,12 @@ macOS 12+ — Apple Silicon (M1/M2/M3/M4) ve Intel x86_64
 
 ---
 
-### 🐧 Linux
-
-```
-Ubuntu 24.04+ / Debian 12+ / Fedora 40+ / Arch Linux (CachyOS, Manjaro, EndeavourOS) — x86_64
-```
-
-#### ⚡ Tek Komutla Kurulum (Önerilen)
-
-Dağıtımınızı otomatik algılar, uygun yöntemle kurar:
-
-```bash
-bash <(curl -s https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/install.sh)
-```
-
-| Dağıtım | Yöntem | İndirme |
-|---------|--------|---------|
-| **CachyOS / Arch / Manjaro / EndeavourOS** | `install.sh` ile release `.deb` tabanlı binary kurulum | **~15 MB** |
-| **Ubuntu / Debian / Mint / Pop!_OS** | `.deb` indir + `dpkg -i` | **~15 MB** |
-| **Fedora / RHEL** | `.rpm` indir + `dnf install` | **~15 MB** |
-| **Diğer (NixOS, Void, Solus, Gentoo)** | Release `.deb` içinden binary çıkar, yalnızca gerekirse AppImage | **~15–120 MB** |
-
-Kullanıcı kurulumu (`--user`) için: `bash install.sh --user`
-
----
-
-#### 🏃 AppImage (Son Çare — Taşınabilir)
-
-```bash
-wget https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/OpenAnime_*.AppImage
-chmod +x OpenAnime_*.AppImage
-./OpenAnime_*.AppImage
-```
-
-| Mimariler | Durum |
-|-----------|-------|
-| `x86_64` | ✅ Evet |
-| `aarch64` (ARM64) | ✅ Evet |
-
-> **Not:** AppImage tüm bağımlılıkları tek dosyada taşır; bu yüzden en büyük seçenektir ve yalnızca diğer Linux kurulum yolları başarısızsa önerilir.
-
----
-
-#### 🗿 CachyOS / Arch Linux (Release `.deb` + launcher alias)
-
-AUR'a gitmez; günlük kullanım için önerilen yol aşağıdaki tek komutlu kurulumdur. Bu yol GitHub Releases'deki `.deb` paketini indirip açar ve `openanime-desktops` komutunu kurar:
-
-```bash
-bash <(curl -s https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/install.sh)
-```
-
-Manuel paketleme yolunu tercih ederseniz, [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD) GitHub Releases'deki `.deb` paketini Arch bağımlılıklarıyla birlikte yerel bir pakete çevirir. `pacman -R openanime-desktops` ile kaldırılır.
-
-| Mimariler | Durum |
-|-----------|-------|
-| `x86_64` | ✅ Evet |
-| `aarch64` | 🔜 Planlanıyor |
-
----
-
-#### 📦 Debian / Ubuntu (.deb)
-
-```bash
-wget https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/openanime_*.deb
-sudo dpkg -i openanime_*.deb
-sudo apt-get install -f
-```
-
-Bağımlılıklar: `libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libappindicator3-1`, `gstreamer1.0-*`
-
-> ⚠️ **Önemli:** Uygulama **webkit2gtk-4.1 (GTK3)** gerektirir. `webkitgtk-6.0` (GTK4) tek başına
-> **yeterli değildir** — Tauri v2 yalnızca webkit2gtk-4.1 ile çalışır. İki paket sorunsuz şekilde
-> yan yana kurulabilir. Arch tabanlı dağıtımlarda: `sudo pacman -S webkit2gtk-4.1 gtk3`
-
----
-
-#### 💿 Fedora / RHEL (.rpm)
-
-```bash
-sudo dnf install https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/openanime_*.rpm
-```
-
----
-
-#### 🧊 Flatpak (Deneysel — Altyapı Kuruluyor)
-
-```bash
-# Kendi Flatpak repomuzdan (hazır değil, çalışmaz)
-# flatpak remote-add --if-not-exists openanime https://flatpak.darkhunter.dev/openanime.flatpakrepo
-# flatpak install openanime com.darkhunter.openanime-desktops
-```
-
-> Flatpak altyapısı kurulum aşamasındadır. Şimdilik `install.sh` veya release tabanlı Linux kurulumu kullanın.
-
----
-
-#### 💡 Hızlı Seçim
-
-| İhtiyacınız | Şunu Kullanın |
-|-------------|---------------|
-| "Tek komutla kur" | **`install.sh`** (otomatik algılama) |
-| "Hiçbir şey kurmak istemiyorum" | **AppImage** (çalıştır ve kullan) |
-| CachyOS / Arch kullanıyorum | **`install.sh`** (otomatik algılama) |
-| Debian / Ubuntu | **`.deb`** (sistem paket yöneticisi) |
-| Fedora / RHEL | **`.rpm`** (sistem paket yöneticisi) |
-| Sandbox güvenliği | **Flatpak** *(hazır değil)* |
-| ARM64 (Raspberry Pi) | **AppImage** (aarch64) veya **`.deb`** (arm64) |
-
----
-
 ## 🖥️ Platform Desteği
 
 | Platform | Durum | Paketler | Notlar |
 | --- | --- | --- | --- |
 | 🪟 **Windows** | ✅ Tam destek | `.exe` (NSIS) | GitHub Actions ile otomatik derlenir |
 | 🍎 **macOS** | ✅ Tam destek | `.dmg` | Apple Silicon + Intel, evrensel binary |
-| 🐧 **Linux** | 🧪 Aktif geliştirme | `install.sh`, `.deb`, `.rpm`, `AppImage`, `Arch PKGBUILD` | Aşağıdaki "Linux Desteği" bölümüne bakınız |
-
-### 🐧 Linux Desteği (Deneysel)
-
-Linux desteği, Tauri'nin bu platformda **webkit2gtk** kullanmasından kaynaklanan mimari kısıtlar nedeniyle ayrı bir mühendislik çabası gerektiriyor:
-
-- **WebGPU kısıtı:** webkit2gtk henüz production-ready bir WebGPU implementasyonu sunmadığından, Windows/macOS'taki WebGPU hızlandırmalı render yolu Linux'ta doğrudan kullanılamıyor.
-- **Yayın stratejisi:** Bu nedenle Linux sürümünde video akışı webview içinde HLS.js/dash.js ile karşılanıyor; yerel dosya oynatma (local file playback) şimdilik Linux'ta devre dışı bırakıldı.
-- **Yol haritası:** Uzun vadede webview'dan bağımsız, **wgpu (Vulkan) + GStreamer** tabanlı native bir render/oynatma hattı planlanıyor.
-- **Paketleme:** `AppImage`, `.deb`, `.rpm` ve repo içindeki **Arch PKGBUILD** mevcuttur; **Flatpak** altyapısı ise henüz hazır değildir.
-
-> Linux tarafında katkı/test isteyenler için Issues sekmesi açıktır; webkit2gtk kaynaklı davranış farkları (ör. splash ekranı, tam ekran yönetimi) bilinen konular arasındadır.
 
 ---
 
@@ -304,7 +182,6 @@ Linux desteği, Tauri'nin bu platformda **webkit2gtk** kullanmasından kaynaklan
 
 - [Rust](https://www.rust-lang.org/tools/install) (Tauri için)
 - [Bun](https://bun.sh/) *(önerilen)* veya [Node.js/NPM](https://nodejs.org/)
-- **Linux'ta ek olarak:** `webkit2gtk`, `libgtk-3-dev` ve dağıtımınıza uygun Tauri sistem bağımlılıkları ([Tauri Linux önkoşulları](https://v2.tauri.app/start/prerequisites/))
 
 ### 2. Depoyu Klonlayın ve Çalıştırın
 
@@ -333,13 +210,12 @@ bun run tauri build    # veya: npm run tauri build
 | --- | --- | --- |
 | Windows | — | `.exe` (NSIS) |
 | macOS | Xcode Command Line Tools yüklü bir Mac | `.dmg` |
-| Linux (x86_64, aarch64) | `webkit2gtk` + build araçları | `AppImage`, `.deb`, `.rpm` |
 
 ---
 
 ## ☁️ CI/CD — Otomatik Bulut Derleme
 
-Yerel olarak her platforma erişiminiz yoksa, `.github/workflows/` altında tanımlı GitHub Actions iş akışlarını kullanabilirsiniz. Bir sürüm etiketi (tag) push edildiğinde, GitHub'ın bulut runner'ları (Windows, macOS, Linux) paketleri sizin yerinize otomatik derler:
+Yerel olarak her platforma erişiminiz yoksa, `.github/workflows/` altında tanımlı GitHub Actions iş akışlarını kullanabilirsiniz. Bir sürüm etiketi (tag) push edildiğinde, GitHub'ın bulut runner'ları (Windows, macOS) paketleri sizin yerinize otomatik derler:
 
 ```bash
 git tag v1.0.2
@@ -353,12 +229,6 @@ Derleme tamamlandığında kurulum dosyaları, deponun **Releases** sekmesinde o
 ## 🗺️ Yol Haritası
 
 - [ ] **Tema Sistemi:** GitHub reposu tabanlı, topluluk temalarının keşfedilip yüklenebildiği bir Tema Sayfası (yıldız/aylık en çok indirilen/en çok sevilen sıralamalarıyla)
-- [x] Linux için native `wgpu` (Vulkan) + GStreamer render/oynatma hattı
-- [x] `.deb`/`.rpm`/AppImage resmî paket dağıtımı (GitHub Actions CI)
-- [x] Linux tek komut kurulum scripti (`install.sh`)
-- [x] Arch tabanlı dağıtımlar için binary PKGBUILD (kaynaktan değil)
-- [ ] Kendi Flatpak repo'muzun CI entegrasyonu
-- [ ] iGPU/dGPU otomatik anahtarlamanın Linux karşılığı
 - [ ] Genel kararlılık ve hata düzeltmeleri (özellik eklemelerinden önceliklendirilir)
 
 Güncel görevler ve bilinen sorunlar için [Issues](https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/issues) sekmesine göz atabilirsiniz.

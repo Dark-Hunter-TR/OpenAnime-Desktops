@@ -21,20 +21,9 @@ mod dpi_proxy;
 #[allow(non_snake_case)]
 mod discordRPC;
 
-mod gpu_detector;
 mod gpu;
 mod updater;
 mod local_video_server;
-
-#[cfg(target_os = "linux")]
-mod gst_detector;
-#[cfg(target_os = "linux")]
-mod video_decode;
-#[cfg(target_os = "linux")]
-pub mod renderer;
-#[cfg(target_os = "linux")]
-mod native_render;
-mod webgpu_bridge;
 
 #[cfg(target_os = "windows")]
 #[link(name = "shell32")]
@@ -136,25 +125,19 @@ mod gpu_switch_macos {
 // Sıralama: polyfill → network → webgpu → ui → discord → updater → video → tema
 // Her blok yorumla ayrılmıştır.
 // ═══════════════════════════════════════════════════════════════════════════════
-/// COMMON_INIT_SCRIPT'in başına çalışma zamanı bayraklarını ekler.
-/// __OA_OVERLAY_OK__: overlay pencereleri konumlandırılabiliyor mu
-/// (Wayland'da false → shim navigator.gpu'yu hiç kurmaz, site HTML5'e döner).
+/// Webview'lara enjekte edilen ortak init script'i döndürür.
+/// (Linux'a özgü overlay/WebGPU köprüsü kaldırıldı; Windows/macOS webview'ı
+/// WebGPU'yu native sağladığından ek bayrağa gerek yok.)
 fn build_init_script() -> String {
-    #[cfg(target_os = "linux")]
-    let overlay_flag = overlays_supported();
-    #[cfg(not(target_os = "linux"))]
-    let overlay_flag = true;
-    format!("window.__OA_OVERLAY_OK__={};\n{}", overlay_flag, COMMON_INIT_SCRIPT)
+    COMMON_INIT_SCRIPT.to_string()
 }
 
 const COMMON_INIT_SCRIPT: &str = concat!(
     "(function () {\nif (window.self !== window.top) {\n  let isBuilder = false;\n  try {\n    isBuilder = window.location.search.includes(\"theme_builder=true\") || sessionStorage.getItem(\"theme_builder_active\") === \"true\";\n  } catch (e) {}\n  if (!isBuilder) return;\n}\n",
 
     // ──────────────────────────────────────────────
-    // BLOK 1: POLYFILL'LER & TAURI BRIDGE
+    // BLOK 1: TAURI BRIDGE
     // ──────────────────────────────────────────────
-    include_str!("js/modules/linux-polyfills.js"),
-    "\n",
     include_str!("js/modules/tauri-bridge.js"),
     "\n",
 
@@ -169,17 +152,6 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "{\n",
     include_str!("js/modules/image-cache.js"),
     "\n}\n",
-
-    // ──────────────────────────────────────────────
-    // BLOK 3: WEBGPU (SADECE LİNUX)
-    // ──────────────────────────────────────────────
-    include_str!("js/modules/webgpu-native-shim.js"),
-    "\n",
-    // webgpu-patcher.js kaldırıldı: tek işlevi (conv2d_tf layout'unda
-    // texture→externalTexture dönüşümü) shim'in kendi bind group eşlemesinde
-    // zaten aynı sonuca ("texture" kind) çıkıyordu — işlevsiz mükerrerlikti.
-    include_str!("js/modules/webgpu-bridge.js"),
-    "\n",
 
     // ──────────────────────────────────────────────
     // BLOK 4: PENCERE & ARAYÜZ KONTROLLERİ
@@ -307,15 +279,11 @@ fn platform_user_agent() -> &'static str {
     {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
-    #[cfg(target_os = "linux")]
-    {
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
-    }
     #[cfg(target_os = "macos")]
     {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
@@ -534,14 +502,7 @@ async fn go_offline(window: tauri::WebviewWindow) -> Result<(), String> {
     let url = if cfg!(debug_assertions) {
         "http://localhost:1420/".to_string()
     } else {
-        #[cfg(target_os = "linux")]
-        {
-            "http://tauri.localhost/".to_string()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            "tauri://localhost/".to_string()
-        }
+        "tauri://localhost/".to_string()
     };
     println!("[Tauri] Navigating offline to: {}", url);
     window.navigate(url.parse().map_err(|e| format!("{}", e))?)
@@ -641,79 +602,10 @@ async fn apply_theme_css(app: tauri::AppHandle, theme_id: String, css: String) -
     Ok(())
 }
 
-#[tauri::command]
-#[allow(unused_variables)]
-async fn webgpu_state_changed(window: tauri::WebviewWindow, active: bool, url: String, paused: Option<bool>) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        use tauri::Emitter;
-        if active {
-            // Check if GStreamer and all required elements are installed on the system
-            let report = gst_detector::detect_gstreamer();
-            if !report.gstreamer_installed {
-                let err_msg = format!(
-                    "GStreamer components missing: {:?}",
-                    report.missing_elements
-                );
-                eprintln!("[WebGPU Bridge] start_player aborted: {}", err_msg);
-                let _ = window.emit("openanime://gst-fallback", err_msg.clone());
-                return Err(err_msg);
-            }
-
-            let start_paused = paused.unwrap_or(false);
-            if let Err(e) = native_render::inner::start_player(&url, window.clone(), start_paused).await {
-                eprintln!("[WebGPU Bridge] start_player failed: {}", e);
-                // Trigger fallback to HTML5 immediately
-                let _ = window.emit("openanime://gst-fallback", e.clone());
-                return Err(e);
-            }
-        } else {
-            native_render::inner::stop_player();
-        }
-    }
-    Ok(())
-}
-
-#[tauri::command]
-#[allow(unused_variables)]
-async fn webgpu_sync_bounds(window: tauri::WebviewWindow, x: i32, y: i32, width: u32, height: u32) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        native_render::inner::sync_bounds(x, y, width, height, window);
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn gst_control_play() -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        native_render::inner::control_play()?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn gst_control_pause() -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        native_render::inner::control_pause()?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-#[allow(unused_variables)]
-async fn gst_control_seek(time: f64) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        native_render::inner::control_seek(time)?;
-    }
-    Ok(())
-}
-
-// (get_gpu_report / get_gst_report kaldırıldı — çağıran yoktu; gpu_detector ve
-// gst_detector modülleri diğer kullanıcıları üzerinden yaşamaya devam ediyor.)
+// (Linux native GStreamer/WebGPU overlay komutları — webgpu_state_changed,
+// webgpu_sync_bounds, gst_control_play/pause/seek, install_missing_gstreamer —
+// Linux desteğiyle birlikte kaldırıldı. Windows/macOS webview'ı video ve WebGPU'yu
+// native sağlar; bu köprüye ihtiyaç yoktur.)
 
 /// JS hata köprüsü: webview içindeki console.error/warn, window.onerror ve
 /// unhandledrejection mesajlarını terminal/session loguna akıtır — sahadaki
@@ -732,47 +624,6 @@ fn oa_js_log(level: String, msg: String) {
         }
     }
 }
-
-#[tauri::command]
-async fn install_missing_gstreamer() -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        let report = gst_detector::detect_gstreamer();
-        if report.gstreamer_installed {
-            return Ok(());
-        }
-
-        let cmd_str = report.recommended_command;
-        if cmd_str.is_empty() {
-            return Err("No recommended command found for this distribution.".to_string());
-        }
-
-        // Convert the command to run with pkexec so the user gets a graphical password dialog.
-        // E.g., "sudo apt update && sudo apt install -y ..." -> "pkexec sh -c 'apt update && apt install -y ...'"
-        let raw_cmd = cmd_str.replace("sudo ", "");
-        println!("[Tauri GStreamer Installer] Executing: pkexec sh -c \"{}\"", raw_cmd);
-
-        let status = std::process::Command::new("pkexec")
-            .arg("sh")
-            .arg("-c")
-            .arg(&raw_cmd)
-            .status()
-            .map_err(|e| format!("Failed to launch pkexec: {}", e))?;
-
-        if status.success() {
-            println!("[Tauri GStreamer Installer] GStreamer plugins installed successfully.");
-            Ok(())
-        } else {
-            Err("Installation failed or cancelled.".to_string())
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        Ok(())
-    }
-}
-
-
 
 #[cfg(target_os = "windows")]
 fn setup_windows_gpu_preference() {
@@ -924,30 +775,12 @@ fn dirs_cache_path() -> std::path::PathBuf {
     base.unwrap_or_else(std::env::temp_dir).join("openanime")
 }
 
-/// Uygulama hiç açılamadan ölürse kullanıcıya ne yapacağını söyleyen native
-/// diyalog. Linux'ta en sık neden eksik webview/GTK yığınıdır; dağıtıma göre
-/// kurulum komutu öneririz.
+/// Uygulama hiç açılamadan ölürse kullanıcıya ne yapacağını söyleyen native diyalog.
 fn show_fatal_startup_error(err: &dyn std::fmt::Display) {
-    let mut message = format!(
+    let message = format!(
         "OpenAnime başlatılamadı / OpenAnime failed to start:\n\n{}\n",
         err
     );
-
-    #[cfg(target_os = "linux")]
-    {
-        let install_hint = match gpu::linux::detector::detect_pkg_manager_by_binary() {
-            "pacman" => "sudo pacman -S webkit2gtk-4.1 gtk3",
-            "apt" => "sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0",
-            "dnf" => "sudo dnf install webkit2gtk4.1 gtk3",
-            "zypper" => "sudo zypper install libwebkit2gtk-4_1-0 gtk3",
-            _ => "webkit2gtk-4.1 ve gtk3 paketlerini kurun",
-        };
-        message.push_str(&format!(
-            "\nBu uygulama webkit2gtk-4.1 (GTK3) gerektirir. webkitgtk-6.0 tek başına \
-             YETERLİ DEĞİLDİR — iki paket yan yana kurulabilir.\n\nKurulum / Install:\n  {}\n",
-            install_hint
-        ));
-    }
 
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
@@ -956,68 +789,8 @@ fn show_fatal_startup_error(err: &dyn std::fmt::Display) {
         .show();
 }
 
-/// Linux'ta pencere overlay'lerinin (native player + WebGPU canvas) çalışıp
-/// çalışamayacağı. Wayland'da toplevel pencereler konumlandırılamaz
-/// (gtk_window_move no-op) — overlay mimarisi yalnızca X11/XWayland'da işler.
-#[cfg(target_os = "linux")]
-static OVERLAYS_SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-
-#[cfg(target_os = "linux")]
-pub fn overlays_supported() -> bool {
-    *OVERLAYS_SUPPORTED.get().unwrap_or(&false)
-}
-
-/// Wayland oturumunda GTK'yı X11 backend'ine (XWayland) zorlar.
-/// GTK init'ten ÖNCE çağrılmalıdır. Gerekçe: tao/GTK'da set_position →
-/// gtk_window_move, Wayland'da belgeli no-op'tur; gst_overlay ve
-/// gpu_canvas overlay pencereleri videonun üzerine hizalanamaz (sahada
-/// "siyah dikdörtgen + bozuk player" olarak görüldü). XWayland altında
-/// konumlandırma X11 semantiğiyle çalışır.
-#[cfg(target_os = "linux")]
-fn configure_display_backend() {
-    let native_wayland_opt_in = std::env::var("OPENANIME_NATIVE_WAYLAND")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let is_wayland_session = std::env::var_os("WAYLAND_DISPLAY").is_some();
-    let has_x11 = std::env::var_os("DISPLAY").is_some();
-    let user_forced_backend = std::env::var_os("GDK_BACKEND").is_some();
-
-    // Karar HER dalda loglanır — sahada hangi yolun seçildiği log'dan
-    // birebir okunabilmeli (bazı AppImage GTK hook'ları GDK_BACKEND'i
-    // kendileri export eder; o durum da görünür olmalı).
-    let overlays_ok = if !is_wayland_session {
-        println!("[Display] X11 oturumu — backend değişikliği gerekmedi");
-        true
-    } else if user_forced_backend {
-        let value = std::env::var("GDK_BACKEND").unwrap_or_default();
-        let ok = value.contains("x11");
-        println!(
-            "[Display] GDK_BACKEND önceden setli (\"{}\") — dokunulmadı{}",
-            value,
-            if ok { "" } else { " (x11 değil: overlay'ler devre dışı)" }
-        );
-        ok
-    } else if native_wayland_opt_in {
-        println!("[Display] OPENANIME_NATIVE_WAYLAND=1 — Wayland'da kalınıyor, overlay'ler devre dışı");
-        false
-    } else if has_x11 {
-        std::env::set_var("GDK_BACKEND", "x11");
-        println!("[Display] Wayland oturumu tespit edildi — GDK_BACKEND=x11 zorlandı (XWayland). Overlay konumlandırma aktif.");
-        true
-    } else {
-        println!("[Display] Saf Wayland (XWayland yok) — overlay'ler devre dışı, HTML5 player modu");
-        false
-    };
-
-    println!("[Display] karar: overlay={}", overlays_ok);
-    let _ = OVERLAYS_SUPPORTED.set(overlays_ok);
-}
-
 pub fn run() {
     install_crash_logger();
-
-    #[cfg(target_os = "linux")]
-    configure_display_backend();
 
     #[cfg(target_os = "windows")]
     {
@@ -1041,40 +814,6 @@ pub fn run() {
     } else {
         log!("[LocalVideo] ❌ Server başlatılamadı!");
     }
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var("APPIMAGE").is_ok() {
-            // Force GStreamer to only look at bundled plugins
-            if let Ok(appdir) = std::env::var("APPDIR") {
-                let plugin_dir = std::path::PathBuf::from(appdir).join("usr/lib/gstreamer-1.0");
-                std::env::set_var("GST_PLUGIN_SYSTEM_PATH", &plugin_dir);
-                std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &plugin_dir);
-                std::env::set_var("GST_PLUGIN_PATH", &plugin_dir);
-                std::env::set_var("GST_PLUGIN_PATH_1_0", &plugin_dir);
-            }
-
-            // Set custom registry path for AppImage to avoid reading/writing host cache
-            if let Ok(user_cache) = std::env::var("XDG_CACHE_HOME") {
-                let cache_dir = std::path::PathBuf::from(user_cache).join("openanime");
-                let _ = std::fs::create_dir_all(&cache_dir);
-                std::env::set_var("GST_REGISTRY", cache_dir.join("gst-registry.bin"));
-            } else if let Ok(home) = std::env::var("HOME") {
-                let cache_dir = std::path::PathBuf::from(home).join(".cache").join("openanime");
-                let _ = std::fs::create_dir_all(&cache_dir);
-                std::env::set_var("GST_REGISTRY", cache_dir.join("gst-registry.bin"));
-            } else {
-                std::env::set_var("GST_REGISTRY", "/tmp/gst-registry-openanime.bin");
-            }
-        }
-
-        // GPU/display server'a göre WebKit/DRM ortam değişkenlerini yeni GPU
-        // tanılama sistemi üzerinden yapılandır. Bu fonksiyon vendor tespiti,
-        // Vulkan ICD kontrolü, NVIDIA DMA-BUF/explicit-sync, Wayland GBM backend
-        // ve VirtIO/VMware workaround'larını tek yerde toplar
-        // (eski inline blok bunun daha kapsamlı sürümüyle değiştirildi).
-        gpu::configure_linux_gpu_env();
-    }
-
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
@@ -1091,9 +830,6 @@ pub fn run() {
         // Logger'ı en başta başlat
         logger::init(app.handle());
 
-        // Linux: wgpu device hata/lost event'lerinin frontend'e ulaşabilmesi için
-        #[cfg(target_os = "linux")]
-        renderer::device::set_app_handle(app.handle().clone());
         log!("===== OPENANIME SETUP BAŞLADI =====");
         log!("[Setup] Build modu: {}", if cfg!(debug_assertions) { "DEBUG" } else { "RELEASE" });
         log!("[Setup] Platform: {}", std::env::consts::OS);
@@ -1275,20 +1011,6 @@ pub fn run() {
                 _ => {}
             }
 
-            // Ana pencere taşındığında overlay'ler ekran koordinatlarını
-            // yeniden hesaplamalı — JS'in scroll/resize dinleyicileri pencere
-            // taşınmasını göremez, bu yalnızca Rust tarafında kapanabilir.
-            #[cfg(target_os = "linux")]
-            {
-                if label == "main" {
-                    if let tauri::WindowEvent::Moved(_) = event {
-                        let app_for_repos = window.app_handle().clone();
-                        webgpu_bridge::inner::reposition_overlays(&app_for_repos);
-                        native_render::inner::reposition(&app_for_repos);
-                    }
-                }
-            }
-
             #[cfg(target_os = "windows")]
             {
                 if let tauri::WindowEvent::Focused(focused) = event {
@@ -1346,14 +1068,7 @@ pub fn run() {
             list_themes,
             load_theme,
             apply_theme_css,
-            webgpu_state_changed,
-            webgpu_sync_bounds,
-            gst_control_play,
-            gst_control_pause,
-            gst_control_seek,
-            install_missing_gstreamer,
-            gpu_detector::install_gpu_packages,
-            // 🖥️ Yeni GPU tanılama sistemi (src/gpu/)
+            // 🖥️ GPU tanılama sistemi (src/gpu/)
             gpu::gpu_full_report,
             gpu::gpu_vulkan_status,
             gpu::gpu_backend_info,
@@ -1375,57 +1090,7 @@ pub fn run() {
             // 📄 Dosyanın ilk N baytını oku (IndexedDB dummy blob için)
             read_file_head,
             // JS hata köprüsü (webview console/onerror → terminal log)
-            oa_js_log,
-            // WebGPU Bridge commands
-            webgpu_bridge::inner::gpu_request_adapter,
-            webgpu_bridge::inner::gpu_request_device,
-            webgpu_bridge::inner::gpu_create_buffer,
-            webgpu_bridge::inner::gpu_write_buffer,
-            webgpu_bridge::inner::gpu_buffer_map_async,
-            webgpu_bridge::inner::gpu_buffer_unmap,
-            webgpu_bridge::inner::gpu_create_texture,
-            webgpu_bridge::inner::gpu_texture_create_view,
-            webgpu_bridge::inner::gpu_write_texture,
-            webgpu_bridge::inner::gpu_create_sampler,
-            webgpu_bridge::inner::gpu_create_shader_module,
-            webgpu_bridge::inner::gpu_create_bind_group_layout,
-            webgpu_bridge::inner::gpu_create_pipeline_layout,
-            webgpu_bridge::inner::gpu_create_bind_group,
-            webgpu_bridge::inner::gpu_create_compute_pipeline,
-            webgpu_bridge::inner::gpu_create_render_pipeline,
-            webgpu_bridge::inner::gpu_create_command_encoder,
-            webgpu_bridge::inner::gpu_encoder_begin_compute_pass,
-            webgpu_bridge::inner::gpu_encoder_set_compute_pipeline,
-            webgpu_bridge::inner::gpu_encoder_set_bind_group,
-            webgpu_bridge::inner::gpu_encoder_dispatch_workgroups,
-            webgpu_bridge::inner::gpu_encoder_end_compute_pass,
-            webgpu_bridge::inner::gpu_encoder_begin_render_pass,
-            webgpu_bridge::inner::gpu_encoder_set_render_pipeline,
-            webgpu_bridge::inner::gpu_encoder_set_render_bind_group,
-            webgpu_bridge::inner::gpu_encoder_draw,
-            webgpu_bridge::inner::gpu_encoder_end_render_pass,
-            webgpu_bridge::inner::gpu_encoder_copy_buffer_to_texture,
-            webgpu_bridge::inner::gpu_encoder_copy_texture_to_texture,
-            webgpu_bridge::inner::gpu_encoder_finish,
-            webgpu_bridge::inner::gpu_queue_submit,
-            webgpu_bridge::inner::gpu_queue_on_submitted_work_done,
-            webgpu_bridge::inner::gpu_canvas_get_context,
-            webgpu_bridge::inner::gpu_canvas_configure,
-            webgpu_bridge::inner::gpu_canvas_get_current_texture,
-            webgpu_bridge::inner::gpu_canvas_present,
-            webgpu_bridge::inner::gpu_canvas_sync_bounds,
-            // Binary IPC + gerçek WebGPU genişletmeleri
-            webgpu_bridge::inner::gpu_write_buffer_bin,
-            webgpu_bridge::inner::gpu_write_texture_bin,
-            webgpu_bridge::inner::gpu_buffer_read_bin,
-            webgpu_bridge::inner::gpu_import_video_frame,
-            webgpu_bridge::inner::gpu_destroy_resource,
-            webgpu_bridge::inner::gpu_push_error_scope,
-            webgpu_bridge::inner::gpu_pop_error_scope,
-            webgpu_bridge::inner::gpu_reset_bridge,
-            webgpu_bridge::inner::gpu_encoder_set_vertex_buffer,
-            webgpu_bridge::inner::gpu_encoder_set_index_buffer,
-            webgpu_bridge::inner::gpu_encoder_draw_indexed
+            oa_js_log
         ])
         .run(tauri::generate_context!());
 

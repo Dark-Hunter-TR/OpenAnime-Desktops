@@ -40,25 +40,23 @@ src-tauri/src/
 ```
 (function () {              ← ANA IIFE
   if (iframe) return;        ← iframe kontrolü
-  1. linux-polyfills.js
-  2. tauri-bridge.js
-  3. network-cache.js (fetch override)
-  4. image-cache.js
-  5. webgpu-*.js
-  6. zoom-manager.js
-  7. window-controls.js
-  8. keyboard-shortcuts.js
-  9. link-interceptor.js
- 10. fullscreen-manager.js
- 11. discord/ (state, extractor, poster, settings, rpc)
- 12. updater-ui.js
- 13. page-recovery.js
- 14. video-optimizer.js
- 15. local-player.js         ← Local video stream
- 16. local-library.js        ← Local kütüphane (şu an devre dışı)
- 17. theme/ (core, observer, styles, page-render)
- 18. title-bar-fix (inline CSS)
- 19. init.js                 ← EN SON
+  1. tauri-bridge.js
+  2. network-cache.js (fetch override)
+  3. image-cache.js
+  4. zoom-manager.js
+  5. window-controls.js
+  6. keyboard-shortcuts.js
+  7. link-interceptor.js
+  8. fullscreen-manager.js
+  9. discord/ (state, extractor, poster, settings, rpc)
+ 10. updater-ui.js
+ 11. page-recovery.js
+ 12. video-optimizer.js
+ 13. local-player.js         ← Local video stream
+ 14. local-library.js        ← Local kütüphane (şu an devre dışı)
+ 15. theme/ (core, observer, styles, page-render)
+ 16. title-bar-fix (inline CSS)
+ 17. init.js                 ← EN SON
 })();
 ```
 
