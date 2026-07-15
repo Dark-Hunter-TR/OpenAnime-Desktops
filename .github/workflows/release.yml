@@ -120,3 +120,44 @@ jobs:
           releaseDraft: ${{ inputs.draft == 'true' }}
           prerelease: ${{ inputs.channel != 'stable' }}
           args: ${{ matrix.args }} --verbose
+
+  # ────────────────────────────────────────────────────
+  # 5. Kanal manifestini güncelle (beta/alpha)
+  #    updater.rs beta/alpha kanalları için
+  #    updater/latest-<channel>.json dosyalarını okur.
+  #    Yayınlanan latest.json'u bu dosyaya kopyalayıp main'e commit'ler.
+  #    Sadece draft OLMAYAN beta/alpha yayınlarında çalışır.
+  # ────────────────────────────────────────────────────
+  update-channel-manifest:
+    needs: publish
+    if: ${{ inputs.channel != 'stable' && inputs.draft == 'false' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Yayınlanan latest.json'u indir
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p updater
+          gh release download "v${{ inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "latest.json" \
+            --output "updater/latest-${{ inputs.channel }}.json" \
+            --clobber
+
+      - name: Değişikliği main'e commit'le
+        run: |
+          if git diff --quiet -- "updater/latest-${{ inputs.channel }}.json"; then
+            echo "Manifest değişmedi, commit yok."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "updater/latest-${{ inputs.channel }}.json"
+          git commit -m "chore(updater): ${{ inputs.channel }} kanal manifestini v${{ inputs.version }} olarak güncelle"
+          git push origin main

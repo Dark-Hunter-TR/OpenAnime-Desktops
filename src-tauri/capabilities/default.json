@@ -38,6 +38,7 @@
     "allow-read-local-video",
     "allow-webgpu-bridge",
     "allow-native-render",
-    "allow-gpu-diagnostics"
+    "allow-gpu-diagnostics",
+    "allow-updater"
   ]
 }

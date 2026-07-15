@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "allow-updater"
+description = "Uygulama içi güncelleyici komutlarına izin verir (sürüm sorgu, güncelleme denetimi, indirme/kurulum)"
+
+[permission.commands]
+allow = [
+    "get_app_version",
+    "check_for_updates",
+    "start_update_download"
+]
