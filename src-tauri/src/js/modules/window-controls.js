@@ -25,9 +25,8 @@
     }
     // Fallback: user-agent sniffing
     const ua = navigator.userAgent || '';
-    if (/windows/i.test(ua)) return 'windows';
     if (/macintosh|mac os x/i.test(ua)) return 'macos';
-    return 'linux';
+    return 'windows';
   }
 
   // Resolve platform (may be async from polyfill)
@@ -60,7 +59,7 @@
         </div>
       `;
     }
-    // Windows / Linux: minimize → maximize → close
+    // Windows: minimize → maximize → close
     return `
       <div class="tauri-window-control-btn minimize" id="tauri-minimize" role="button" tabindex="0" aria-label="Simge durumuna küçült">
         ${ICON_MINIMIZE}

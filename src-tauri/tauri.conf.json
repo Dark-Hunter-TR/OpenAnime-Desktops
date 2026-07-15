@@ -18,7 +18,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "rpm", "appimage", "nsis", "dmg"],
+    "targets": ["nsis", "dmg"],
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"
@@ -27,26 +27,6 @@
       "nsis": {
         "languages": ["Turkish"],
         "template": "./nsis/installer.nsi"
-      }
-    },
-    "linux": {
-      "appimage": {
-        "bundleMediaFramework": true
-      },
-      "deb": {
-        "depends": [
-          "libwebkit2gtk-4.1-0",
-          "libgtk-3-0",
-          "gstreamer1.0-tools",
-          "gstreamer1.0-plugins-base",
-          "gstreamer1.0-plugins-good",
-          "gstreamer1.0-plugins-bad",
-          "gstreamer1.0-plugins-ugly",
-          "gstreamer1.0-libav"
-        ],
-        "recommends": [
-          "mesa-va-drivers"
-        ]
       }
     }
   },

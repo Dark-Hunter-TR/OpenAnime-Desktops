@@ -88,17 +88,15 @@ if (!window.__TAURI__) {
   // OS platform detection polyfill (user-agent fallback)
   const _detectPlatform = () => {
     const ua = navigator.userAgent || '';
-    if (/windows/i.test(ua)) return 'windows';
     if (/macintosh|mac os x/i.test(ua)) return 'macos';
-    return 'linux';
+    return 'windows';
   };
   const _detectedPlatform = _detectPlatform();
 
   const osInstance = {
     platform: () => Promise.resolve(_detectedPlatform),
     type: () => Promise.resolve(
-      _detectedPlatform === 'windows' ? 'windows_nt' :
-      _detectedPlatform === 'macos' ? 'darwin' : 'linux'
+      _detectedPlatform === 'macos' ? 'darwin' : 'windows_nt'
     ),
   };
 
