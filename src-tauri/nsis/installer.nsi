@@ -31,6 +31,17 @@ ManifestDPIAwareness PerMonitorV2
 ${StrCase}
 ${StrLoc}
 
+!include "WinMessages.nsh"
+!include "nsDialogs.nsh"
+
+; Win32 Constants for Custom UI
+!define SS_BITMAP 0x0000000E
+!define STM_SETIMAGE 0x0172
+!define IMAGE_BITMAP 0
+!define LR_LOADFROMFILE 0x00000010
+!define WS_CHILD 0x40000000
+!define WS_VISIBLE 0x10000000
+
 {{#if installer_hooks}}
 !include "{{installer_hooks}}"
 {{/if}}
@@ -234,26 +245,34 @@ Function OaCustomPage
     Abort
   ${EndIf}
 
+  ; Sayfa Arkaplanini Koyu Mavi Yap (#141821)
+  SetCtlColors $0 0xE4E7EC 0x141821
+
   ${NSD_CreateLabel} 0 0 100% 20u "OpenAnime'i bilgisayarınıza kurmak veya mevcut kurulumu yönetmek üzeresiniz."
   Pop $R0
+  SetCtlColors $R0 0xE4E7EC 0x141821 ; Beyaz yazi, Koyu mavi fon
 
   ${If} $OaIsInstalled == 1
     ${NSD_CreateRadioButton} 0 25u 100% 12u "Mevcut Sürümü Güncelle (v$OaInstalledVersion -> ${VERSION})"
     Pop $OaRadio1
+    SetCtlColors $OaRadio1 0xE4E7EC 0x141821
     ${NSD_OnClick} $OaRadio1 OaOnRadioChange
     
     ${NSD_CreateRadioButton} 0 40u 100% 12u "Temiz Kurulum (Mevcut sürümü kaldırıp yeniden kurar)"
     Pop $OaRadio2
+    SetCtlColors $OaRadio2 0xE4E7EC 0x141821
     ${NSD_OnClick} $OaRadio2 OaOnRadioChange
 
     ${NSD_CreateRadioButton} 0 55u 100% 12u "OpenAnime'i Kaldır"
     Pop $OaRadio3
+    SetCtlColors $OaRadio3 0xE4E7EC 0x141821
     ${NSD_OnClick} $OaRadio3 OaOnRadioChange
 
     SendMessage $OaRadio1 ${BM_SETCHECK} ${BST_CHECKED} 0
   ${Else}
     ${NSD_CreateRadioButton} 0 25u 100% 12u "Normal Kurulum"
     Pop $OaRadio1
+    SetCtlColors $OaRadio1 0xE4E7EC 0x141821
     SendMessage $OaRadio1 ${BM_SETCHECK} ${BST_CHECKED} 0
     EnableWindow $OaRadio1 0 ; Zaten tek seçenek
     StrCpy $OaInstallMode 1
@@ -261,13 +280,16 @@ Function OaCustomPage
 
   ${NSD_CreateLabel} 0 75u 100% 10u "Seçenekler:"
   Pop $R0
+  SetCtlColors $R0 0xE4E7EC 0x141821
 
   ${NSD_CreateCheckbox} 10u 85u 100% 12u "Masaüstü kısayolu oluştur"
   Pop $OaChkShortcut
+  SetCtlColors $OaChkShortcut 0xE4E7EC 0x141821
   SendMessage $OaChkShortcut ${BM_SETCHECK} ${BST_CHECKED} 0
 
   ${NSD_CreateCheckbox} 10u 100u 100% 12u "Otomatik güncellemeyi etkinleştir"
   Pop $OaChkAutoUpdate
+  SetCtlColors $OaChkAutoUpdate 0xE4E7EC 0x141821
   SendMessage $OaChkAutoUpdate ${BM_SETCHECK} ${BST_CHECKED} 0
 
   nsDialogs::Show
@@ -336,16 +358,30 @@ Var AppStartMenuFolder
 !insertmacro MUI_PAGE_INSTFILES
 
 Function OaOnInstFilesShow
-  ; Progress bar'ı gizle
-  GetDlgItem $0 $HWNDPARENT 1004 ; Progress bar ID (MUI2 varsayılan)
-  ShowWindow $0 0
+  ; MUI2'de kurulum sayfasi (INSTFILES) #32770 sinifli bir alt penceredir
+  FindWindow $0 "#32770" "" $HWNDPARENT
   
-  ; Setsuki görselini eklemek için alan oluştur
-  ; Not: nsDialogs sayfa bazlıdır, burada Win32 API ile doğrudan çizmek daha garantidir.
-  ; Ancak basitlik için sadece progress bar'ı gizliyoruz ve arka plan BMP ile yöneteceğiz.
+  ; Arkaplani koyu yap
+  SetCtlColors $0 0xE4E7EC 0x141821
+
+  ; 1. Progress bar'i (ID: 1004) gizle
+  GetDlgItem $1 $0 1004
+  ShowWindow $1 0
   
-  GetDlgItem $1 $HWNDPARENT 1006 ; Durum metni
-  SendMessage $1 ${WM_SETTEXT} 0 "STR:OpenAnime Kuruluyor..."
+  ; 2. Detayli metin kutusunu (ID: 1016) gizle
+  GetDlgItem $1 $0 1016
+  ShowWindow $1 0
+
+  ; 3. Setsuki gorselini (resim kontrolu olarak) ekle
+  System::Call 'user32::CreateWindowEx(i 0, w "Static", w "", i ${SS_BITMAP}|${WS_CHILD}|${WS_VISIBLE}, i 180, i 30, i 300, i 200, p r0, i 1200, p 0, p 0) i.r1'
+  File "/oname=$PLUGINSDIR\setsuki.bmp" "nsis\images\setsuki.bmp"
+  System::Call 'user32::LoadImage(i 0, w "$PLUGINSDIR\setsuki.bmp", i ${IMAGE_BITMAP}, i 0, i 0, i ${LR_LOADFROMFILE}) i.r2'
+  SendMessage $1 ${STM_SETIMAGE} ${IMAGE_BITMAP} $2
+
+  ; 4. "Kuruluyor" metnini beyaz yap ve guncelle
+  GetDlgItem $1 $0 1006
+  SetCtlColors $1 0xE4E7EC 0x141821
+  SendMessage $1 ${WM_SETTEXT} 0 "STR:OpenAnime Kuruluyor... Lütfen Bekleyin."
 FunctionEnd
 
 ; 8. Finish page

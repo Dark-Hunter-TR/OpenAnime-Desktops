@@ -1,34 +1,40 @@
-# OpenAnime Arayüz Tasarım Rehberi
+# OpenAnime Arayüz Tasarım Rehberi (Ultimate Edition)
 
-Bu belge, OpenAnime web ve masaüstü uygulamalarının görsel kimliğini, tasarım kurallarını ve gelecekteki modern kurulum sihirbazı (custom installer) için gereken teknik detayları içerir.
+Bu belge, OpenAnime'nin en ince ayrıntısına kadar (mikro düzeyde) analiz edilmiş görsel kimliğini ve tasarım kurallarını içerir.
 
-## 🧬 Tasarım Genetiği (Kritik CSS Değişkenleri)
+## 🧬 Mikro Tasarım Genetiği (Analiz Raporu)
 
-Analiz edilen canlı site verilerine göre temel değişkenler şunlardır:
+Canlı site (`/settings`) üzerinden yapılan son analiz sonuçlarına göre teknik detaylar:
 
-### 🎨 Renk Paleti (HSLA Uzayı)
-*   **Ana Aksan (Accent):** `hsla(199, 99%, 69%)` (Açık Mavi / Camgöbeği)
-*   **Aksan Hover:** `hsla(199, 99%, 69%, 90%)`
-*   **Ana Arkaplan (Midnight):** `#141821`
-*   **Birincil Metin:** `hsla(0, 0%, 100%, 100%)` (Saf Beyaz)
-*   **İkincil Metin:** `hsla(0, 0%, 100%, 78.6%)` (%78 Şeffaf Beyaz)
-*   **Yardımcı Metin (Tertiary):** `hsla(0, 0%, 100%, 54.42%)` (%54 Şeffaf Beyaz)
+### 🎨 Renk ve Şeffaflık Katmanları
+*   **Ana Aksan:** `hsla(199, 99%, 69%)`
+*   **Birincil Metin:** `hsla(0, 0%, 100%, 100%)`
+*   **İkincil Metin:** `hsla(0, 0%, 100%, 78.6%)`
+*   **Kart/Panel Arkaplanı:** `hsla(0, 0%, 100%, 5.12%)` veya `rgba(255, 255, 255, 0.05)`
+*   **Kontrol/Buton Dolgusu:** `hsla(0, 0%, 100%, .061)`
+*   **Kenarlık (Stroke):** `hsla(0, 0%, 100%, 6.98%)` (Hafif beyaz parıltı)
 
-### 🔳 Bileşen Yapısı
-*   **Kart Arkaplanı:** `hsla(0, 0%, 100%, 5.12%)` (%5 beyaz dokunuşlu şeffaflık)
-*   **Kontrol Dolgusu:** `hsla(0, 0%, 100%, .061)`
-*   **Kenarlık Yuvarlaklığı (Overlay/Card):** `8px` (`--fds-overlay-corner-radius`)
-*   **Kontrol Yuvarlaklığı (Button/Input):** `4px` (`--fds-control-corner-radius`)
+### 🔳 Bileşen Detayları (Computed)
+*   **Expander/Kart Yapısı:**
+    - **Yükseklik:** `50px` (sabit)
+    - **Padding:** `8px (üst/sağ/alt)` , `16px (sol)`
+    - **Kenarlık:** `1px solid rgba(0, 0, 0, 0.1)`
+    - **Radius:** `4px` (kontroller için), `8px` (paneller için)
+    - **Geçiş:** `background 0.083s` (Ultra hızlı tepki)
 
-### 🔡 Tipografi
-*   **Yazı Tipleri:** `"Segoe UI Variable Text"`, `"Segoe UI"`, `-apple-system`
-*   **Gövde Metni (Body):** `14px`
-*   **Başlıklar:** `28px` (Title), `20px` (Subtitle)
+### 🔡 Tipografi ve Fontlar
+*   **Font Ailesi:** `"Segoe UI Variable Text"`, `"Segoe UI"`, `-apple-system`
+*   **Body Size:** `14px`
+*   **Caption Size:** `12px`
 
-### 🎬 Animasyon ve Akıcılık
-*   **Geçiş Eğrisi (Easing):** `cubic-bezier(0, 0, 0, 1)` (Fluent Design - Fast Out, Slow In)
-*   **Normal Süre:** `250ms`
-*   **Hızlı Süre:** `167ms`
+### 🌑 Gölgelendirme ve Efektler
+*   **Kart Gölgesi:** `0px 2px 4px hsla(0, 0%, 0%, .13)`
+*   **Acrylic Efekti:** `blur(60px)` (Arkaplan bulanıklığı)
+*   **Focus Ring:** `0 0 0 1px hsla(0, 0%, 0%, 70%), 0 0 0 3px hsl(0, 0%, 100%)`
+
+### 🎬 Animasyon Dinamiği
+*   **Easing:** `cubic-bezier(0, 0, 0, 1)` (Hızlı çıkış, çok yavaş giriş)
+*   **Hızlar:** `333ms` (Slow), `250ms` (Normal), `167ms` (Fast), `83ms` (Faster)
 
 ---
 
@@ -50,4 +56,4 @@ Gelecekteki kurulum sihirbazını "OpenAnime Stilinde" yapmak için önerilen mi
 ---
 
 ## 🛠️ Tasarım Test Yöntemi (Hızlı Önizleme)
-Build beklemeden tasarım yapmak için `installer-preview.html` adında, yukarıdaki değişkenleri içeren bir prototip dosyası üzerinden **Live Server** ile çalışılması önerilir. Tasarım bu dosyada milimetrik olarak oturtulduktan sonra Rust tarafına giydirilecektir.
+Build beklemeden tasarım yapmak için `installer-preview.html` adında, yukarıdaki **Computed JSON** değerlerini içeren bir prototip dosyası üzerinden **Live Server** ile çalışılması önerilir. Tasarım bu dosyada milimetrik olarak oturtulduktan sonra Rust tarafına (Slint/Tauri) giydirilecektir.
