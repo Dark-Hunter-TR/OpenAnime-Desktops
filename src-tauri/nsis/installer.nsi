@@ -89,6 +89,8 @@ Var OaRadio1
 Var OaRadio2
 Var OaRadio3
 Var OaStatusText
+Var OaSetsukiImage
+Var OaSetsukiHandle
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -330,7 +332,21 @@ Var AppStartMenuFolder
 !insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
 
 ; 7. Installation page
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW OaOnInstFilesShow
 !insertmacro MUI_PAGE_INSTFILES
+
+Function OaOnInstFilesShow
+  ; Progress bar'ı gizle
+  GetDlgItem $0 $HWNDPARENT 1004 ; Progress bar ID (MUI2 varsayılan)
+  ShowWindow $0 0
+  
+  ; Setsuki görselini eklemek için alan oluştur
+  ; Not: nsDialogs sayfa bazlıdır, burada Win32 API ile doğrudan çizmek daha garantidir.
+  ; Ancak basitlik için sadece progress bar'ı gizliyoruz ve arka plan BMP ile yöneteceğiz.
+  
+  GetDlgItem $1 $HWNDPARENT 1006 ; Durum metni
+  SendMessage $1 ${WM_SETTEXT} 0 "STR:OpenAnime Kuruluyor..."
+FunctionEnd
 
 ; 8. Finish page
 ;
