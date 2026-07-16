@@ -143,3 +143,148 @@ window.__openAnimeIsLoggedIn = function() {
     return false;
   }
 };
+
+// --- HTML5 Notification & Web Push Auto-Grant Override ---
+(function() {
+  function grantNotificationPermission() {
+    try {
+      // 1. Mock PushSubscription
+      function MockPushSubscription() {
+        this.endpoint = 'https://mock-push-service.openanime.desktop/subscription/12345';
+        this.expirationTime = null;
+        this.options = {
+          userVisibleOnly: true,
+          applicationServerKey: new Uint8Array([4, 24, 85, 206, 17, 85, 21, 244]).buffer
+        };
+      }
+      MockPushSubscription.prototype.getKey = function(name) {
+        const length = name === 'p256dh' ? 65 : 16;
+        const dummyKey = new Uint8Array(length);
+        for (let i = 0; i < length; i++) dummyKey[i] = i;
+        return dummyKey.buffer;
+      };
+      MockPushSubscription.prototype.toJSON = function() {
+        return {
+          endpoint: this.endpoint,
+          expirationTime: this.expirationTime,
+          keys: {
+            p256dh: 'BElbOC42X2k3cmZ1aHlkZ2J2Y2ZkZ3NkdWZnaHNkZmdoanNka2ZnaHNkZmc',
+            auth: 'c3VwZXJzZWNyZXQxMjM0NTY'
+          }
+        };
+      };
+
+      // 2. Mock PushManager
+      function MockPushManager() {}
+      MockPushManager.prototype.subscribe = function(options) {
+        return Promise.resolve(new MockPushSubscription());
+      };
+      MockPushManager.prototype.getSubscription = function() {
+        return Promise.resolve(new MockPushSubscription());
+      };
+      MockPushManager.prototype.permissionState = function() {
+        return Promise.resolve('granted');
+      };
+
+      // Expose MockPushManager and MockPushSubscription globals
+      window.PushSubscription = MockPushSubscription;
+      window.PushManager = MockPushManager;
+
+      // 3. Inject pushManager into ServiceWorkerRegistration prototype
+      if (typeof ServiceWorkerRegistration !== 'undefined') {
+        Object.defineProperty(ServiceWorkerRegistration.prototype, 'pushManager', {
+          get: function() {
+            if (!this._mockPushManager) {
+              this._mockPushManager = new MockPushManager();
+            }
+            return this._mockPushManager;
+          },
+          configurable: true
+        });
+      }
+
+      // 4. Mock Notification
+      const mockNotification = function(title, options) {
+        this.title = title;
+        this.options = options || {};
+        this.onclick = null;
+        this.onshow = null;
+        this.onerror = null;
+        this.onclose = null;
+        setTimeout(() => {
+          if (typeof this.onshow === 'function') {
+            try { this.onshow(); } catch (e) {}
+          }
+        }, 50);
+      };
+
+      mockNotification.prototype.close = function() {
+        setTimeout(() => {
+          if (typeof this.onclose === 'function') {
+            try { this.onclose(); } catch (e) {}
+          }
+        }, 50);
+      };
+
+      if (typeof EventTarget !== 'undefined') {
+        mockNotification.prototype = Object.create(EventTarget.prototype);
+        mockNotification.prototype.constructor = mockNotification;
+      }
+
+      Object.defineProperty(mockNotification, 'permission', {
+        get: function() { return 'granted'; },
+        set: function() {},
+        configurable: true
+      });
+
+      mockNotification.requestPermission = function(callback) {
+        const promise = Promise.resolve('granted');
+        if (callback) promise.then(callback);
+        return promise;
+      };
+
+      if (window.Notification) {
+        try {
+          Object.defineProperty(window.Notification, 'permission', {
+            get: function() { return 'granted'; },
+            set: function() {},
+            configurable: true
+          });
+          window.Notification.requestPermission = function(callback) {
+            const promise = Promise.resolve('granted');
+            if (callback) promise.then(callback);
+            return promise;
+          };
+        } catch (e) {
+          window.Notification = mockNotification;
+        }
+      } else {
+        window.Notification = mockNotification;
+      }
+
+      // 5. Override navigator.permissions.query
+      if (navigator.permissions && navigator.permissions.query) {
+        const originalQuery = navigator.permissions.query;
+        navigator.permissions.query = function(descriptor) {
+          if (descriptor && descriptor.name === 'notifications') {
+            return Promise.resolve({
+              state: 'granted',
+              onchange: null,
+              addEventListener: function() {},
+              removeEventListener: function() {},
+              dispatchEvent: function() { return true; }
+            });
+          }
+          return originalQuery.apply(this, arguments);
+        };
+      }
+    } catch (err) {
+      console.error("[Tauri] Notification/Push mock error:", err);
+    }
+  }
+
+  grantNotificationPermission();
+  // Run it on DOMContentLoaded as well to ensure it stays locked
+  document.addEventListener('DOMContentLoaded', grantNotificationPermission);
+})();
+

@@ -29,9 +29,8 @@ function buildSuperNotifCardHTML(hashes) {
         <div class="item-header ${itemHeaderHash}">
           <span class="text-block type-body ${textBlockHash}" style="display:inline-flex;align-items:center;gap:8px;">
             Süper Bildirimler
-            <span style="font-size:10.5px;font-weight:600;line-height:1;padding:3px 7px;border-radius:999px;background:rgba(88,101,242,0.16);color:var(--fds-accent-default,#5865f2);border:1px solid rgba(88,101,242,0.28);white-space:nowrap;">Yakında</span>
           </span>
-          <span class="text-block type-caption text-secondary ${textBlockHash}">OpenAnime bildirimlerinizi okuyup masaüstü toast bildirimleri gönderir (hesap girişi gerekir)</span>
+          <span class="text-block type-caption text-secondary ${textBlockHash}">OpenAnime bildirimlerinizi okuyup masaüstü toast bildirimleri gönderir</span>
         </div>
         <div class="expander-control ${controlHash}">
           <span class="${statusSpanClasses}" style="opacity:0.6;">Devre Dışı</span>
