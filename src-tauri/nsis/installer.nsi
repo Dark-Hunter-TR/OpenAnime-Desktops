@@ -34,26 +34,6 @@ ${StrLoc}
 !include "WinMessages.nsh"
 !include "nsDialogs.nsh"
 
-; Win32 Constants for Custom UI (These are typically defined by included NSIS headers)
-; We'll define only if they are NOT already defined to prevent conflicts
-!ifndef SS_BITMAP
-  !define SS_BITMAP 0x0000000E
-!endif
-!ifndef STM_SETIMAGE
-  !define STM_SETIMAGE 0x0172
-!endif
-!ifndef IMAGE_BITMAP
-  !define IMAGE_BITMAP 0
-!endif
-!ifndef LR_LOADFROMFILE
-  !define LR_LOADFROMFILE 0x00000010
-!endif
-!ifndef WS_CHILD
-  !define WS_CHILD 0x40000000
-!endif
-!ifndef WS_VISIBLE
-  !define WS_VISIBLE 0x10000000
-!endif
 
 {{#if installer_hooks}}
 !include "{{installer_hooks}}"
