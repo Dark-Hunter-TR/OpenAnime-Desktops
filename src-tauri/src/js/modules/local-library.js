@@ -75,7 +75,7 @@
     var ext = fileName.split('.').pop().toLowerCase();
     var mime = ext === "mkv" ? "video/x-matroska" : "video/mp4";
     var resLabel = resolution > 0 ? resolution + "p" : "";
-    var fansubName = fileName + " (" + resLabel + ")";
+    var fansubName = resLabel ? fileName + " (" + resLabel + ")" : fileName;
 
     return {
       type: "tv",
@@ -234,6 +234,9 @@
         if (!e.fansub) { e.fansub = { id: LOCAL_FANSUB_ID, name: "Bilinmeyen", secureName: "local", avatar: "", website: "", discord: "", contributors: "", is4K: false }; changed = true; }
         if (!e.fansub.id || e.fansub.id !== LOCAL_FANSUB_ID) { e.fansub.id = LOCAL_FANSUB_ID; changed = true; }
         if (e.fansub.name && e.fansub.name.indexOf("📁") > -1) { e.fansub.name = e.fansub.name.replace(/📁\s*/g, ''); changed = true; }
+        // boş parantez "()" düzeltmesi — eski kayıtlarda resolution 0 ise "dosya.mp4 ()" kalıyor
+        if (e.fansub.name && / \(\)$/.test(e.fansub.name)) { e.fansub.name = e.fansub.name.replace(/ \(\)$/, ''); changed = true; }
+        if (e.episode && e.episode.fansub && e.episode.fansub.name && / \(\)$/.test(e.episode.fansub.name)) { e.episode.fansub.name = e.episode.fansub.name.replace(/ \(\)$/, ''); changed = true; }
 
         // episode alanları
         if (!e.episode) {
@@ -397,6 +400,17 @@
       if (match) {
         var res = parseInt(match[1]);
         if ([360, 480, 720, 1080, 1440, 2160, 4320].indexOf(res) > -1) return res;
+      }
+
+      // 1b. HD/FHD/UHD gibi anahtar kelimelerden çözünürlük tahmini
+      var keywords = [
+        { pattern: /\b4k\b|\buhd\b|\bultra\s*hd\b|\b2160p?\b/, res: 2160 },
+        { pattern: /\bfull\s*hd\b|\bfhd\b|\b1080[pi]?\b/, res: 1080 },
+        { pattern: /\bhd\b|\b720p?\b/, res: 720 },
+        { pattern: /\bsd\b|\b480p?\b/, res: 480 }
+      ];
+      for (var ki = 0; ki < keywords.length; ki++) {
+        if (keywords[ki].pattern.test(name)) return keywords[ki].res;
       }
 
       // 2. MP4 başlığından gerçek çözünürlüğü oku
