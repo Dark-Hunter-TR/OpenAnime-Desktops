@@ -54,6 +54,12 @@ pub enum AppPage {
     Calendar,
     Theme,
     Recommendations,
+    Settings,
+    Search,
+    Profile,
+    Library,
+    Auth,
+    Fansubs,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -67,6 +73,7 @@ pub struct PresenceMetadata {
     pub anime_slug: Option<String>,
     pub current_time: Option<f64>,
     pub user_profile_url: Option<String>,
+    pub custom_state: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -181,15 +188,18 @@ impl DiscordState {
                 }
 
                 let mut should_update = updated;
+                let mut is_real_change = false;
 
                 if page == AppPage::Dashboard {
                     let now = Instant::now();
                     if current_page.as_ref() != Some(&AppPage::Dashboard) {
                         should_update = true;
+                        is_real_change = true;
                         dashboard_msg_index = 0;
                         last_dashboard_update = now;
                     } else if now.duration_since(last_dashboard_update) >= Duration::from_secs(10) {
                         should_update = true;
+                        is_real_change = true;
                         dashboard_msg_index = (dashboard_msg_index + 1) % DASHBOARD_MESSAGES.len();
                         last_dashboard_update = now;
                     }
@@ -197,6 +207,7 @@ impl DiscordState {
 
                 if current_page.as_ref() != Some(&page) {
                     should_update = true;
+                    is_real_change = true;
                 }
 
                 if let (Some(ref curr_m), Some(ref new_m)) = (&current_metadata, &metadata) {
@@ -207,8 +218,10 @@ impl DiscordState {
                         || curr_m.paused != new_m.paused
                         || curr_m.anime_slug != new_m.anime_slug
                         || curr_m.user_profile_url != new_m.user_profile_url
+                        || curr_m.custom_state != new_m.custom_state
                     {
                         should_update = true;
+                        is_real_change = true;
                     }
 
                     // current_time drift kontrolü: oynatma sırasında süre değiştiyse güncelle
@@ -224,6 +237,7 @@ impl DiscordState {
                     }
                 } else if current_metadata.is_some() != metadata.is_some() {
                     should_update = true;
+                    is_real_change = true;
                 }
 
                 if should_update {
@@ -315,6 +329,17 @@ impl DiscordState {
                                     AppPage::Calendar => "Takvim | OpenAnime".to_string(),
                                     AppPage::Theme => "Temalar | OpenAnime".to_string(),
                                     AppPage::Recommendations => "Kişiselleştirilmiş Öneriler | OpenAnime".to_string(),
+                                    AppPage::Settings => "Ayarlar | OpenAnime".to_string(),
+                                    AppPage::Search => "Keşfet | OpenAnime".to_string(),
+                                    AppPage::Library => "Kütüphane | OpenAnime".to_string(),
+                                    AppPage::Profile => {
+                                        let title = metadata.as_ref()
+                                            .and_then(|m| m.custom_title.as_deref())
+                                            .unwrap_or("Profil");
+                                        format!("{} | OpenAnime", title)
+                                    }
+                                    AppPage::Auth => "Giriş / Üye Ol | OpenAnime".to_string(),
+                                    AppPage::Fansubs => "Fansublar | OpenAnime".to_string(),
                                     AppPage::Dashboard => unreachable!(),
                                 };
 
@@ -322,27 +347,37 @@ impl DiscordState {
                                     .and_then(|m| m.paused)
                                     .unwrap_or(false);
 
-                                state_str = match &page {
-                                    AppPage::Home => "Geziniyor".to_string(),
-                                    AppPage::Details => "İnceliyor".to_string(),
-                                    AppPage::Watch => {
-                                        if is_paused {
-                                            let current_time_secs = metadata.as_ref()
-                                                .and_then(|m| m.current_time)
-                                                .unwrap_or(0.0) as i64;
-                                            let minutes = current_time_secs / 60;
-                                            let seconds = current_time_secs % 60;
-                                            format!("Duraklattı • {:02}:{:02}", minutes, seconds)
-                                        } else {
-                                            "İzliyor".to_string()
+                                state_str = if let Some(ref custom) = metadata.as_ref().and_then(|m| m.custom_state.as_ref()) {
+                                    custom.to_string()
+                                } else {
+                                    match &page {
+                                        AppPage::Home => "Geziniyor".to_string(),
+                                        AppPage::Details => "İnceliyor".to_string(),
+                                        AppPage::Watch => {
+                                            if is_paused {
+                                                let current_time_secs = metadata.as_ref()
+                                                    .and_then(|m| m.current_time)
+                                                    .unwrap_or(0.0) as i64;
+                                                let minutes = current_time_secs / 60;
+                                                let seconds = current_time_secs % 60;
+                                                format!("Duraklattı • {:02}:{:02}", minutes, seconds)
+                                            } else {
+                                                "İzliyor".to_string()
+                                            }
                                         }
+                                        AppPage::Premium => "Abonelikleri İnceliyor".to_string(),
+                                        AppPage::Custom => "Uygulamada Geziniyor".to_string(),
+                                        AppPage::Calendar => "Yayın Akışını İnceliyor".to_string(),
+                                        AppPage::Theme => "Temaları İnceliyor".to_string(),
+                                        AppPage::Recommendations => "Önerileri İnceliyor".to_string(),
+                                        AppPage::Settings => "Ayarları Düzenliyor".to_string(),
+                                        AppPage::Search => "Arama Yapıyor".to_string(),
+                                        AppPage::Library => "Kütüphanesini İnceliyor".to_string(),
+                                        AppPage::Profile => "Profil İnceliyor".to_string(),
+                                        AppPage::Auth => "Giriş Yapıyor".to_string(),
+                                        AppPage::Fansubs => "Fansubları İnceliyor".to_string(),
+                                        AppPage::Dashboard => unreachable!(),
                                     }
-                                    AppPage::Premium => "Abonelikleri İnceliyor".to_string(),
-                                    AppPage::Custom => "Uygulamada Geziniyor".to_string(),
-                                    AppPage::Calendar => "Yayın Akışını İnceliyor".to_string(),
-                                    AppPage::Theme => "Temaları İnceliyor".to_string(),
-                                    AppPage::Recommendations => "Önerileri İnceliyor".to_string(),
-                                    AppPage::Dashboard => unreachable!(),
                                 };
 
                                 activity = activity
@@ -480,7 +515,9 @@ impl DiscordState {
 
                         match c.set_activity(activity) {
                             Ok(_) => {
-                                println!("[Discord RPC] Durum güncellendi: {:?}, Meta: {:?}", page, metadata);
+                                if is_real_change || current_page.is_none() {
+                                    println!("[Discord RPC] Durum güncellendi: {:?}, Meta: {:?}", page, metadata);
+                                }
                                 was_clear = false;
                                 current_page = Some(page.clone());
                                 current_metadata = metadata.clone();
@@ -558,7 +595,9 @@ impl DiscordState {
 
                                 match c.set_activity(safe_activity) {
                                     Ok(_) => {
-                                        println!("[Discord RPC] Güvenli modda durum başarıyla güncellendi: {:?}", page);
+                                        if is_real_change || current_page.is_none() {
+                                            println!("[Discord RPC] Güvenli modda durum başarıyla güncellendi: {:?}", page);
+                                        }
                                         was_clear = false;
                                         current_page = Some(page.clone());
                                         current_metadata = metadata.clone();

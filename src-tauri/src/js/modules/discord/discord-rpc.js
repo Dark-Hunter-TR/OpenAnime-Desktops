@@ -250,17 +250,28 @@ async function updatePresenceFromDOM() {
     if (pathLower.includes("/dashboard") || pathLower.includes("/panel")) {
       page = "dashboard";
     } else if (pathLower.includes("/settings")) {
-      page = "custom";
-      metadata = { customTitle: "Ayarlar" };
-    } else if (pathLower.includes("/plus")) {
+      page = "settings";
+    } else if (pathLower.includes("/plus") || pathLower.includes("/premium")) {
       page = "premium";
-      metadata = { customTitle: "Abonelikler" };
     } else if (pathLower.includes("/calendar")) {
       page = "calendar";
     } else if (pathLower.includes("/recommendations") && url.searchParams.has("desktop_theme")) {
       page = "theme";
     } else if (pathLower.includes("/recommendations")) {
       page = "recommendations";
+    } else if (pathLower.includes("/library") || pathLower.includes("/bookmarks")) {
+      page = "library";
+    } else if (pathLower.includes("/search") || pathLower.includes("/discover") || pathLower.includes("/browse") || pathLower.includes("/explore")) {
+      page = "search";
+    } else if (pathLower.includes("/profile") || pathLower.includes("/user")) {
+      page = "profile";
+      const parts = title.split("|");
+      const profileName = parts[0].trim();
+      metadata = { customTitle: profileName !== "OpenAnime" ? profileName : "Profil" };
+    } else if (pathLower.includes("/login") || pathLower.includes("/register") || pathLower.includes("/auth") || pathLower.includes("/signup") || pathLower.includes("/signin")) {
+      page = "auth";
+    } else if (pathLower.includes("/fansub") || pathLower.includes("/fansubs")) {
+      page = "fansubs";
     } else if (pathLower.includes("/anime") || hasVideo) {
       let animeName = "Anime";
       let episodeNo = extractEpisodeNumber(title, path);
@@ -351,8 +362,6 @@ async function updatePresenceFromDOM() {
       }
     } else if (path === "/" || path === "") {
       page = "home";
-    } else if (path === "/plus" || pathLower.includes("plus")) {
-      page = "premium";
     } else {
       page = "custom";
       const pageTitle = title.split("|")[0].trim();
@@ -372,10 +381,22 @@ async function updatePresenceFromDOM() {
       windowTitle = "Temalar Gösteriliyor | OpenAnime";
     } else if (page === "recommendations") {
       windowTitle = "Kişiselleştirilmiş Öneriler | OpenAnime";
-    } else if (page === "premium" && metadata) {
+    } else if (page === "premium") {
       windowTitle = `Abonelikler | OpenAnime`;
     } else if (page === "calendar") {
       windowTitle = "Takvim | OpenAnime";
+    } else if (page === "settings") {
+      windowTitle = "Ayarlar | OpenAnime";
+    } else if (page === "search") {
+      windowTitle = "Keşfet | OpenAnime";
+    } else if (page === "library") {
+      windowTitle = "Kütüphane | OpenAnime";
+    } else if (page === "profile" && metadata) {
+      windowTitle = `${metadata.customTitle} | OpenAnime`;
+    } else if (page === "auth") {
+      windowTitle = "Giriş Yap | OpenAnime";
+    } else if (page === "fansubs") {
+      windowTitle = "Fansublar | OpenAnime";
     } else if (page === "details" && metadata) {
       windowTitle = `${metadata.animeName} İnceliyor | OpenAnime`;
     } else if (page === "watch" && metadata) {
