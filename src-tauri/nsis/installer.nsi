@@ -31,6 +31,10 @@ ManifestDPIAwareness PerMonitorV2
 ${StrCase}
 ${StrLoc}
 
+!include "WinMessages.nsh"
+!include "nsDialogs.nsh"
+
+
 {{#if installer_hooks}}
 !include "{{installer_hooks}}"
 {{/if}}
@@ -75,6 +79,22 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+
+; Custom UI variables
+Var OaIsInstalled
+Var OaInstalledVersion
+Var OaInstallMode
+Var OaChkShortcut
+Var OaChkAutoUpdate
+Var OaDirRequest
+Var OaDirButton
+Var OaDescText
+Var OaRadio1
+Var OaRadio2
+Var OaRadio3
+Var OaStatusText
+Var OaSetsukiImage
+Var OaSetsukiHandle
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -181,207 +201,124 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
   !insertmacro MULTIUSER_PAGE_INSTALLMODE
 !endif
 
-; 4. Custom page to ask user if he wants to reinstall/uninstall
-;    only if a previous installation was detected
-Var ReinstallPageCheck
-Page custom PageReinstall PageLeaveReinstall
-Function PageReinstall
-  ; Uninstall previous WiX installation if exists.
-  ;
-  ; A WiX installer stores the installation info in registry
-  ; using a UUID and so we have to loop through all keys under
-  ; `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`
-  ; and check if `DisplayName` and `Publisher` keys match ${PRODUCTNAME} and ${MANUFACTURER}
-  ;
-  ; This has a potential issue that there maybe another installation that matches
-  ; our ${PRODUCTNAME} and ${MANUFACTURER} but wasn't installed by our WiX installer,
-  ; however, this should be fine since the user will have to confirm the uninstallation
-  ; and they can chose to abort it if doesn't make sense.
-  StrCpy $0 0
-  wix_loop:
-    EnumRegKey $1 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" $0
-    StrCmp $1 "" wix_loop_done ; Exit loop if there is no more keys to loop on
-    IntOp $0 $0 + 1
-    ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "DisplayName"
-    ReadRegStr $R1 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "Publisher"
-    StrCmp "$R0$R1" "${PRODUCTNAME}${MANUFACTURER}" 0 wix_loop
-    ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "UninstallString"
-    ${StrCase} $R1 $R0 "L"
-    ${StrLoc} $R0 $R1 "msiexec" ">"
-    StrCmp $R0 0 0 wix_loop_done
-    StrCpy $WixMode 1
-    StrCpy $R6 "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1"
-    Goto compare_version
-  wix_loop_done:
-
-  ; Check if there is an existing installation, if not, abort the reinstall page
-  ReadRegStr $R0 SHCTX "${UNINSTKEY}" ""
-  ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
-  ${IfThen} "$R0$R1" == "" ${|} Abort ${|}
-
-  ; Compare this installar version with the existing installation
-  ; and modify the messages presented to the user accordingly
-  compare_version:
-  StrCpy $R4 "$(older)"
-  ${If} $WixMode = 1
-    ReadRegStr $R0 HKLM "$R6" "DisplayVersion"
-  ${Else}
-    ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
-  ${EndIf}
-  ${IfThen} $R0 == "" ${|} StrCpy $R4 "$(unknown)" ${|}
-
-  nsis_tauri_utils::SemverCompare "${VERSION}" $R0
-  Pop $R0
-  ; Reinstalling the same version
-  ${If} $R0 = 0
-    StrCpy $R1 "$(alreadyInstalledLong)"
-    StrCpy $R2 "$(addOrReinstall)"
-    StrCpy $R3 "$(uninstallApp)"
-    !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(chooseMaintenanceOption)"
-  ; Upgrading
-  ${ElseIf} $R0 = 1
-    StrCpy $R1 "$(olderOrUnknownVersionInstalled)"
-    StrCpy $R2 "$(uninstallBeforeInstalling)"
-    StrCpy $R3 "$(dontUninstall)"
-    !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(choowHowToInstall)"
-  ; Downgrading
-  ${ElseIf} $R0 = -1
-    StrCpy $R1 "$(newerVersionInstalled)"
-    StrCpy $R2 "$(uninstallBeforeInstalling)"
-    !if "${ALLOWDOWNGRADES}" == "true"
-      StrCpy $R3 "$(dontUninstall)"
-    !else
-      StrCpy $R3 "$(dontUninstallDowngrade)"
-    !endif
-    !insertmacro MUI_HEADER_TEXT "$(alreadyInstalled)" "$(choowHowToInstall)"
-  ${Else}
+; 4. OpenAnime Custom Selection Page
+Page custom OaCustomPage OaCustomPageLeave
+Function OaCustomPage
+  ; Sadece interaktif kurulumda çalış
+  ${If} $PassiveMode = 1
     Abort
   ${EndIf}
 
-  ; Skip showing the page if passive
-  ;
-  ; Note that we don't call this earlier at the beginning
-  ; of this function because we need to populate some variables
-  ; related to current installed version if detected and whether
-  ; we are downgrading or not.
-  ${If} $PassiveMode = 1
-    Call PageLeaveReinstall
+  ; Varsayılan değerler
+  StrCpy $OaChkShortcut 1
+  StrCpy $OaChkAutoUpdate 1
+
+  ; Mevcut kurulum kontrolü (Hem yeni hem eski manufacturer anahtarlarını kontrol et)
+  ReadRegStr $R0 SHCTX "${UNINSTKEY}" ""
+  ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+  ${If} "$R0$R1" == ""
+    StrCpy $OaIsInstalled 0
   ${Else}
-    nsDialogs::Create 1018
-    Pop $R4
-    ${IfThen} $(^RTL) = 1 ${|} nsDialogs::SetRTL $(^RTL) ${|}
-
-    ${NSD_CreateLabel} 0 0 100% 24u $R1
-    Pop $R1
-
-    ${NSD_CreateRadioButton} 30u 50u -30u 8u $R2
-    Pop $R2
-    ${NSD_OnClick} $R2 PageReinstallUpdateSelection
-
-    ${NSD_CreateRadioButton} 30u 70u -30u 8u $R3
-    Pop $R3
-    ; Disable this radio button if downgrading and downgrades are disabled
-    !if "${ALLOWDOWNGRADES}" == "false"
-      ${IfThen} $R0 = -1 ${|} EnableWindow $R3 0 ${|}
-    !endif
-    ${NSD_OnClick} $R3 PageReinstallUpdateSelection
-
-    ; Check the first radio button if this the first time
-    ; we enter this page or if the second button wasn't
-    ; selected the last time we were on this page
-    ${If} $ReinstallPageCheck <> 2
-      SendMessage $R2 ${BM_SETCHECK} ${BST_CHECKED} 0
-    ${Else}
-      SendMessage $R3 ${BM_SETCHECK} ${BST_CHECKED} 0
+    StrCpy $OaIsInstalled 1
+    ReadRegStr $OaInstalledVersion SHCTX "${UNINSTKEY}" "DisplayVersion"
+    StrCpy $OaInstallMode 1 ; Varsayılan: Güncelle
+    
+    ; Eski install dizini tespiti (darkhunter -> openanime geçişi için)
+    ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+    ${If} $4 == ""
+        ReadRegStr $4 SHCTX "Software\DarkHunter\OpenAnime" ""
     ${EndIf}
+  ${EndIf}
 
-    ${NSD_SetFocus} $R2
-    nsDialogs::Show
+  ; Sayfa oluşturma
+  !insertmacro MUI_HEADER_TEXT "OpenAnime Kurulum Seçenekleri" "Lütfen yapmak istediğiniz işlemi seçin."
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 20u "OpenAnime'i bilgisayarınıza kurmak veya mevcut kurulumu yönetmek üzeresiniz."
+  Pop $R0
+
+  ${If} $OaIsInstalled == 1
+    ${NSD_CreateRadioButton} 0 25u 100% 12u "Mevcut Sürümü Güncelle (v$OaInstalledVersion -> ${VERSION})"
+    Pop $OaRadio1
+    ${NSD_OnClick} $OaRadio1 OaOnRadioChange
+    
+    ${NSD_CreateRadioButton} 0 40u 100% 12u "Temiz Kurulum (Mevcut sürümü kaldırıp yeniden kurar)"
+    Pop $OaRadio2
+    ${NSD_OnClick} $OaRadio2 OaOnRadioChange
+
+    ${NSD_CreateRadioButton} 0 55u 100% 12u "OpenAnime'i Kaldır"
+    Pop $OaRadio3
+    ${NSD_OnClick} $OaRadio3 OaOnRadioChange
+
+    SendMessage $OaRadio1 ${BM_SETCHECK} ${BST_CHECKED} 0
+  ${Else}
+    ${NSD_CreateRadioButton} 0 25u 100% 12u "Normal Kurulum"
+    Pop $OaRadio1
+    SendMessage $OaRadio1 ${BM_SETCHECK} ${BST_CHECKED} 0
+    EnableWindow $OaRadio1 0 ; Zaten tek seçenek
+    StrCpy $OaInstallMode 1
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 75u 100% 10u "Seçenekler:"
+  Pop $R0
+
+  ${NSD_CreateCheckbox} 10u 85u 100% 12u "Masaüstü kısayolu oluştur"
+  Pop $OaChkShortcut
+  SendMessage $OaChkShortcut ${BM_SETCHECK} ${BST_CHECKED} 0
+
+  ${NSD_CreateCheckbox} 10u 100u 100% 12u "Otomatik günellemeyi etkinleştir"
+  Pop $OaChkAutoUpdate
+  SendMessage $OaChkAutoUpdate ${BM_SETCHECK} ${BST_CHECKED} 0
+
+  nsDialogs::Show
+FunctionEnd
+
+Function OaOnRadioChange
+  Pop $R0 ; HWND
+  ${If} $R0 == $OaRadio1
+    StrCpy $OaInstallMode 1
+  ${ElseIf} $R0 == $OaRadio2
+    StrCpy $OaInstallMode 2
+  ${ElseIf} $R0 == $OaRadio3
+    StrCpy $OaInstallMode 3
   ${EndIf}
 FunctionEnd
-Function PageReinstallUpdateSelection
-  ${NSD_GetState} $R2 $R1
-  ${If} $R1 == ${BST_CHECKED}
-    StrCpy $ReinstallPageCheck 1
+
+Function OaCustomPageLeave
+  ; Eğer kaldırma seçildiyse uninstaller'ı çalıştır ve çık
+  ${If} $OaInstallMode == 3
+    Call OaUninstallPrevious
+    Quit
+  ${EndIf}
+
+  ; Eğer temiz kurulum seçildiyse önce eskisini kaldır
+  ${If} $OaInstallMode == 2
+    Call OaUninstallPrevious
+  ${EndIf}
+
+  ; Kısayol ve Oto-güncelleme seçimlerini kaydet
+  ${NSD_GetState} $OaChkShortcut $NoShortcutMode
+  ${If} $NoShortcutMode == ${BST_UNCHECKED}
+    StrCpy $NoShortcutMode 1
   ${Else}
-    StrCpy $ReinstallPageCheck 2
+    StrCpy $NoShortcutMode 0
   ${EndIf}
+
+  ; Not: OaChkAutoUpdate değeri tauri.conf.json üzerinden yönetiliyor ama
+  ; burada registry'ye bir flag atabiliriz ilerde.
 FunctionEnd
-Function PageLeaveReinstall
-  ${NSD_GetState} $R2 $R1
 
-  ; If migrating from Wix, always uninstall
-  ${If} $WixMode = 1
-    Goto reinst_uninstall
-  ${EndIf}
-
-  ; In update mode, always proceeds without uninstalling
-  ${If} $UpdateMode = 1
-    Goto reinst_done
-  ${EndIf}
-
-  ; $R0 holds whether same(0)/upgrading(1)/downgrading(-1) version
-  ; $R1 holds the radio buttons state:
-  ;   1 => first choice was selected
-  ;   0 => second choice was selected
-  ${If} $R0 = 0 ; Same version, proceed
-    ${If} $R1 = 1              ; User chose to add/reinstall
-      Goto reinst_done
-    ${Else}                    ; User chose to uninstall
-      Goto reinst_uninstall
-    ${EndIf}
-  ${ElseIf} $R0 = 1 ; Upgrading
-    ${If} $R1 = 1              ; User chose to uninstall
-      Goto reinst_uninstall
-    ${Else}
-      Goto reinst_done         ; User chose NOT to uninstall
-    ${EndIf}
-  ${ElseIf} $R0 = -1 ; Downgrading
-    ${If} $R1 = 1              ; User chose to uninstall
-      Goto reinst_uninstall
-    ${Else}
-      Goto reinst_done         ; User chose NOT to uninstall
-    ${EndIf}
-  ${EndIf}
-
-  reinst_uninstall:
-    HideWindow
-    ClearErrors
-
-    ${If} $WixMode = 1
-      ReadRegStr $R1 HKLM "$R6" "UninstallString"
-      ExecWait '$R1' $0
-    ${Else}
-      ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
-      ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
-      ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
-      ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
-      StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
-      ExecWait '$R1' $0
-    ${EndIf}
-
-    BringToFront
-
-    ${IfThen} ${Errors} ${|} StrCpy $0 2 ${|} ; ExecWait failed, set fake exit code
-
-    ${If} $0 <> 0
-    ${OrIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
-      ; User cancelled wix uninstaller? return to select un/reinstall page
-      ${If} $WixMode = 1
-      ${AndIf} $0 = 1602
-        Abort
-      ${EndIf}
-
-      ; User cancelled NSIS uninstaller? return to select un/reinstall page
-      ${If} $0 = 1
-        Abort
-      ${EndIf}
-
-      ; Other errors? show generic error message and return to select un/reinstall page
-      MessageBox MB_ICONEXCLAMATION "$(unableToUninstall)"
-      Abort
-    ${EndIf}
-  reinst_done:
+Function OaUninstallPrevious
+  HideWindow
+  ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+  ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+  StrCpy $R1 "$R1 /UPDATE /P _?=$4"
+  ExecWait '$R1' $0
+  BringToFront
 FunctionEnd
 
 ; 5. Choose install directory page
@@ -399,7 +336,29 @@ Var AppStartMenuFolder
 !insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
 
 ; 7. Installation page
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW OaOnInstFilesShow
 !insertmacro MUI_PAGE_INSTFILES
+
+Function OaOnInstFilesShow
+  ; MUI2'de kurulum sayfasi (INSTFILES) #32770 sinifli bir alt penceredir
+  FindWindow $0 "#32770" "" $HWNDPARENT
+  
+
+  ; 1. Progress bar'i (ID: 1004) gizle
+  GetDlgItem $1 $0 1004
+  ShowWindow $1 0
+  
+  ; 2. Detayli metin kutusunu (ID: 1016) gizle
+  GetDlgItem $1 $0 1016
+  ShowWindow $1 0
+
+  ; Setsuki görseli geçici olarak kaldırıldı (hata ayıklama amaçlı).
+  ; İleride daha sağlam bir yöntemle eklenecektir.
+
+  ; 4. "Kuruluyor" metnini beyaz yap ve guncelle
+  GetDlgItem $1 $0 1006
+  SendMessage $1 ${WM_SETTEXT} 0 "STR:OpenAnime Kuruluyor... Lütfen Bekleyin."
+FunctionEnd
 
 ; 8. Finish page
 ;
@@ -646,6 +605,10 @@ Section WebView2
 SectionEnd
 
 Section Install
+  ; Eski/Yabancı uygulama çakışmalarını temizle (İkon karışma sorunu çözümü)
+  DeleteRegKey HKCR "Applications\OpenAnime.exe"
+  DeleteRegKey HKCR "openanime"
+
   SetOutPath $INSTDIR
 
   !ifmacrodef NSIS_HOOK_PREINSTALL
