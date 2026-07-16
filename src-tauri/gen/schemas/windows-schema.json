@@ -375,6 +375,12 @@
           "markdownDescription": "Allows invoking the open_theme_window command"
         },
         {
+          "description": "JS'in oynatıcı durumunu (video oynuyor mu) Rust'a bildirmesine izin verir. Rust bu bilgiyi pencere odağıyla birleştirip WebView2 bellek hedefi ve EcoQoS kararını verir.",
+          "type": "string",
+          "const": "allow-perf-mode",
+          "markdownDescription": "JS'in oynatıcı durumunu (video oynuyor mu) Rust'a bildirmesine izin verir. Rust bu bilgiyi pencere odağıyla birleştirip WebView2 bellek hedefi ve EcoQoS kararını verir."
+        },
+        {
           "description": "Allows frontend to control local video streaming server (get port, register video routes)",
           "type": "string",
           "const": "allow-read-local-video",

@@ -17,6 +17,20 @@ impl Default for ZoomState {
 
 pub mod logger;
 mod dpi_proxy;
+#[cfg(target_os = "windows")]
+mod perf_mode;
+
+/// Performans modu kararı için paylaşılan durum.
+///
+/// Kural: TAM PERFORMANS yalnızca (video oynuyor VE pencere odakta) iken.
+/// Diğer her durumda (ana sayfa, duraklatılmış video, alt-tab) → VERİMLİLİK.
+#[derive(Default)]
+pub struct PerfState {
+    /// Oynatıcıda video fiilen oynuyor mu (JS bildirir)
+    pub player_playing: Mutex<bool>,
+    /// Herhangi bir pencere odakta mı
+    pub focused: Mutex<bool>,
+}
 
 #[allow(non_snake_case)]
 mod discordRPC;
@@ -131,6 +145,80 @@ fn build_init_script() -> String {
     COMMON_INIT_SCRIPT.to_string()
 }
 
+/// Performans modunu mevcut duruma göre yeniden uygula.
+///
+/// İki mekanizmayı BİRLİKTE ayarlar (farklı şeyleri etkilerler):
+///   SetMemoryUsageTargetLevel → BELLEK   (Chromium cache'lerini atar)
+///   EcoQoS                    → CPU/GÜÇ  (belleği AZALTMAZ)
+#[cfg(target_os = "windows")]
+fn refresh_perf_mode(app: &tauri::AppHandle) {
+    let full_perf = {
+        let st = app.state::<PerfState>();
+        let playing = *st.player_playing.lock().unwrap();
+        let focused = *st.focused.lock().unwrap();
+        playing && focused
+    };
+
+    for (_label, window) in app.webview_windows() {
+        let _ = window.with_webview(move |webview| unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::{
+                ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+            };
+            use windows_core::Interface;
+
+            let controller = webview.controller();
+            if Interface::as_raw(&controller).is_null() {
+                return;
+            }
+            let core_webview = match controller.CoreWebView2() {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+
+            // 1) Bellek hedefi
+            if let Ok(wv19) = core_webview.cast::<ICoreWebView2_19>() {
+                let level = if full_perf {
+                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+                } else {
+                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+                };
+                let _ = wv19.SetMemoryUsageTargetLevel(level);
+            }
+
+            // 2) EcoQoS — WebView2 alt süreçlerini bulmak için browser pid'i al.
+            //    (Süreç ağacından gidilemez; bkz. perf_mode.rs notu.)
+            let mut pid: u32 = 0;
+            if core_webview.BrowserProcessId(&mut pid).is_ok() && pid != 0 {
+                perf_mode::apply_eco_mode(pid, !full_perf);
+            }
+        });
+    }
+}
+
+/// JS bildirir: oynatıcıda video oynuyor mu?
+#[tauri::command]
+fn oa_set_player_playing(playing: bool, app: tauri::AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        {
+            let st = app.state::<PerfState>();
+            let mut p = st.player_playing.lock().unwrap();
+            if *p == playing {
+                return; // durum değişmedi — API'yi boşuna çağırma
+            }
+            *p = playing;
+        }
+        log!("[PerfMode] Video oynuyor = {}", playing);
+        refresh_perf_mode(&app);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (playing, app);
+    }
+}
+
+
 const COMMON_INIT_SCRIPT: &str = concat!(
     "(function () {\nif (window.self !== window.top) {\n  let isBuilder = false;\n  try {\n    isBuilder = window.location.search.includes(\"theme_builder=true\") || sessionStorage.getItem(\"theme_builder_active\") === \"true\";\n  } catch (e) {}\n  if (!isBuilder) return;\n}\n",
 
@@ -141,7 +229,7 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n",
 
     // ──────────────────────────────────────────────
-    // BLOK 2: AĞ ÖNBELLEK & GÖRSEL ÖNBELLEK (fetch override & image proxy cache)
+    // BLOK 2: AĞ ÖNBELLEK & GÖRSEL BOYUTLANDIRMA
     // ──────────────────────────────────────────────
     "{\nconst NETWORK_CACHE_CSS = String.raw`",
     include_str!("js/modules/network-cache.css"),
@@ -149,7 +237,7 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     include_str!("js/modules/network-cache.js"),
     "}\n",
     "{\n",
-    include_str!("js/modules/image-cache.js"),
+    include_str!("js/modules/image-rightsizer.js"),
     "\n}\n",
 
     // ──────────────────────────────────────────────
@@ -199,7 +287,7 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n}\n",
 
     // ──────────────────────────────────────────────
-    // BLOK 6: GÜNCELLEME ARAYÜZÜ (EXACT MATCH ABOUT DIALOG V9)
+    // BLOK 6: GÜNCELLEME ARAYÜZÜ
     // Kendi IIFE bloğu — localStorage + DOM yönetimi
     // ──────────────────────────────────────────────
     "{\n",
@@ -212,6 +300,10 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     include_str!("js/modules/page-recovery.js"),
     "\n",
     include_str!("js/modules/video-optimizer.js"),
+    "\n",
+
+    // Oynatıcı durumunu Rust'a bildirir (performans/verimlilik modu kararı için)
+    include_str!("js/modules/player-perf.js"),
     "\n",
 
     // ──────────────────────────────────────────────
@@ -801,6 +893,7 @@ pub fn run() {
         .manage(discordRPC::DiscordState::new())
         .manage(updater::UpdaterState::new())
         .manage(ZoomState::default())
+        .manage(PerfState::default())
         .manage(local_video_state);
 
     // DPI Proxy manager'ı oluştur (setup'tan önce olmalı)
@@ -963,6 +1056,25 @@ pub fn run() {
             Ok(_window) => {
                 log!("[Setup] ✅ Ana pencere başarıyla oluşturuldu (label: main)");
                 log!("[Setup] WebView URL: https://openani.me/");
+
+                // Periyodik performans modu yenilemesi.
+                // Gerekçe (ölçümle bulundu): WebView2 çalışırken YENİ süreç doğuruyor
+                // — Cloudflare Turnstile iframe'i kendi renderer'ını açıyor ve o süreç
+                // biz modu uyguladıktan SONRA doğduğu için EcoQoS'suz kalıyordu.
+                // Tek seferlik uygulama yetmiyor; 10 sn'de bir yeniden uygula.
+                #[cfg(target_os = "windows")]
+                {
+                    let app_for_perf = app.handle().clone();
+                    std::thread::spawn(move || loop {
+                        std::thread::sleep(std::time::Duration::from_secs(10));
+                        // DOĞRUDAN çağrılır — run_on_main_thread'e SARILMAZ.
+                        // with_webview zaten kendisi ana thread'e dispatch ediyor;
+                        // ana thread'in içinden tekrar dispatch etmek kendi kendine
+                        // kilitlenme yaratıyor (denendi: uygulama donup kapandı).
+                        refresh_perf_mode(&app_for_perf);
+                    });
+                }
+
                 log!("===== OPENANIME SETUP TAMAM =====");
                 Ok(())
             }
@@ -993,40 +1105,18 @@ pub fn run() {
 
             #[cfg(target_os = "windows")]
             {
+                // Odak değişimi tek başına karar vermez — oynatıcı durumuyla
+                // birleştirilip refresh_perf_mode'da değerlendirilir.
+                // (Eskiden burada doğrudan SetMemoryUsageTargetLevel çağrılıyordu;
+                //  artık tek karar noktası var, iki yerde çelişen mantık kalmasın.)
                 if let tauri::WindowEvent::Focused(focused) = event {
-                    let is_focused = *focused;
-                    if let Some(webview_window) = window
-                        .app_handle()
-                        .get_webview_window(window.label())
+                    let app = window.app_handle().clone();
                     {
-                        let _ = webview_window.with_webview(move |webview| {
-                            unsafe {
-                                use webview2_com::Microsoft::Web::WebView2::Win32::{
-                                    ICoreWebView2_19,
-                                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
-                                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
-                                };
-                                use windows_core::Interface;
-
-                                let controller = webview.controller();
-                                if !Interface::as_raw(&controller).is_null() {
-                                    if let Ok(core_webview) = controller.CoreWebView2() {
-                                        if let Ok(webview_19) =
-                                            core_webview.cast::<ICoreWebView2_19>()
-                                        {
-                                            let level = if is_focused {
-                                                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
-                                            } else {
-                                                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
-                                            };
-                                            let _ = webview_19
-                                                .SetMemoryUsageTargetLevel(level);
-                                        }
-                                    }
-                                }
-                            }
-                        });
+                        let st = app.state::<PerfState>();
+                        let mut f = st.focused.lock().unwrap();
+                        *f = *focused;
                     }
+                    refresh_perf_mode(&app);
                 }
             }
         });
@@ -1063,7 +1153,9 @@ pub fn run() {
             // 📄 Dosyanın ilk N baytını oku (IndexedDB dummy blob için)
             read_file_head,
             // JS hata köprüsü (webview console/onerror → terminal log)
-            oa_js_log
+            oa_js_log,
+            // Performans/verimlilik modu — JS oynatıcı durumunu bildirir
+            oa_set_player_playing
         ])
         .run(tauri::generate_context!());
 

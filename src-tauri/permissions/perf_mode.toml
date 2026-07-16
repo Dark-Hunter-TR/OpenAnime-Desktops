@@ -1,0 +1,5 @@
+[[permission]]
+identifier = "allow-perf-mode"
+title = "Performans / Verimlilik Modu"
+description = "JS'in oynatıcı durumunu (video oynuyor mu) Rust'a bildirmesine izin verir. Rust bu bilgiyi pencere odağıyla birleştirip WebView2 bellek hedefi ve EcoQoS kararını verir."
+commands.allow = ["oa_set_player_playing"]

@@ -557,7 +557,7 @@
     applyPlaceholderPatch();
     applyLocalImages();
 
-    // ── MutationObserver (image-cache.js pattern'i) ──
+    // ── MutationObserver ──
     // Svelte re-render sonrası DOM değişirse tekrar uygula
     var _obs = new MutationObserver(function(mutations) {
       for (var m = 0; m < mutations.length; m++) {
@@ -588,7 +588,7 @@
         }
       }
     });
-    // documentElement hazır değilse bekle (tıpkı image-cache.js gibi)
+    // documentElement hazır değilse bekle
     function startObserver() {
       if (document.documentElement) {
         _obs.observe(document.documentElement, {

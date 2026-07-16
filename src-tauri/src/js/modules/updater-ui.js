@@ -12,9 +12,9 @@ if (localStorage.getItem("tauri-updater-channel") === null) {
 }
 
 // Fluent System Icons (fluenticons.co)
-const downloadIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-  <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
-</svg>`;
+const downloadIconSvg = `
+<svg width="24" height="24" fill="none" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M18.25 20.5a.75.75 0 1 1 0 1.5l-13 .004a.75.75 0 1 1 0-1.5l13-.004ZM11.648 2.012l.102-.007a.75.75 0 0 1 .743.648l.007.102-.001 13.685 3.722-3.72a.75.75 0 0 1 .976-.073l.085.073a.75.75 0 0 1 .072.976l-.073.084-4.997 4.997a.75.75 0 0 1-.976.073l-.085-.073-5.003-4.996a.75.75 0 0 1 .976-1.134l.084.072 3.719 3.714L11 2.755a.75.75 0 0 1 .648-.743l.102-.007-.102.007Z" fill="#fff"/></svg>
+`;
 
 // Native expander'lardan Svelte hash'lerini oku
 function getUpdaterSvelteHashes() {
@@ -760,7 +760,7 @@ function showUpdateModal(version, changelog, date) {
   const randomSetsuki = "/setsuki/" + setsukiMascots[Math.floor(Math.random() * setsukiMascots.length)];
 
   overlay.innerHTML = `
-    <div class="content-dialog-container svelte-f1dwd4" style="display: flex !important; flex-direction: row !important; align-items: flex-start !important; justify-content: center !important; position: relative !important; gap: 12px !important;">
+    <div class="content-dialog-container svelte-f1dwd4" style="display: flex !important; flex-direction: row !important; align-items: flex-start !important; justify-content: center !important; position: relative !important; gap: 5px !important;">
       <div class="content-dialog size-max svelte-f1dwd4" role="dialog" aria-modal="true" id="about-dialog" style="transform: translateY(20px); transition: all 0.3s ease;">
         <div class="content-dialog-body svelte-f1dwd4">
           <div id="main" class="fds-theme-dark svelte-cc3kyp">
@@ -797,7 +797,7 @@ function showUpdateModal(version, changelog, date) {
             <div id="buttons" class="svelte-cc3kyp" style="display: flex; justify-content: flex-end; gap: 12px; align-items: center;">
               <button class="button style-secondary svelte-nqc07q" id="update-cancel-btn" tabindex="0" style="cursor: pointer; border-radius: 4px; font-weight: 500; font-family: inherit;">Daha Sonra Hatırlat</button>
               <button class="button style-accent svelte-nqc07q" id="update-confirm-btn" tabindex="0" style="cursor: pointer; border-radius: 4px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; font-family: inherit;">
-                ${downloadIconSvg} İndir ve Kur
+                İndir ve Kur
               </button>
             </div>
           </div>
