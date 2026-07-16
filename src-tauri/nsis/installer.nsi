@@ -369,7 +369,7 @@ Function OaOnInstFilesShow
   System::Call 'user32::CreateWindowEx(i 0, w "Static", w "", i ${SS_BITMAP}|${WS_CHILD}|${WS_VISIBLE}, i 180, i 30, i 300, i 200, p r0, i 1200, p 0, p 0) i.r1'
 
   ; Setsuki görselini ekle (Tauri resources içinden)
-  File "/oname=$PLUGINSDIR\setsuki.bmp" "$INSTDIR\resources\nsis\images\setsuki.bmp"
+  File "/oname=$PLUGINSDIR\setsuki.bmp" "nsis\images\setsuki.bmp"
   System::Call 'user32::LoadImage(i 0, w "$PLUGINSDIR\setsuki.bmp", i ${IMAGE_BITMAP}, i 0, i 0, i ${LR_LOADFROMFILE}) i.r2'
   SendMessage $1 ${STM_SETIMAGE} ${IMAGE_BITMAP} $2
 
