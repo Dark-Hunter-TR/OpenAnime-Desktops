@@ -1,5 +1,5 @@
 {
-  "version": "1.0.2-beta-02",
+  "version": "1.0.2-beta-03",
   "notes": "Beta kanalı güncelleme manifesti. Bu dosya release iş akışı (.github/workflows/release.yml) tarafından beta yayınlarında otomatik güncellenir; elle düzenlemeyin. Sürüm mevcut uygulamayla eşit tutulduğunda güncelleme önerilmez.",
   "pub_date": "2026-07-16T00:00:00Z",
   "platforms": {
