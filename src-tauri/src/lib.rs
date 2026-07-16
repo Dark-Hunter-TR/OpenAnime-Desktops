@@ -21,7 +21,6 @@ mod dpi_proxy;
 #[allow(non_snake_case)]
 mod discordRPC;
 
-mod gpu;
 mod updater;
 mod local_video_server;
 
@@ -602,11 +601,6 @@ async fn apply_theme_css(app: tauri::AppHandle, theme_id: String, css: String) -
     Ok(())
 }
 
-// (Linux native GStreamer/WebGPU overlay komutları — webgpu_state_changed,
-// webgpu_sync_bounds, gst_control_play/pause/seek, install_missing_gstreamer —
-// Linux desteğiyle birlikte kaldırıldı. Windows/macOS webview'ı video ve WebGPU'yu
-// native sağlar; bu köprüye ihtiyaç yoktur.)
-
 /// JS hata köprüsü: webview içindeki console.error/warn, window.onerror ve
 /// unhandledrejection mesajlarını terminal/session loguna akıtır — sahadaki
 /// "sessiz" web tarafı çökmelerinin faili böyle yakalanır. Oturum başına
@@ -717,34 +711,11 @@ async fn read_file_head(path: String, max_bytes: u32) -> Result<Vec<u8>, String>
     Ok(buffer)
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-// catch_unwind ile BİLEREK yakalanan panic'ler (ör. bozuk EGL'de wgpu GL
-// backend init'i) için pahalı backtrace toplama ve crash.log yazımını bastırır.
-// Bastırılmazsa her yakalanan panic terminale korkutucu bir döküm basar ve
-// Backtrace::force_capture maliyeti lag'e katkı yapar.
-thread_local! {
-    static SUPPRESS_PANIC_LOG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// f çalışırken bu thread'de panic hook'un ağır kısmını devre dışı bırakır.
-pub(crate) fn with_suppressed_panic_log<T>(f: impl FnOnce() -> T) -> T {
-    SUPPRESS_PANIC_LOG.with(|c| c.set(true));
-    let result = f();
-    SUPPRESS_PANIC_LOG.with(|c| c.set(false));
-    result
-}
-
 /// Panic mesajı + backtrace'i hem session log'a hem de kalıcı bir crash
 /// dosyasına yazar; "uygulama sessizce çöküyor" raporları böylece kanıtlı gelir.
 fn install_crash_logger() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        // Beklenen/yakalanan panic: tek satır log, backtrace yok, crash.log yok.
-        if SUPPRESS_PANIC_LOG.with(|c| c.get()) {
-            log!("[Panic-Yakalandı] {}", info);
-            return;
-        }
-
         let backtrace = std::backtrace::Backtrace::force_capture();
         let report = format!(
             "===== OPENANIME PANIC =====\n{}\n\nBacktrace:\n{}\n",
@@ -789,6 +760,7 @@ fn show_fatal_startup_error(err: &dyn std::fmt::Display) {
         .show();
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_crash_logger();
 
@@ -1068,13 +1040,6 @@ pub fn run() {
             list_themes,
             load_theme,
             apply_theme_css,
-            // 🖥️ GPU tanılama sistemi (src/gpu/)
-            gpu::gpu_full_report,
-            gpu::gpu_vulkan_status,
-            gpu::gpu_backend_info,
-            gpu::gpu_refresh_report,
-            gpu::gpu_fallback_status,
-            gpu::gpu_activate_fallback,
             logger::get_session_log,
             updater::get_app_version,
             updater::check_for_updates,
