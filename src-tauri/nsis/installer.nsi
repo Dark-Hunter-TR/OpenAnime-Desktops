@@ -495,6 +495,11 @@ Function .onInit
     StrCpy $UpdateMode 1
   ${EndIf}
 
+  ; Online "en son sürüm" bootstrap: eski bir setup.exe interaktif
+  ; çalıştırıldığında, GitHub'daki en son yayın daha yeniyse en son
+  ; setup.exe'yi indirip çalıştırır. Her hata yolunda fail-open.
+  Call CheckOnlineLatest
+
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY
   !endif
@@ -903,6 +908,119 @@ Function RestorePreviousInstallLocation
   ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
   StrCmp $4 "" +2 0
     StrCpy $INSTDIR $4
+FunctionEnd
+
+; ─────────────────────────────────────────────────────────────
+; Online "en son sürüm" bootstrap
+; ─────────────────────────────────────────────────────────────
+; Eski bir setup.exe interaktif (elle) çalıştırıldığında GitHub'daki
+; en son (stable) yayını sorgular; bu setup içindeki gömülü ${VERSION}
+; sürümünden daha yeniyse en son setup.exe'yi indirip çalıştırır ve bu
+; (eski) installer'ı kapatır.
+;
+; Güvenlik / sağlamlık:
+;   * Yalnızca interaktif kurulumda çalışır. Uygulamanın kendi güncelleme
+;     akışında (/UPDATE), passive (/P) veya silent (--auto-update) modda
+;     ATLANIR — böylece Tauri updater ile çakışma ve sonsuz döngü önlenir.
+;   * En son installer'ın ${VERSION}'ı == online sürüm olacağından kendi
+;     kontrolü eşitlik bulur ve yeniden tetiklenmez (döngü yok).
+;   * Fail-open: ağ yok / parse hatası / indirme hatası → sessizce geri
+;     dönülür ve gömülü sürüm normal şekilde kurulur; kurulum ASLA bloklanmaz.
+!define OA_LATEST_MANIFEST_URL "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/latest.json"
+!define OA_RELEASE_DL_BASE "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download"
+!define OA_SETUP_SUFFIX "_${ARCH}-setup.exe"
+
+Var OaOnlineVersion
+Var OaSetupUrl
+
+Function CheckOnlineLatest
+  ; Sadece interaktif kurulumda çalış
+  ${If} $UpdateMode = 1
+    Return
+  ${EndIf}
+  ${If} $PassiveMode = 1
+    Return
+  ${EndIf}
+  ${If} ${Silent}
+    Return
+  ${EndIf}
+
+  ; 1) Manifesti indir (fail-open)
+  Delete "$TEMP\oa_latest.json"
+  NSISdl::download "${OA_LATEST_MANIFEST_URL}" "$TEMP\oa_latest.json"
+  Pop $0
+  ${If} $0 != "success"
+    Return
+  ${EndIf}
+
+  ; 2) "version" alanını çıkar (satır satır tarama; sürüm alanı JSON'un
+  ;    başında olduğundan tek satırlık minified manifestte de bulunur)
+  StrCpy $OaOnlineVersion ""
+  ClearErrors
+  FileOpen $1 "$TEMP\oa_latest.json" r
+  ${If} ${Errors}
+    Return
+  ${EndIf}
+  read_loop:
+    ClearErrors
+    FileRead $1 $2
+    ${If} ${Errors}
+      Goto read_done
+    ${EndIf}
+    ${StrLoc} $3 $2 '"version"' ">"
+    ${If} $3 != ""
+      IntOp $4 $3 + 9              ; "version" (9 karakter) sonrası konum
+      StrCpy $5 $2 "" $4           ; :"1.2.3"... (öncesinde boşluk olabilir)
+      ${StrLoc} $6 $5 '"' ">"      ; değerin açılış tırnağı
+      ${If} $6 != ""
+        IntOp $7 $6 + 1
+        StrCpy $5 $5 "" $7         ; 1.2.3"...
+        ${StrLoc} $6 $5 '"' ">"    ; değerin kapanış tırnağı
+        ${If} $6 != ""
+          StrCpy $OaOnlineVersion $5 $6
+          Goto read_done
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    Goto read_loop
+  read_done:
+  FileClose $1
+  Delete "$TEMP\oa_latest.json"
+
+  ${If} $OaOnlineVersion == ""
+    Return
+  ${EndIf}
+
+  ; 3) Sürüm karşılaştırması: online > gömülü ise devam et
+  nsis_tauri_utils::SemverCompare "$OaOnlineVersion" "${VERSION}"
+  Pop $0
+  ${If} $0 <> 1
+    Return                        ; eşit / daha eski → gömülü sürümü kur
+  ${EndIf}
+
+  ; 4) En son setup.exe URL'sini kur:
+  ;    <base>/v<ver>/<ProductName>_<ver>_<arch>-setup.exe
+  StrCpy $8 "${PRODUCTNAME}_"      ; OpenAnime_
+  StrCpy $8 "$8$OaOnlineVersion"   ; OpenAnime_<ver>
+  StrCpy $9 "${OA_SETUP_SUFFIX}"   ; _<arch>-setup.exe
+  StrCpy $8 "$8$9"                 ; OpenAnime_<ver>_<arch>-setup.exe
+
+  StrCpy $OaSetupUrl "${OA_RELEASE_DL_BASE}/v"
+  StrCpy $OaSetupUrl "$OaSetupUrl$OaOnlineVersion"
+  StrCpy $OaSetupUrl "$OaSetupUrl/$8"
+
+  ; 5) En son installer'ı indir (fail-open)
+  Delete "$TEMP\oa_latest_setup.exe"
+  NSISdl::download "$OaSetupUrl" "$TEMP\oa_latest_setup.exe"
+  Pop $0
+  ${If} $0 != "success"
+    Delete "$TEMP\oa_latest_setup.exe"
+    Return                        ; indirme başarısız → gömülü sürümü kur
+  ${EndIf}
+
+  ; 6) En son installer'ı başlat ve bu (eski) installer'ı kapat
+  Exec '"$TEMP\oa_latest_setup.exe"'
+  Quit
 FunctionEnd
 
 Function Skip
