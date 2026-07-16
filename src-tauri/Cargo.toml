@@ -2,7 +2,7 @@
 name = "openanime"
 version = "1.0.2"
 description = "OpenAnime"
-authors = [".dark_hunter"]
+authors = ["OpenAnime"]
 edition = "2021"
 
 [lib]
