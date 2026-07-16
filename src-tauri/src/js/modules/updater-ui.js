@@ -735,52 +735,89 @@ function showUpdateModal(version, changelog, date) {
 
   const overlay = document.createElement("div");
   overlay.id = "tauri-updater-modal-overlay";
-  overlay.style.cssText = "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.65); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 99999; transition: all 0.3s ease; opacity: 0;";
+  overlay.className = "content-dialog-smoke svelte-f1dwd4 darken";
+  overlay.style.cssText = "position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 9999999 !important; transition: all 0.3s ease; opacity: 0;";
 
-  const modal = document.createElement("div");
-  modal.style.cssText = "background: #141821; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; width: 480px; max-width: 90vw; padding: 28px; box-shadow: 0 12px 40px rgba(0,0,0,0.5); transform: translateY(20px); transition: all 0.3s ease; display: flex; flex-direction: column; gap: 16px;";
+  let parsedDateStr = "";
+  if (date) {
+    let d = new Date(date);
+    if (isNaN(d.getTime())) {
+      const clean = date.replace(" ", "T").replace(/\s+UTC$/, "Z").replace(/\s+[\+\-]\d{2}:?\d{2}$/, "");
+      d = new Date(clean);
+    }
+    if (!isNaN(d.getTime())) {
+      parsedDateStr = d.toLocaleDateString("tr-TR");
+    }
+  }
+  const dateSpan = parsedDateStr ? ` - ${parsedDateStr}` : "";
 
-  const formattedDate = date ? new Date(date).toLocaleDateString("tr-TR") : "";
-  const dateSpan = formattedDate ? `<span style="font-size: 11px; color: var(--fds-text-tertiary, #9ba3b4); font-family: inherit;">${formattedDate}</span>` : "";
+  // Random mascot selection matching "maskot değişiyor hep aynı şekild değil"
+  const setsukiMascots = [
+    "standing.png",
+    "straight-on.png",
+    "leaning.png"
+  ];
+  const randomSetsuki = "/setsuki/" + setsukiMascots[Math.floor(Math.random() * setsukiMascots.length)];
 
-  modal.innerHTML = `
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; font-family: inherit;">
-      <div>
-        <h3 style="font-size: 18px; font-weight: 600; color: #fff; margin: 0; font-family: inherit;">🚀 Yeni Sürüm Mevcut!</h3>
-        <div style="font-size: 13px; color: var(--fds-accent-default, #5865f2); font-weight: 600; margin-top: 4px; font-family: inherit;">Sürüm v${version} ${dateSpan}</div>
+  overlay.innerHTML = `
+    <div class="content-dialog-container svelte-f1dwd4" style="display: flex !important; flex-direction: row !important; align-items: flex-start !important; justify-content: center !important; position: relative !important; gap: 12px !important;">
+      <div class="content-dialog size-max svelte-f1dwd4" role="dialog" aria-modal="true" id="about-dialog" style="transform: translateY(20px); transition: all 0.3s ease;">
+        <div class="content-dialog-body svelte-f1dwd4">
+          <div id="main" class="fds-theme-dark svelte-cc3kyp">
+            <div id="card" class="svelte-cc3kyp">
+              <div class="image-wrapper no-select undefined svelte-zi2j2b loaded" id="logo" style="border-radius: var(--fds-overlay-corner-radius); aspect-ratio: unset;">
+                <img alt="OpenAnime Logo" src="/favicon512_white.png" class="svelte-zi2j2b" style="border-radius: var(--fds-overlay-corner-radius);">
+              </div>
+              <div id="info" class="fds-theme-dark svelte-cc3kyp">
+                <h4 class="text-block type-subtitle svelte-9tjxrp">Yeni Sürüm Mevcut!</h4>
+                <span class="text-block type-caption text-tertiary svelte-9tjxrp">Sürüm v${version}${dateSpan}</span>
+              </div>
+            </div>
+            <div class="image-wrapper no-select undefined svelte-zi2j2b loaded" id="setsuki" style="border-radius: var(--fds-overlay-corner-radius); aspect-ratio: unset;">
+              <img alt="Setsuki" src="${randomSetsuki}" class="svelte-zi2j2b" style="border-radius: var(--fds-overlay-corner-radius);">
+            </div>
+          </div>
+          <div id="content" class="svelte-cc3kyp">
+            <h4 class="text-block type-subtitle svelte-9tjxrp">Sürüm Notları</h4>
+            <span class="text-block type-body text-tertiary svelte-9tjxrp" style="white-space: pre-wrap; font-size: 13px; display: block; max-height: 180px; overflow-y: auto;" id="tauri-updater-changelog-content"></span>
+
+            <!-- Progress Bölümü (İndirme Sırasında) -->
+            <div id="modal-download-progress-panel" style="display: none; background: rgba(0,0,0,0.2); border-radius: 6px; padding: 12px; border: 1px solid rgba(255,255,255,0.03); margin-top: 12px;">
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; font-family: inherit;">
+                <span id="modal-updater-status-text" class="text-block type-body svelte-9tjxrp" style="font-weight: 500;">Güncelleme dosyaları indiriliyor...</span>
+                <span id="modal-updater-percent-text" class="text-block type-body svelte-9tjxrp" style="color: var(--fds-accent-default, #5865f2); font-weight: 600;">0%</span>
+              </div>
+              <div style="width: 100%; height: 5px; background: rgba(255,255,255,0.08); border-radius: 10px; overflow: hidden;">
+                <div id="modal-updater-progress-bar" style="width: 0%; height: 100%; background: var(--fds-accent-default, #5865f2); transition: width 0.1s ease; border-radius: 10px;"></div>
+              </div>
+            </div>
+
+            <hr class="horizontal svelte-cc3kyp">
+            
+            <div id="buttons" class="svelte-cc3kyp" style="display: flex; justify-content: flex-end; gap: 12px; align-items: center;">
+              <button class="button style-secondary svelte-nqc07q" id="update-cancel-btn" tabindex="0" style="cursor: pointer; border-radius: 4px; font-weight: 500; font-family: inherit;">Daha Sonra Hatırlat</button>
+              <button class="button style-accent svelte-nqc07q" id="update-confirm-btn" tabindex="0" style="cursor: pointer; border-radius: 4px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; font-family: inherit;">
+                ${downloadIconSvg} İndir ve Kur
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-    
-    <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04); border-radius: 6px; padding: 14px; max-height: 180px; overflow-y: auto; font-size: 12px; line-height: 1.6; color: rgba(255,255,255,0.85); font-family: inherit;">
-      <div style="font-weight: 600; margin-bottom: 6px; color: #fff;">Sürüm Notları:</div>
-      <div style="white-space: pre-wrap;" id="tauri-updater-changelog-content"></div>
-    </div>
-
-    <!-- Progress Bölümü (İndirme Sırasında) -->
-    <div id="modal-download-progress-panel" style="display: none; background: rgba(0,0,0,0.2); border-radius: 6px; padding: 12px; border: 1px solid rgba(255,255,255,0.03);">
-      <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; font-family: inherit;">
-        <span id="modal-updater-status-text" style="color: #fff; font-weight: 500;">Güncelleme dosyaları indiriliyor...</span>
-        <span id="modal-updater-percent-text" style="color: var(--fds-accent-default, #5865f2); font-weight: 600;">0%</span>
-      </div>
-      <div style="width: 100%; height: 5px; background: rgba(255,255,255,0.08); border-radius: 10px; overflow: hidden;">
-        <div id="modal-updater-progress-bar" style="width: 0%; height: 100%; background: var(--fds-accent-default, #5865f2); transition: width 0.1s ease; border-radius: 10px;"></div>
-      </div>
-    </div>
-    
-    <div style="display: flex; justify-content: flex-end; gap: 12px;" id="modal-actions-panel">
-      <button class="theme-btn-custom secondary" id="update-cancel-btn" style="padding: 8px 18px; border-radius: 4px;">Daha Sonra Hatırlat</button>
-      <button class="theme-btn-custom primary" id="update-confirm-btn" style="padding: 8px 18px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px;">
-        ${downloadIconSvg} İndir ve Kur
+      <button id="close-button" aria-label="Close dialog" tabindex="0" class="svelte-f1dwd4" style="cursor: pointer !important; position: static !important; width: 48px !important; height: 48px !important; display: flex !important; align-items: center !important; justify-content: center !important; flex-shrink: 0 !important;">
+        <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 1024 1024" style="display: block !important;">
+          <path fill="currentColor" d="M512,584.5L87.5,1009C77.5,1019 65.5,1024 51.5,1024C36.8333,1024 24.5833,1019.08 14.75,1009.25C4.91667,999.417 0,987.167 0,972.5C0,958.5 5,946.5 15,936.5L439.5,512L15,87.5C5,77.5 0,65.3334 0,51C0,44 1.33333,37.3334 4,31C6.66667,24.6667 10.3333,19.25 15,14.75C19.6667,10.25 25.1667,6.66669 31.5,4C37.8333,1.33337 44.5,0 51.5,0C65.5,0 77.5,5 87.5,15L512,439.5L936.5,15C946.5,5 958.667,0 973,0C980,0 986.583,1.33337 992.75,4C998.917,6.66669 1004.33,10.3334 1009,15C1013.67,19.6667 1017.33,25.0834 1020,31.25C1022.67,37.4167 1024,44 1024,51C1024,65.3334 1019,77.5 1009,87.5L584.5,512L1009,936.5C1019,946.5 1024,958.5 1024,972.5C1024,979.5 1022.67,986.167 1020,992.5C1017.33,998.833 1013.75,1004.33 1009.25,1009C1004.75,1013.67 999.333,1017.33 993,1020C986.667,1022.67 980,1024 973,1024C958.667,1024 946.5,1019 936.5,1009Z"></path>
+        </svg>
       </button>
     </div>
   `;
 
-  const changelogContent = modal.querySelector("#tauri-updater-changelog-content");
+  const modal = overlay.querySelector("#about-dialog");
+
+  const changelogContent = overlay.querySelector("#tauri-updater-changelog-content");
   if (changelogContent) {
     changelogContent.textContent = changelog || "Herhangi bir sürüm notu bulunmuyor.";
   }
 
-  overlay.appendChild(modal);
   document.body.appendChild(overlay);
 
   setTimeout(() => {
@@ -800,14 +837,22 @@ function showUpdateModal(version, changelog, date) {
     close();
   });
 
+  const closeBtn = overlay.querySelector("#close-button");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => {
+      close();
+    });
+  }
+
   const confirmBtn = overlay.querySelector("#update-confirm-btn");
   confirmBtn.addEventListener("click", async () => {
     isUpdateInProgress = true;
     confirmBtn.disabled = true;
     overlay.querySelector("#update-cancel-btn").disabled = true;
+    if (closeBtn) closeBtn.style.display = "none";
     
-    modal.querySelector("#modal-actions-panel").style.display = "none";
-    modal.querySelector("#modal-download-progress-panel").style.display = "block";
+    overlay.querySelector("#buttons").style.display = "none";
+    overlay.querySelector("#modal-download-progress-panel").style.display = "block";
 
     try {
       await window.__TAURI__.core.invoke("start_update_download");
@@ -816,13 +861,14 @@ function showUpdateModal(version, changelog, date) {
       isUpdateInProgress = false;
       confirmBtn.disabled = false;
       overlay.querySelector("#update-cancel-btn").disabled = false;
-      modal.querySelector("#modal-actions-panel").style.display = "flex";
-      modal.querySelector("#modal-download-progress-panel").style.display = "none";
+      if (closeBtn) closeBtn.style.display = "flex";
+      overlay.querySelector("#buttons").style.display = "flex";
+      overlay.querySelector("#modal-download-progress-panel").style.display = "none";
       alert("İndirme işlemi başlatılamadı: " + e);
     }
   });
 
-  setupProgressListener(modal);
+  setupProgressListener(overlay);
 }
 
 function setupProgressListener(modalElement = null) {
@@ -898,6 +944,9 @@ async function checkAutoUpdateOnStartup() {
     }
   }, 3500);
 }
+
+// Test/Debug Helper: Expose update modal to window for console testing
+window.__showUpdateModalTest = showUpdateModal;
 
 // Start progress listener and startup check directly
 setupProgressListener();

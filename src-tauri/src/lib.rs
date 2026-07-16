@@ -199,7 +199,7 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n}\n",
 
     // ──────────────────────────────────────────────
-    // BLOK 6: GÜNCELLEME ARAYÜZÜ (Discord'dan ayrı)
+    // BLOK 6: GÜNCELLEME ARAYÜZÜ (EXACT MATCH ABOUT DIALOG V9)
     // Kendi IIFE bloğu — localStorage + DOM yönetimi
     // ──────────────────────────────────────────────
     "{\n",
