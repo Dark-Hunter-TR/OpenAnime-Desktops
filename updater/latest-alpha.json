@@ -1,7 +1,7 @@
 {
   "version": "1.0.2-beta-02",
   "notes": "Alpha kanalı güncelleme manifesti. Bu dosya release iş akışı (.github/workflows/release.yml) tarafından alpha yayınlarında otomatik güncellenir; elle düzenlemeyin. Sürüm mevcut uygulamayla eşit tutulduğunda güncelleme önerilmez.",
-  "pub_date": "2024-01-01T00:00:00Z",
+  "pub_date": "2026-07-16T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "",
