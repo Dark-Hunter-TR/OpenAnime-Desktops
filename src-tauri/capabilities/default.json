@@ -36,7 +36,6 @@
     "allow-dpi-proxy",
     "allow-session-log",
     "allow-read-local-video",
-    "allow-gpu-diagnostics",
     "allow-updater"
   ]
 }
