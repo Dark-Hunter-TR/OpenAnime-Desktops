@@ -177,14 +177,6 @@ async fn compute_macos_report() -> FullGpuReport {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GPU ortam yapılandırması (Linux desteği kaldırıldı — no-op)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Eski Linux GPU ortam-değişkeni yapılandırmasının yerini tutan no-op.
-/// Windows (WebView2) ve macOS (WKWebView) yollarında ayara gerek yoktur.
-pub fn configure_linux_gpu_env() {}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Tauri Komutları
 // ─────────────────────────────────────────────────────────────────────────────
 

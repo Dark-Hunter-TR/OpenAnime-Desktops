@@ -79,19 +79,17 @@ impl std::fmt::Display for GpuVendor {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Aktif display server protokolü.
+/// (Windows/macOS'ta anlamı yoktur; rapor şekli korunsun diye tutulur ve
+/// her zaman `Unknown` olur.)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayServer {
-    Wayland,
-    X11,
     Unknown,
 }
 
 impl DisplayServer {
     pub fn as_str(&self) -> &'static str {
         match self {
-            DisplayServer::Wayland => "Wayland",
-            DisplayServer::X11 => "X11",
             DisplayServer::Unknown => "Unknown",
         }
     }
@@ -412,54 +410,3 @@ impl LogEntry {
 // ─────────────────────────────────────────────────────────────────────────────
 // IntelDriverType
 // ─────────────────────────────────────────────────────────────────────────────
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Linux Distribution
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Tespit edilen Linux dağıtımı — paket önerileri için kullanılır.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LinuxDistro {
-    Arch,
-    Manjaro,
-    EndeavourOs,
-    Fedora,
-    Ubuntu,
-    Debian,
-    Mint,
-    PopOs,
-    OpenSuse,
-    NixOs,
-    Unknown(String),
-}
-
-impl LinuxDistro {
-    pub fn from_id(id: &str) -> Self {
-        match id.trim().to_lowercase().as_str() {
-            "arch" => LinuxDistro::Arch,
-            "manjaro" => LinuxDistro::Manjaro,
-            "endeavouros" => LinuxDistro::EndeavourOs,
-            "fedora" => LinuxDistro::Fedora,
-            "ubuntu" => LinuxDistro::Ubuntu,
-            "debian" => LinuxDistro::Debian,
-            "linuxmint" | "mint" => LinuxDistro::Mint,
-            "pop" | "pop-os" => LinuxDistro::PopOs,
-            "opensuse" | "opensuse-leap" | "opensuse-tumbleweed" => LinuxDistro::OpenSuse,
-            "nixos" => LinuxDistro::NixOs,
-            other => LinuxDistro::Unknown(other.to_string()),
-        }
-    }
-
-    /// Arch tabanlı dağıtımlar için paket yöneticisi pacman
-    pub fn pkg_manager(&self) -> &'static str {
-        match self {
-            LinuxDistro::Arch | LinuxDistro::Manjaro | LinuxDistro::EndeavourOs => "pacman",
-            LinuxDistro::Fedora => "dnf",
-            LinuxDistro::Ubuntu | LinuxDistro::Debian | LinuxDistro::Mint | LinuxDistro::PopOs => "apt",
-            LinuxDistro::OpenSuse => "zypper",
-            LinuxDistro::NixOs => "nix",
-            LinuxDistro::Unknown(_) => "unknown",
-        }
-    }
-}
