@@ -23,6 +23,9 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
+    "resources": [
+      "nsis/images/setsuki.bmp"
+    ],
     "windows": {
       "nsis": {
         "languages": ["Turkish"],
