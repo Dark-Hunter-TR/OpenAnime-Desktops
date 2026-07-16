@@ -66,7 +66,7 @@ pub async fn check_for_updates(
         match channel.to_lowercase().as_str() {
             "beta" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-beta.json".to_string(),
             "alpha" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-alpha.json".to_string(),
-            _ => "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/latest.json".to_string(),
+            _ => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-stable.json".to_string(),
         }
     };
 

@@ -200,7 +200,7 @@ jobs:
   # ────────────────────────────────────────────────────
   update-channel-manifest:
     needs: merge-updater-manifest
-    if: ${{ inputs.channel != 'stable' && inputs.draft == 'false' }}
+    if: ${{ inputs.draft == 'false' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
