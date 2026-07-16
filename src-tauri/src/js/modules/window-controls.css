@@ -2,16 +2,27 @@
 /* Platform classes: .platform-windows | .platform-macos */
 
 /* ── Design tokens ── */
+/* Renkler sitenin KENDİ FDS token'larından türetilir; böylece açık/koyu tema
+ * geçişinde butonlar kendiliğinden uyar. Eskiden beyaz sabit yazılıydı ve
+ * açık temada ikonlar beyaz zeminde kaybolıyordu.
+ *
+ * Site bu token'ları .fds-theme-light / :root altında yeniden tanımlıyor
+ * (doğrulandı: --fds-text-primary koyuda beyaz, açıkta ~%90 siyah).
+ *
+ * var() yedekleri KOYU tema değerleridir: site bir gün token'ı kaldırırsa
+ * buton bugünkü görünümüne döner, kaybolmaz. */
 .tauri-window-controls {
   --wc-icon-size: 16px;
   --wc-icon-stroke: 1;
-  --wc-icon-color: rgba(255, 255, 255, 0.85);
-  --wc-icon-color-hover: #ffffff;
+  --wc-icon-color: var(--fds-text-secondary, rgba(255, 255, 255, 0.85));
+  --wc-icon-color-hover: var(--fds-text-primary, #ffffff);
   --wc-btn-width: 46px;
   --wc-btn-height: 36px;
   --wc-btn-bg: transparent;
-  --wc-btn-bg-hover: rgba(255, 255, 255, 0.08);
-  --wc-btn-bg-active: rgba(255, 255, 255, 0.04);
+  --wc-btn-bg-hover: var(--fds-subtle-fill-secondary, rgba(255, 255, 255, 0.08));
+  --wc-btn-bg-active: var(--fds-subtle-fill-tertiary, rgba(255, 255, 255, 0.04));
+  /* Kapat butonu her iki temada da kırmızı zemin + beyaz ikon — Windows
+   * standardı ve kırmızı zemin koyu olduğu için temaya bağlı değil. */
   --wc-close-bg-hover: #c42b1c;
   --wc-close-bg-active: rgba(196, 43, 28, 0.72);
   --wc-transition: 180ms cubic-bezier(0.4, 0, 0.2, 1);
