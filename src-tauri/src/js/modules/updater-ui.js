@@ -675,7 +675,7 @@ function bindSettingsCardEvents(card, hashes) {
       
       try {
         const channel = localStorage.getItem("tauri-updater-channel") || "release";
-        const res = await window.__TAURI__.core.invoke("check_for_updates", { channel });
+        const res = await window.__TAURI__.core.invoke("check_for_updates", { channel, force: true });
         
         if (res.available) {
           showUpdateModal(res.version, res.body, res.date);

@@ -40,22 +40,24 @@ pub async fn check_for_updates(
     state: tauri::State<'_, UpdaterState>,
     channel: String,
     target_version: Option<String>,
+    force: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let is_rollback = target_version.is_some();
+    let is_force = force.unwrap_or(false);
     
-    // 1. Cache Kontrolü (Rollback değilse ve 5 dakika geçerliyse)
-    if !is_rollback {
+    // 1. Cache Kontrolü (Rollback veya Force değilse ve 5 dakika geçerliyse)
+    if !is_rollback && !is_force {
         let cache_lock = state.cache.lock().unwrap();
         if let Some((instant, cached_channel, data)) = &*cache_lock {
             if instant.elapsed() < Duration::from_secs(300) && cached_channel == &channel {
-                println!("[Updater] Returning cached update manifest for channel: {}", channel);
+                crate::log!("[Updater] Returning cached update manifest for channel: {}", channel);
                 return Ok(data.clone());
             }
         }
     }
 
     // 2. Kanal / Hedef Sürüm URL'sini belirleme
-    let url = if let Some(version) = &target_version {
+    let mut url = if let Some(version) = &target_version {
         format!(
             "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/{}/latest.json",
             version
@@ -68,9 +70,17 @@ pub async fn check_for_updates(
         }
     };
 
-    println!(
-        "[Updater] Checking updates on URL: {} (Rollback: {})",
-        url, is_rollback
+    if is_force && url.contains("raw.githubusercontent.com") {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        url = format!("{}?t={}", url, timestamp);
+    }
+
+    crate::log!(
+        "[Updater] Checking updates on URL: {} (Rollback: {}, Force: {})",
+        url, is_rollback, is_force
     );
 
     // 3. Tauri Updater Builder yapılandırması
@@ -82,19 +92,16 @@ pub async fn check_for_updates(
     // Eğer rollback yapılıyorsa, sürüm karşılaştırmasını bypass edip her zaman güncellemeye izin ver
     if is_rollback {
         builder = builder.version_comparator(|_current, _remote| {
-            println!("[Updater] Rollback active, version comparison bypassed.");
+            crate::log!("[Updater] Rollback active, version comparison bypassed.");
             true
         });
     }
 
     let updater = builder.build().map_err(|e| format!("Updater Build Hatası: {}", e))?;
-    let update_result = match updater.check().await {
-        Ok(res) => res,
-        Err(e) => {
-            println!("[Updater] Güncelleme sorgusu başarısız (sürüm henüz yayınlanmamış veya ağ bağlantısı yok olabilir): {}", e);
-            None
-        }
-    };
+    let update_result = updater.check().await.map_err(|e| {
+        crate::log!("[Updater] Güncelleme sorgusu başarısız: {}", e);
+        format!("Güncelleme kontrolü başarısız: {}", e)
+    })?;
 
     let response = if let Some(update) = update_result {
         // Rust state'ine bu update'i kaydet (indirme/kurulum için kullanılacak)
@@ -115,8 +122,8 @@ pub async fn check_for_updates(
         })
     };
 
-    // Cache'le (sadece normal güncellemeler için)
-    if !is_rollback {
+    // Cache'le (sadece normal ve force olmayan durumlar için)
+    if !is_rollback && !is_force {
         let mut cache_lock = state.cache.lock().unwrap();
         *cache_lock = Some((Instant::now(), channel, response.clone()));
     }
@@ -182,7 +189,7 @@ pub async fn start_update_download(
                 }));
             },
             move || {
-                println!("[Updater] Download completed, invoking silent install...");
+                crate::log!("[Updater] Download completed, invoking silent install...");
             }
         ).await;
 
@@ -198,10 +205,10 @@ pub async fn start_update_download(
                     "status": "success",
                     "percent": 100
                 }));
-                println!("[Updater] Update finished successfully. App should exit now.");
+                crate::log!("[Updater] Update finished successfully. App should exit now.");
             }
             Err(e) => {
-                eprintln!("[Updater] Güncelleme hatası: {}", e);
+                crate::log!("[Updater] Güncelleme hatası: {}", e);
                 let _ = app_c.emit("openanime://update-progress", serde_json::json!({
                     "status": "error",
                     "message": format!("Güncelleme başarısız: {}", e)

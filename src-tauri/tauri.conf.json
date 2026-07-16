@@ -32,7 +32,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRBNzQ0NTYxNzA2RTVCM0MKUldROFcyNXdZVVYwU213TEI0ZUE5TzArL29FVDNkV1pnOStMVWlrYXUra1A5MGJ5R1hnMjQ0ckIK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwNjMxODk2QTdEQjVEQzgKUldUSVhkdW5saGhqb1BtZU9IQ2VkN3V1dUQ3bVFRTDhkV0YzYlVPY09JZXF1cHlmWjg1UkJlVTYK",
       "endpoints": [
         "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/latest.json"
       ]
