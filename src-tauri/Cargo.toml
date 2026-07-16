@@ -1,6 +1,6 @@
 [package]
 name = "openanime"
-version = "1.0.2-beta-02"
+version = "1.0.2"
 description = "OpenAnime"
 authors = [".dark_hunter"]
 edition = "2021"

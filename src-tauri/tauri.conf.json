@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OpenAnime",
-  "version": "1.0.2-beta-02",
+  "version": "1.0.2",
   "identifier": "com.darkhunter.openanime-desktops",
   "build": {
     "beforeDevCommand": "bun run dev",

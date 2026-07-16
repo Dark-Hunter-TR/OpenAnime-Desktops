@@ -1,15 +1,15 @@
 {
-  "version": "1.0.2-beta-02",
+  "version": "1.0.3-beta-01",
   "notes": "Beta kanalı güncelleme manifesti. Bu dosya release iş akışı (.github/workflows/release.yml) tarafından beta yayınlarında otomatik güncellenir; elle düzenlemeyin. Sürüm mevcut uygulamayla eşit tutulduğunda güncelleme önerilmez.",
   "pub_date": "2026-07-16T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "",
-      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.0.2-beta-02/OpenAnime_1.0.2-beta-02_x64-setup.exe"
+      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.0.3-beta-01/OpenAnime_1.0.3-beta-01_x64-setup.exe"
     },
     "darwin-aarch64": {
       "signature": "",
-      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.0.2-beta-02/OpenAnime_aarch64.app.tar.gz"
+      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.0.3-beta-01/OpenAnime_aarch64.app.tar.gz"
     }
   }
 }
