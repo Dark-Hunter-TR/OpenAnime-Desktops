@@ -5,10 +5,7 @@
 // etiketli bir placeholder'dır (işlevsellik yok). İleride OpenAnime bildirim
 // sistemini okuyup masaüstü toast bildirimleri gönderecek (hesap girişi şart).
 
-// Fluent System — çan (bildirim) ikonu
-const superNotifBellIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-  <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5S10.5 3.17 10.5 4v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
-</svg>`;
+const superNotifBellIconSvg = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 1.996a7.49 7.49 0 0 1 7.496 7.25l.004.25v4.097l1.38 3.156a1.25 1.25 0 0 1-1.145 1.75L15 18.502a3 3 0 0 1-5.995.177L9 18.499H4.275a1.251 1.251 0 0 1-1.147-1.747L4.5 13.594V9.496c0-4.155 3.352-7.5 7.5-7.5ZM13.5 18.5l-3 .002a1.5 1.5 0 0 0 2.993.145l.006-.147ZM12 3.496c-3.32 0-6 2.674-6 6v4.41L4.656 17h14.697L18 13.907V9.509l-.004-.225A5.988 5.988 0 0 0 12 3.496Z" fill="#fff"/></svg>`;
 
 function buildSuperNotifCardHTML(hashes) {
   const {
@@ -52,8 +49,6 @@ function buildSuperNotifCardHTML(hashes) {
   `;
 }
 
-// Discord RPC kartı için hesaplanmış Svelte hash'lerini paylaşır; yoksa
-// güvenli fallback kullanır (updater-ui ile aynı değerler).
 function getSuperNotifHashes() {
   if (window.__tauriSettingsHashes) return window.__tauriSettingsHashes;
   return {
@@ -72,7 +67,6 @@ function getSuperNotifHashes() {
 function injectSuperNotificationsSetting() {
   if (document.getElementById("tauri-super-notifications-setting")) return;
 
-  // Discord RPC kartının altına yerleşir — önce o enjekte edilmiş olmalı.
   const discordCard = document.getElementById("tauri-discord-rpc-setting");
   if (!discordCard) return;
 
@@ -84,12 +78,7 @@ function injectSuperNotificationsSetting() {
   card.id = "tauri-super-notifications-setting";
   card.className = `expander direction-down space-between ${expanderHash}`;
   card.setAttribute("role", "region");
-  // Devre dışı görünüm — tüm kart hafifçe soluk
   card.style.opacity = "0.9";
   card.innerHTML = buildSuperNotifCardHTML(hashes);
-
-  // Discord kartının hemen ardına (güncelleyici kartının üstüne) yerleştir.
   discordCard.after(card);
-
-  // Placeholder: hiçbir etkileşim yok — toggle disabled, olay bağlanmaz.
 }
