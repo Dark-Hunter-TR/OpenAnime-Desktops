@@ -384,6 +384,10 @@ impl DiscordState {
                                     .details(&details_str)
                                     .state(&state_str);
 
+                                if page == AppPage::Watch {
+                                    activity = activity.activity_type(activity::ActivityType::Watching);
+                                }
+
 
                                 let mut assets = activity::Assets::new();
                                 let mut has_assets = false;
@@ -529,6 +533,10 @@ impl DiscordState {
                                 let mut safe_activity = activity::Activity::new()
                                     .details(&details_str)
                                     .state(&state_str);
+                                
+                                if page == AppPage::Watch {
+                                    safe_activity = safe_activity.activity_type(activity::ActivityType::Watching);
+                                }
                                 
                                 if let Some(ts) = timestamps {
                                     safe_activity = safe_activity.timestamps(ts);
