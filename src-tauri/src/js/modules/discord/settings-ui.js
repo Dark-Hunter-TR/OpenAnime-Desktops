@@ -144,11 +144,17 @@ function tryInjectSettings() {
   if (window.location.pathname.includes("/settings")) {
     startSettingsObserver();
     injectDiscordRpcSetting();
+    if (typeof injectSuperNotificationsSetting === "function") {
+      injectSuperNotificationsSetting();
+    }
     if (typeof injectUpdaterSetting === "function") {
       injectUpdaterSetting();
     }
     setTimeout(() => {
       injectDiscordRpcSetting();
+      if (typeof injectSuperNotificationsSetting === "function") {
+        injectSuperNotificationsSetting();
+      }
       if (typeof injectUpdaterSetting === "function") {
         injectUpdaterSetting();
       }
@@ -166,13 +172,17 @@ function startSettingsObserver() {
 
   settingsObserver = new MutationObserver(() => {
     const hasRpc = !!document.getElementById("tauri-discord-rpc-setting");
+    const hasSuper = !!document.getElementById("tauri-super-notifications-setting");
     const hasUpdater = !!document.getElementById("tauri-updater-settings-card");
 
-    if (hasRpc && hasUpdater) return;
+    if (hasRpc && hasSuper && hasUpdater) return;
 
     if (window.location.pathname.includes("/settings")) {
       if (!hasRpc) {
         injectDiscordRpcSetting();
+      }
+      if (!hasSuper && typeof injectSuperNotificationsSetting === "function") {
+        injectSuperNotificationsSetting();
       }
       if (!hasUpdater && typeof injectUpdaterSetting === "function") {
         injectUpdaterSetting();
@@ -187,6 +197,9 @@ function startSettingsObserver() {
 
   if (window.location.pathname.includes("/settings")) {
     injectDiscordRpcSetting();
+    if (typeof injectSuperNotificationsSetting === "function") {
+      injectSuperNotificationsSetting();
+    }
     if (typeof injectUpdaterSetting === "function") {
       injectUpdaterSetting();
     }

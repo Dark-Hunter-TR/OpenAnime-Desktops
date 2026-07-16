@@ -426,8 +426,10 @@ function injectUpdaterSetting() {
   settingsCard.className = `expander direction-down space-between ${hashes.expanderHash}`;
   settingsCard.setAttribute("role", "region");
 
-  // Discord RPC kartının ardına enjekte et
-  discordCard.after(settingsCard);
+  // Süper Bildirimler kartı varsa onun ardına, yoksa Discord RPC kartının
+  // ardına enjekte et (sıra: Discord RPC → Süper Bildirimler → Güncelleme).
+  const updaterAnchor = document.getElementById("tauri-super-notifications-setting") || discordCard;
+  updaterAnchor.after(settingsCard);
 
   // Kart HTML Oluşturma ve Olayları Bağlama
   const isEnabled = localStorage.getItem("tauri-updater-auto-check") !== "false";

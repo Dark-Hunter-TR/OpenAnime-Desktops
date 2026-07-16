@@ -191,6 +191,14 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n}\n",
 
     // ──────────────────────────────────────────────
+    // BLOK 5B: SÜPER BİLDİRİMLER (Ayar placeholder — "Yakında")
+    // Discord RPC kartının altına devre dışı bir ayar kartı ekler.
+    // ──────────────────────────────────────────────
+    "{\n",
+    include_str!("js/modules/super-notifications-ui.js"),
+    "\n}\n",
+
+    // ──────────────────────────────────────────────
     // BLOK 6: GÜNCELLEME ARAYÜZÜ (Discord'dan ayrı)
     // Kendi IIFE bloğu — localStorage + DOM yönetimi
     // ──────────────────────────────────────────────
