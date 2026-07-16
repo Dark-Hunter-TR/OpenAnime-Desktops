@@ -1,7 +1,7 @@
 {
   "version": "1.0.2",
   "notes": "Stable kanalı güncelleme manifesti.",
-  "pub_date": "2026-06-17T00:00:00Z",
+  "pub_date": "2026-06-19T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "",
