@@ -121,15 +121,85 @@ jobs:
           prerelease: ${{ inputs.channel != 'stable' }}
           args: ${{ matrix.args }} --verbose
 
+      - name: Save updater manifest artifact
+        run: |
+          if [ -f src-tauri/target/release/bundle/updater/latest.json ]; then
+            cp src-tauri/target/release/bundle/updater/latest.json latest-${{ matrix.platform }}.json
+          elif [ -f target/release/bundle/updater/latest.json ]; then
+            cp target/release/bundle/updater/latest.json latest-${{ matrix.platform }}.json
+          else
+            echo "Updater manifest not found (signing key might be missing)."
+          fi
+        shell: bash
+
+      - name: Upload updater manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-${{ matrix.platform }}
+          path: latest-${{ matrix.platform }}.json
+          if-no-files-found: ignore
+
   # ────────────────────────────────────────────────────
-  # 5. Kanal manifestini güncelle (beta/alpha)
-  #    updater.rs beta/alpha kanalları için
-  #    updater/latest-<channel>.json dosyalarını okur.
+  # 5. Farklı platformların latest.json dosyalarını birleştir
+  # ────────────────────────────────────────────────────
+  merge-updater-manifest:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: latest-*
+          merge-multiple: true
+
+      - name: Merge updater manifests
+        run: |
+          node -e '
+            const fs = require("fs");
+            let merged = {
+              version: "",
+              notes: "",
+              pub_date: "",
+              platforms: {}
+            };
+            const files = fs.readdirSync(".").filter(f => f.startsWith("latest-") && f.endsWith(".json"));
+            for (const file of files) {
+              try {
+                const data = JSON.parse(fs.readFileSync(file, "utf8"));
+                merged.version = data.version || merged.version;
+                merged.notes = data.notes || merged.notes;
+                merged.pub_date = data.pub_date || merged.pub_date;
+                if (data.platforms) {
+                  merged.platforms = { ...merged.platforms, ...data.platforms };
+                }
+              } catch (e) {
+                console.error("Error reading file", file, e);
+              }
+            }
+            if (Object.keys(merged.platforms).length > 0) {
+              fs.writeFileSync("latest.json", JSON.stringify(merged, null, 2));
+              console.log("Merged manifest created:", JSON.stringify(merged, null, 2));
+            } else {
+              console.log("No platform manifests found to merge.");
+              process.exit(1);
+            }
+          '
+
+      - name: Upload combined latest.json to Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "v${{ inputs.version }}" latest.json --clobber --repo "${{ github.repository }}"
+
+  # ────────────────────────────────────────────────────
+  # 6. Kanal manifestini güncelle (beta/alpha)
   #    Yayınlanan latest.json'u bu dosyaya kopyalayıp main'e commit'ler.
   #    Sadece draft OLMAYAN beta/alpha yayınlarında çalışır.
   # ────────────────────────────────────────────────────
   update-channel-manifest:
-    needs: publish
+    needs: merge-updater-manifest
     if: ${{ inputs.channel != 'stable' && inputs.draft == 'false' }}
     runs-on: ubuntu-latest
     permissions:

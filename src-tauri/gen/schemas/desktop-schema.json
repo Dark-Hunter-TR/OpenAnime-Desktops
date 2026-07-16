@@ -363,18 +363,6 @@
           "markdownDescription": "Allows the frontend to invoke the fetch_css command"
         },
         {
-          "description": "Allows invoking GPU/GStreamer diagnostics and report commands",
-          "type": "string",
-          "const": "allow-gpu-diagnostics",
-          "markdownDescription": "Allows invoking GPU/GStreamer diagnostics and report commands"
-        },
-        {
-          "description": "Allows invoking native video player and GStreamer transport control commands (Linux native render overlay)",
-          "type": "string",
-          "const": "allow-native-render",
-          "markdownDescription": "Allows invoking native video player and GStreamer transport control commands (Linux native render overlay)"
-        },
-        {
           "description": "Allows invoking the open_new_window command",
           "type": "string",
           "const": "allow-open-new-window",
@@ -411,10 +399,10 @@
           "markdownDescription": "Tema oluşturma, yükleme, silme komutlarına izin verir"
         },
         {
-          "description": "Allows invoking the WebGPU IPC bridge commands (Linux WebGPU shim: adapter/device/buffer/texture/pipeline/canvas)",
+          "description": "Uygulama içi güncelleyici komutlarına izin verir (sürüm sorgu, güncelleme denetimi, indirme/kurulum)",
           "type": "string",
-          "const": "allow-webgpu-bridge",
-          "markdownDescription": "Allows invoking the WebGPU IPC bridge commands (Linux WebGPU shim: adapter/device/buffer/texture/pipeline/canvas)"
+          "const": "allow-updater",
+          "markdownDescription": "Uygulama içi güncelleyici komutlarına izin verir (sürüm sorgu, güncelleme denetimi, indirme/kurulum)"
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
