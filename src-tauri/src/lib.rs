@@ -775,7 +775,7 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     {
         setup_windows_gpu_preference();
-        let app_id = "com.darkhunter.openanime-desktops";
+        let app_id = "com.openanime.desktop";
         let wide_id: Vec<u16> = app_id
             .encode_utf16()
             .chain(std::iter::once(0))
