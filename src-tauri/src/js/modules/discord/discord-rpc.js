@@ -171,6 +171,9 @@ async function updatePresenceFromDOM() {
     return;
   }
 
+  // Görünürlük ayarı: watch_only modunda sadece anime izlenirken aktif
+  const visibilityMode = localStorage.getItem("tauri-discord-rpc-visibility") || "everything";
+
   const href = window.location.href;
   const title = document.title;
 
@@ -412,6 +415,19 @@ async function updatePresenceFromDOM() {
         metadata = {};
       }
       metadata.userProfileUrl = userProfileUrl;
+    }
+
+    // watch_only modunda sadece izleme sayfasında presence gönder
+    if (visibilityMode === "watch_only" && page !== "watch") {
+      try {
+        await window.__TAURI__.core.invoke("clear_discord_presence");
+      } catch (e) {}
+      lastHref = href;
+      lastTitle = "";
+      lastVideoPresence = hasVideo;
+      lastVideoPaused = isVideoPaused;
+      lastSentVideoTime = currentVideoTime;
+      return;
     }
 
     await window.__TAURI__.core.invoke("update_discord_presence", { page, metadata, windowLabel: getWindowLabel() });
