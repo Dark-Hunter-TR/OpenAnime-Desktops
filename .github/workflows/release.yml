@@ -121,13 +121,16 @@ jobs:
       - name: Calculate & Update Version
         id: versioning
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
           node -e '
             const fs = require("fs");
             const { execSync } = require("child_process");
             
-            let finalVersion = "${{ inputs.version }}".trim();
-            const channel = "${{ inputs.channel }}";
+            let finalVersion = process.env.INPUT_VERSION ? process.env.INPUT_VERSION.trim() : "";
+            const channel = process.env.INPUT_CHANNEL || "beta";
             
             if (!finalVersion) {
               console.log("Sürüm girilmedi, yerel git tag geçmişi taranıyor...");
@@ -182,9 +185,9 @@ jobs:
             
             console.log("UYGULANACAK SÜRÜM:", finalVersion);
             
-            // Sonraki adımlar için hem GITHUB_ENV hem de GITHUB_OUTPUT'a kaydet
-            fs.appendFileSync(process.env.GITHUB_ENV, `APP_VERSION=${finalVersion}\n`);
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${finalVersion}\n`);
+            // Sonraki adımlar için hem GITHUB_ENV hem de GITHUB_OUTPUTya kaydet
+            fs.appendFileSync(process.env.GITHUB_ENV, "APP_VERSION=" + finalVersion + "\n");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "version=" + finalVersion + "\n");
             
             // 1. package.json geçici güncelle
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
@@ -200,10 +203,19 @@ jobs:
             
             // 3. Cargo.toml geçici güncelle
             let cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
-            cargo = cargo.replace(/^version = ".*"/m, `version = "${finalVersion}"`);
+            cargo = cargo.replace(/^version = ".*"/m, "version = \"" + finalVersion + "\"");
             fs.writeFileSync("src-tauri/Cargo.toml", cargo);
             console.log("Cargo.toml geçici olarak güncellendi.");
           '
+
+      - name: Print Version Summary
+        shell: bash
+        run: |
+          echo "### 🚀 Sürüm Otomasyonu Bilgisi" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kanal:** ${{ inputs.channel }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Belirlenen Sürüm:** \`v$APP_VERSION\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Derleme Tipi:** ${{ inputs.build_mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Draft Durumu:** ${{ inputs.draft }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Install frontend dependencies
         run: bun install
