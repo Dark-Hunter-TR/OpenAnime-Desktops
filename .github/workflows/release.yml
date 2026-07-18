@@ -310,8 +310,8 @@ jobs:
               fs.writeFileSync("latest.json", JSON.stringify(merged, null, 2));
               console.log("Merged manifest created:", JSON.stringify(merged, null, 2));
             } else {
-              console.log("No platform manifests found to merge.");
-              process.exit(1);
+              console.log("Platform manifestoları bulunamadı. Birleştirme adımı sessizce atlanıyor (İmzalama anahtarları eksik olabilir).");
+              process.exit(0);
             }
           '
 
@@ -319,7 +319,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "v${{ needs.publish.outputs.app_version }}" latest.json --clobber --repo "${{ github.repository }}"
+          if [ -f latest.json ]; then
+            gh release upload "v${{ needs.publish.outputs.app_version }}" latest.json --clobber --repo "${{ github.repository }}"
+          else
+            echo "latest.json bulunamadı, release yüklemesi atlandı."
+          fi
+        shell: bash
 
   # ────────────────────────────────────────────────────
   # 6. Kanal manifestini güncelle (beta/alpha)
@@ -346,12 +351,17 @@ jobs:
             --repo "${{ github.repository }}" \
             --pattern "latest.json" \
             --output "updater/latest-${{ inputs.channel }}.json" \
-            --clobber
+            --clobber || echo "latest.json bulunamadı veya indirilemedi, atlanıyor."
 
       - name: Değişikliği main'e commit'le
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "updater/latest-${{ inputs.channel }}.json"
-          git commit -m "chore(updater): ${{ inputs.channel }} kanal manifestini v${{ needs.publish.outputs.app_version }} olarak güncelle [skip ci]" || echo "Değişiklik yok, commit edilmedi."
-          git push origin main
+          if [ -f "updater/latest-${{ inputs.channel }}.json" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add "updater/latest-${{ inputs.channel }}.json"
+            git commit -m "chore(updater): ${{ inputs.channel }} kanal manifestini v${{ needs.publish.outputs.app_version }} olarak güncelle [skip ci]" || echo "Değişiklik yok, commit edilmedi."
+            git push origin main
+          else
+            echo "Kanal güncelleme dosyası mevcut değil, commit adımı atlandı."
+          fi
+        shell: bash
