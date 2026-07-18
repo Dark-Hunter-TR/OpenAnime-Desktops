@@ -21,6 +21,15 @@ on:
         required: true
         default: true
         type: boolean
+      build_mode:
+        description: 'Derleme Tipi (Kullanıcılar için hata ayıklama / debug sürümü dahil etme)'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - stable-only
+          - debug-only
+          - both
 
 concurrency:
   group: publish-${{ github.ref }}-${{ inputs.channel }}
@@ -36,7 +45,7 @@ jobs:
     permissions:
       contents: write
     outputs:
-      app_version: ${{ env.APP_VERSION }}
+      app_version: ${{ steps.versioning.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -173,8 +182,9 @@ jobs:
             
             console.log("UYGULANACAK SÜRÜM:", finalVersion);
             
-            // Sonraki adımlar için GITHUB_ENVye kaydet
+            // Sonraki adımlar için hem GITHUB_ENV hem de GITHUB_OUTPUT'a kaydet
             fs.appendFileSync(process.env.GITHUB_ENV, `APP_VERSION=${finalVersion}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${finalVersion}\n`);
             
             // 1. package.json geçici güncelle
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
@@ -198,7 +208,8 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
-      - name: Build & publish
+      - name: Build & Publish Stable Version
+        if: ${{ inputs.build_mode == 'stable-only' || inputs.build_mode == 'both' }}
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -211,7 +222,20 @@ jobs:
           prerelease: ${{ inputs.channel != 'stable' }}
           args: ${{ matrix.args }} --verbose
 
+      - name: Build & Publish Debug Version
+        if: ${{ inputs.build_mode == 'debug-only' || inputs.build_mode == 'both' }}
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v${{ env.APP_VERSION }}
+          releaseName: 'OpenAnime Desktop v${{ env.APP_VERSION }} (${{ inputs.channel }})'
+          releaseDraft: ${{ inputs.draft == 'true' }}
+          prerelease: ${{ inputs.channel != 'stable' }}
+          args: --debug ${{ matrix.args }} --verbose
+
       - name: Save updater manifest artifact
+        if: ${{ inputs.build_mode == 'stable-only' || inputs.build_mode == 'both' }}
         run: |
           if [ -f src-tauri/target/release/bundle/updater/latest.json ]; then
             cp src-tauri/target/release/bundle/updater/latest.json latest-${{ matrix.platform }}.json
@@ -223,6 +247,7 @@ jobs:
         shell: bash
 
       - name: Upload updater manifest artifact
+        if: ${{ inputs.build_mode == 'stable-only' || inputs.build_mode == 'both' }}
         uses: actions/upload-artifact@v4
         with:
           name: latest-${{ matrix.platform }}
@@ -234,6 +259,7 @@ jobs:
   # ────────────────────────────────────────────────────
   merge-updater-manifest:
     needs: publish
+    if: ${{ inputs.build_mode != 'debug-only' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -290,7 +316,7 @@ jobs:
   # ────────────────────────────────────────────────────
   update-channel-manifest:
     needs: [publish, merge-updater-manifest]
-    if: ${{ inputs.draft == 'false' }}
+    if: ${{ inputs.draft == 'false' && inputs.build_mode != 'debug-only' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
