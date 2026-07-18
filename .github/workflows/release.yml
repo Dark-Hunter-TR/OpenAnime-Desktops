@@ -134,30 +134,78 @@ jobs:
             
             if (!finalVersion) {
               console.log("Sürüm girilmedi, yerel git tag geçmişi taranıyor...");
-              let latestTag = "v0.0.0";
+              let allTags = [];
               try {
-                // En son tagleri tarihe göre sirala ve en sonuncusunu al
-                latestTag = execSync("git describe --tags --abbrev=0").toString().trim();
-                console.log("Bulunan en son Git etiketi:", latestTag);
+                // Tüm etiketleri çek
+                allTags = execSync("git tag -l").toString().trim().split("\n").map(t => t.trim()).filter(Boolean);
               } catch (e) {
-                console.log("Hiç etiket bulunamadı, v0.0.0 baz alınıyor.");
+                console.log("Etiketler okunamadı, v0.0.0 baz alınacak.");
               }
               
-              // "v1.2.3-beta.1" -> "1.2.3-beta.1"
-              let cleanTag = latestTag.startsWith("v") ? latestTag.slice(1) : latestTag;
+              // Etiketleri sayısal SemVer kurallarına göre sıralamak için fonksiyon
+              const parseSemVer = (tag) => {
+                const clean = tag.startsWith("v") ? tag.slice(1) : tag;
+                // v1.0.2-beta-02 formatını v1.0.2-beta.2 formatına dönüştürerek SemVer parse başarısını artır
+                const normalized = clean.replace(/-([a-zA-Z]+)-(\d+)/, "-$1.$2");
+                const match = normalized.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.]+))?$/);
+                if (!match) return null;
+                
+                const major = parseInt(match[1]);
+                const minor = parseInt(match[2]);
+                const patch = parseInt(match[3]);
+                const prerelease = match[4] || "";
+                
+                return { major, minor, patch, prerelease, raw: tag, normalized };
+              };
               
-              // SemVer parcalama
-              // Regex: MAJOR.MINOR.PATCH[-PRERELEASE]
-              const match = cleanTag.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.]+))?$/);
-              if (!match) {
-                console.error("HATA: En son etiket SemVer ile uyumlu değil:", cleanTag);
-                process.exit(1);
+              const parsedTags = allTags.map(parseSemVer).filter(Boolean);
+              
+              // En yüksek/büyük sürümü bul (SemVer Karşılaştırma)
+              let highest = null;
+              for (const curr of parsedTags) {
+                if (!highest) {
+                  highest = curr;
+                  continue;
+                }
+                
+                // Major karşılaştır
+                if (curr.major !== highest.major) {
+                  if (curr.major > highest.major) highest = curr;
+                  continue;
+                }
+                // Minor karşılaştır
+                if (curr.minor !== highest.minor) {
+                  if (curr.minor > highest.minor) highest = curr;
+                  continue;
+                }
+                // Patch karşılaştır
+                if (curr.patch !== highest.patch) {
+                  if (curr.patch > highest.patch) highest = curr;
+                  continue;
+                }
+                
+                // Prerelease karşılaştır (Boş olan yani kararlı sürüm prerelease olandan büyüktür)
+                if (curr.prerelease !== highest.prerelease) {
+                  if (!curr.prerelease) {
+                    // curr stable, highest prerelease -> curr daha büyük
+                    highest = curr;
+                  } else if (highest.prerelease) {
+                    // Her ikisi de prerelease -> metinsel veya sayısal karşılaştır
+                    if (curr.prerelease > highest.prerelease) highest = curr;
+                  }
+                }
               }
               
-              let major = parseInt(match[1]);
-              let minor = parseInt(match[2]);
-              let patch = parseInt(match[3]);
-              let prerelease = match[4] || ""; // "beta.1", "alpha.4" vb.
+              const latestTag = highest ? highest.raw : "v0.0.0";
+              const cleanTag = highest ? highest.normalized.split("-")[0] : "0.0.0";
+              const prerelease = highest ? (highest.normalized.split("-")[1] || "") : "";
+              
+              console.log("Bulunan sayısal olarak en büyük Git etiketi:", latestTag);
+              
+              const parts = cleanTag.split(".");
+              let major = parseInt(parts[0]);
+              let minor = parseInt(parts[1]);
+              let patch = parseInt(parts[2]);
               
               if (channel === "stable") {
                 // Stable kanalinda her zaman PATCH sürümünü artir ve prerelease etiketini kaldir
@@ -166,8 +214,8 @@ jobs:
                 // beta veya alpha kanali
                 if (prerelease && prerelease.startsWith(channel)) {
                   // Mevcut etiket zaten bu kanalda (örn: beta.1) -> indeksi artir
-                  const parts = prerelease.split(".");
-                  const index = parts.length > 1 ? parseInt(parts[1]) : 0;
+                  const partsPre = prerelease.split(".");
+                  const index = partsPre.length > 1 ? parseInt(partsPre[1]) : 0;
                   finalVersion = `${major}.${minor}.${patch}-${channel}.${index + 1}`;
                 } else {
                   // Yeni bir pre-release serisi baslat (PATCH artar ve kanal.1 olur)
