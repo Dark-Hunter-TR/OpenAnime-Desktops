@@ -983,7 +983,7 @@ Function CheckOnlineLatest
 
   ; 6) En son installer'ı başlat ve bu (eski) installer'ı kapat
   Exec '"$TEMP\oa_latest_setup.exe"'
-  Quit
+;   Quit ; Eski installer'ın hemen kapanmasını engellemek için geçici olarak devre dışı bırakıldı.
 FunctionEnd
 
 Function Skip

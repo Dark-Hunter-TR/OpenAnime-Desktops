@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Sürüm numarası (örn: 1.0.2-beta, 1.0.3-alpha, 1.0.1)'
-        required: true
+        description: 'Sürüm numarası (Boş bırakılırsa en son etiket/tag baz alınarak otomatik hesaplanır)'
+        required: false
         type: string
       channel:
         description: 'Release kanalı (prerelease durumunu belirler)'
@@ -23,7 +23,7 @@ on:
         type: boolean
 
 concurrency:
-  group: publish-${{ inputs.version }}
+  group: publish-${{ github.ref }}-${{ inputs.channel }}
   cancel-in-progress: true
 
 env:
@@ -35,6 +35,8 @@ jobs:
   publish:
     permissions:
       contents: write
+    outputs:
+      app_version: ${{ env.APP_VERSION }}
     strategy:
       fail-fast: false
       matrix:
@@ -52,6 +54,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # Tüm geçmişi ve tag'leri çekmek için
 
       # ────────────────────────────────────────────────────
       # Toolchain + sccache
@@ -105,6 +109,92 @@ jobs:
       # ────────────────────────────────────────────────────
       # 4. Build & Release
       # ────────────────────────────────────────────────────
+      - name: Calculate & Update Version
+        id: versioning
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const { execSync } = require("child_process");
+            
+            let finalVersion = "${{ inputs.version }}".trim();
+            const channel = "${{ inputs.channel }}";
+            
+            if (!finalVersion) {
+              console.log("Sürüm girilmedi, yerel git tag geçmişi taranıyor...");
+              let latestTag = "v0.0.0";
+              try {
+                // En son tagleri tarihe göre sirala ve en sonuncusunu al
+                latestTag = execSync("git describe --tags --abbrev=0").toString().trim();
+                console.log("Bulunan en son Git etiketi:", latestTag);
+              } catch (e) {
+                console.log("Hiç etiket bulunamadı, v0.0.0 baz alınıyor.");
+              }
+              
+              // "v1.2.3-beta.1" -> "1.2.3-beta.1"
+              let cleanTag = latestTag.startsWith("v") ? latestTag.slice(1) : latestTag;
+              
+              // SemVer parcalama
+              // Regex: MAJOR.MINOR.PATCH[-PRERELEASE]
+              const match = cleanTag.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.]+))?$/);
+              if (!match) {
+                console.error("HATA: En son etiket SemVer ile uyumlu değil:", cleanTag);
+                process.exit(1);
+              }
+              
+              let major = parseInt(match[1]);
+              let minor = parseInt(match[2]);
+              let patch = parseInt(match[3]);
+              let prerelease = match[4] || ""; // "beta.1", "alpha.4" vb.
+              
+              if (channel === "stable") {
+                // Stable kanalinda her zaman PATCH sürümünü artir ve prerelease etiketini kaldir
+                finalVersion = `${major}.${minor}.${patch + 1}`;
+              } else {
+                // beta veya alpha kanali
+                if (prerelease && prerelease.startsWith(channel)) {
+                  // Mevcut etiket zaten bu kanalda (örn: beta.1) -> indeksi artir
+                  const parts = prerelease.split(".");
+                  const index = parts.length > 1 ? parseInt(parts[1]) : 0;
+                  finalVersion = `${major}.${minor}.${patch}-${channel}.${index + 1}`;
+                } else {
+                  // Yeni bir pre-release serisi baslat (PATCH artar ve kanal.1 olur)
+                  finalVersion = `${major}.${minor}.${patch + 1}-${channel}.1`;
+                }
+              }
+            }
+            
+            // SemVer Doğrulama
+            const semverRegex = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/;
+            if (!semverRegex.test(finalVersion)) {
+              console.error("HATA: Hesaplanan sürüm numarası SemVer standartlarına uymuyor:", finalVersion);
+              process.exit(1);
+            }
+            
+            console.log("UYGULANACAK SÜRÜM:", finalVersion);
+            
+            // Sonraki adımlar için GITHUB_ENVye kaydet
+            fs.appendFileSync(process.env.GITHUB_ENV, `APP_VERSION=${finalVersion}\n`);
+            
+            // 1. package.json geçici güncelle
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.version = finalVersion;
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
+            console.log("package.json geçici olarak güncellendi.");
+            
+            // 2. tauri.conf.json geçici güncelle
+            const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            tauri.version = finalVersion;
+            fs.writeFileSync("src-tauri/tauri.conf.json", JSON.stringify(tauri, null, 2));
+            console.log("tauri.conf.json geçici olarak güncellendi.");
+            
+            // 3. Cargo.toml geçici güncelle
+            let cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
+            cargo = cargo.replace(/^version = ".*"/m, `version = "${finalVersion}"`);
+            fs.writeFileSync("src-tauri/Cargo.toml", cargo);
+            console.log("Cargo.toml geçici olarak güncellendi.");
+          '
+
       - name: Install frontend dependencies
         run: bun install
 
@@ -115,8 +205,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v${{ inputs.version }}
-          releaseName: 'OpenAnime Desktop v${{ inputs.version }} (${{ inputs.channel }})'
+          tagName: v${{ env.APP_VERSION }}
+          releaseName: 'OpenAnime Desktop v${{ env.APP_VERSION }} (${{ inputs.channel }})'
           releaseDraft: ${{ inputs.draft == 'true' }}
           prerelease: ${{ inputs.channel != 'stable' }}
           args: ${{ matrix.args }} --verbose
@@ -191,7 +281,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "v${{ inputs.version }}" latest.json --clobber --repo "${{ github.repository }}"
+          gh release upload "v${{ needs.publish.outputs.app_version }}" latest.json --clobber --repo "${{ github.repository }}"
 
   # ────────────────────────────────────────────────────
   # 6. Kanal manifestini güncelle (beta/alpha)
@@ -199,7 +289,7 @@ jobs:
   #    Sadece draft OLMAYAN beta/alpha yayınlarında çalışır.
   # ────────────────────────────────────────────────────
   update-channel-manifest:
-    needs: merge-updater-manifest
+    needs: [publish, merge-updater-manifest]
     if: ${{ inputs.draft == 'false' }}
     runs-on: ubuntu-latest
     permissions:
@@ -214,7 +304,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p updater
-          gh release download "v${{ inputs.version }}" \
+          gh release download "v${{ needs.publish.outputs.app_version }}" \
             --repo "${{ github.repository }}" \
             --pattern "latest.json" \
             --output "updater/latest-${{ inputs.channel }}.json" \
@@ -222,12 +312,8 @@ jobs:
 
       - name: Değişikliği main'e commit'le
         run: |
-          if git diff --quiet -- "updater/latest-${{ inputs.channel }}.json"; then
-            echo "Manifest değişmedi, commit yok."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "updater/latest-${{ inputs.channel }}.json"
-          git commit -m "chore(updater): ${{ inputs.channel }} kanal manifestini v${{ inputs.version }} olarak güncelle"
+          git commit -m "chore(updater): ${{ inputs.channel }} kanal manifestini v${{ needs.publish.outputs.app_version }} olarak güncelle [skip ci]" || echo "Değişiklik yok, commit edilmedi."
           git push origin main
