@@ -95,8 +95,8 @@ function openDiscordDropdownMenu(wrapper) {
   menu.style.setProperty("display", "block", "important");
   menu.style.setProperty("position", "absolute", "important");
   menu.style.setProperty("left", "0", "important");
-  menu.style.setProperty("width", "152px", "important");
-  menu.style.setProperty("min-width", "152px", "important");
+  menu.style.setProperty("width", "120px", "important");
+  menu.style.setProperty("min-width", "120px", "important");
   menu.style.setProperty("max-height", "256px", "important");
   menu.style.setProperty("overflow-y", "auto", "important");
   menu.style.setProperty("z-index", "1000", "important");
@@ -203,7 +203,7 @@ function buildCardHTML(isEnabled, hashes, dropdownHashes, activeVisibility) {
               <span class="text-block type-caption text-secondary ${textBlockHash}">Discord RPC'de nelerin gözükeceğini seçin. "Herşey" uygulamada bulunduğunuz sekmeleri ve izlediğiniz serileri gösterirken, "Sadece İzlenen" ise yalnızca anime izlerken aktif olur.</span>
             </div>
             <div class="combo-box ${dropdownHashes.comboBoxHash}" id="tauri-discord-visibility-wrapper" style="position:relative !important;flex-shrink:0;">
-              <button class="button style-standard combo-box-button ${dropdownHashes.buttonHash}" tabindex="0" type="button" id="tauri-discord-visibility-btn" style="pointer-events:auto;width:152px !important;min-width:152px !important;white-space:nowrap !important;" aria-haspopup="listbox">
+              <button class="button style-standard combo-box-button ${dropdownHashes.buttonHash}" tabindex="0" type="button" id="tauri-discord-visibility-btn" style="pointer-events:auto;width:120px !important;min-width:120px !important;white-space:nowrap !important;" aria-haspopup="listbox">
                 <span class="combo-box-label ${dropdownHashes.comboBoxHash}" id="tauri-discord-visibility-label">${visibilityDisplay}</span>
                 <svg aria-hidden="true" class="combo-box-icon ${dropdownHashes.comboBoxHash}" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
                   <path fill="currentColor" d="M8.36612 16.1161C7.87796 16.6043 7.87796 17.3957 8.36612 17.8839L23.1161 32.6339C23.6043 33.122 24.3957 33.122 24.8839 32.6339L39.6339 17.8839C40.122 17.3957 40.122 16.6043 39.6339 16.1161C39.1457 15.628 38.3543 15.628 37.8661 16.1161L24 29.9822L10.1339 16.1161C9.64573 15.628 8.85427 15.628 8.36612 16.1161Z"></path>
@@ -229,10 +229,30 @@ function buildCardHTML(isEnabled, hashes, dropdownHashes, activeVisibility) {
 
 function injectDiscordRpcSetting() {
   if (document.getElementById("tauri-discord-rpc-setting")) return;
+const allElements = Array.from(
+  document.querySelectorAll("div, span, p, h3, h4"),
+);
 
-  const allElements = Array.from(
-    document.querySelectorAll("div, span, p, h3, h4"),
-  );
+// Sadece dropdown animasyonu
+if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
+  const styleEl = document.createElement("style");
+  styleEl.id = "tauri-discord-rpc-custom-styles";
+  styleEl.textContent = `
+    /* direction-top için clip-path tanımı */
+    #tauri-discord-rpc-visibility-menu.direction-top {
+      --fds-grow-clip-path: polygon(0 0, 100% 0, 100% 25%, 0 25%) !important;
+      border-radius: 8px !important;
+    }
+
+    /* Sitenin birebir clip-path açılma animasyonu */
+    @keyframes tauri-clip-in {
+      from { clip-path: var(--fds-grow-clip-path, polygon(0 0, 100% 0, 100% 25%, 0 25%)); }
+      to { clip-path: polygon(0px 0px, 100% 0px, 100% 100%, 0px 100%); }
+    }
+  `;
+  document.head.appendChild(styleEl);
+}
+
 
   const kisiselEl = allElements.find(
     (el) => el.textContent.trim() === "Kişiselleştirilmiş öneriler",
