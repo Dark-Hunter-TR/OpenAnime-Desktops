@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Sürüm numarası (Boş bırakılırsa en son etiket/tag baz alınarak otomatik hesaplanır)'
+        description: 'Sürüm Numarası (Boş bırakılırsa en büyük sürüm baz alınarak otomatik hesaplanır)'
         required: false
         type: string
       channel:
-        description: 'Release kanalı (prerelease durumunu belirler)'
+        description: 'Yayın Kanalı (Sürümün türünü belirler)'
         required: true
         default: 'beta'
         type: choice
@@ -16,20 +16,29 @@ on:
           - stable
           - beta
           - alpha
-      draft:
-        description: 'Draft olarak oluştur (açıklamayı sonra sen yazarsın)'
+      bump_type:
+        description: 'Sürüm Atlama Türü (Otomatik hesaplama yapılırken hangi hane artırılsın)'
         required: true
-        default: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch  # Sürümün son hanesini artırır (1.0.2 -> 1.0.3)
+          - minor  # Sürümün orta hanesini artırır (1.0.2 -> 1.1.0)
+          - major  # Sürümün ilk hanesini artırır (1.0.2 -> 2.0.0)
+      draft:
+        description: 'Taslak olarak mı oluşturulsun? (Hayır seçilirse derleme bittiğinde otomatik yayınlanır)'
+        required: true
+        default: false
         type: boolean
       build_mode:
-        description: 'Derleme Tipi (Kullanıcılar için hata ayıklama / debug sürümü dahil etme)'
+        description: 'Derleme Modu (Hata ayıklama / Debug sürümünün de derlenip eklenmesi)'
         required: true
         default: 'both'
         type: choice
         options:
-          - stable-only
-          - debug-only
-          - both
+          - stable-only  # Sadece kararlı kullanıcı sürümü derlenir
+          - debug-only   # Sadece DevTools açık hata ayıklama sürümü derlenir
+          - both         # Her iki sürüm de derlenip release alanına yüklenir
 
 concurrency:
   group: publish-${{ github.ref }}-${{ inputs.channel }}
@@ -124,6 +133,7 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_BUMP_TYPE: ${{ inputs.bump_type }}
         run: |
           node -e '
             const fs = require("fs");
@@ -131,6 +141,7 @@ jobs:
             
             let finalVersion = process.env.INPUT_VERSION ? process.env.INPUT_VERSION.trim() : "";
             const channel = process.env.INPUT_CHANNEL || "beta";
+            const bumpType = process.env.INPUT_BUMP_TYPE || "patch";
             
             if (!finalVersion) {
               console.log("Sürüm girilmedi, yerel git tag geçmişi taranıyor...");
@@ -207,19 +218,34 @@ jobs:
               let minor = parseInt(parts[1]);
               let patch = parseInt(parts[2]);
               
+              // Sürüm atlama mantığı (Bump Type)
+              if (bumpType === "major") {
+                major += 1;
+                minor = 0;
+                patch = 0;
+              } else if (bumpType === "minor") {
+                minor += 1;
+                patch = 0;
+              } else {
+                // varsayılan: patch
+                patch += 1;
+              }
+              
               if (channel === "stable") {
-                // Stable kanalinda her zaman PATCH sürümünü artir ve prerelease etiketini kaldir
-                finalVersion = `${major}.${minor}.${patch + 1}`;
+                // Stable kanalinda prerelease etiketini kaldir
+                finalVersion = `${major}.${minor}.${patch}`;
               } else {
                 // beta veya alpha kanali
-                if (prerelease && prerelease.startsWith(channel)) {
-                  // Mevcut etiket zaten bu kanalda (örn: beta.1) -> indeksi artir
+                if (prerelease && prerelease.startsWith(channel) && bumpType === "patch") {
+                  // Eğer patch artırılıyorsa ve en son tag de zaten bu kanaldaysa, indeksi artır
                   const partsPre = prerelease.split(".");
                   const index = partsPre.length > 1 ? parseInt(partsPre[1]) : 0;
-                  finalVersion = `${major}.${minor}.${patch}-${channel}.${index + 1}`;
+                  // Orijinal patch versiyonunu geri çekiyoruz çünkü sadece prerelease indeksi artmalı (örn: 1.0.2-beta.1 -> 1.0.2-beta.2)
+                  let origPatch = parseInt(highest.normalized.split("-")[0].split(".")[2]);
+                  finalVersion = `${major}.${minor}.${origPatch}-${channel}.${index + 1}`;
                 } else {
-                  // Yeni bir pre-release serisi baslat (PATCH artar ve kanal.1 olur)
-                  finalVersion = `${major}.${minor}.${patch + 1}-${channel}.1`;
+                  // Yeni bir pre-release serisi baslat (kanal.1 olur)
+                  finalVersion = `${major}.${minor}.${patch}-${channel}.1`;
                 }
               }
             }
@@ -278,7 +304,7 @@ jobs:
         with:
           tagName: v${{ env.APP_VERSION }}
           releaseName: 'OpenAnime Desktop v${{ env.APP_VERSION }} (${{ inputs.channel }})'
-          releaseDraft: ${{ inputs.draft == 'true' }}
+          releaseDraft: true # Her zaman taslak olarak basla, zamanlama hatasini engelle
           prerelease: ${{ inputs.channel != 'stable' }}
           args: ${{ matrix.args }} --verbose
 
@@ -290,7 +316,7 @@ jobs:
         with:
           tagName: v${{ env.APP_VERSION }}
           releaseName: 'OpenAnime Desktop v${{ env.APP_VERSION }} (${{ inputs.channel }})'
-          releaseDraft: ${{ inputs.draft == 'true' }}
+          releaseDraft: true # Her zaman taslak olarak basla, zamanlama hatasini engelle
           prerelease: ${{ inputs.channel != 'stable' }}
           args: --debug ${{ matrix.args }} --verbose
 
@@ -375,12 +401,30 @@ jobs:
         shell: bash
 
   # ────────────────────────────────────────────────────
-  # 6. Kanal manifestini güncelle (beta/alpha)
+  # 6. Taslak Release'i Canlıya Al (Eşzamanlı Yayınlama)
+  #    Tüm platform derlemeleri (Windows & Mac) bittikten sonra çalışır.
+  #    Eğer "draft: false" seçildiyse, taslağı tek bir komutla canlıya alır.
+  # ────────────────────────────────────────────────────
+  publish-release:
+    needs: [publish, merge-updater-manifest]
+    if: ${{ inputs.draft == 'false' && (success() || always()) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Taslak Release'i Canlıya Çek
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v${{ needs.publish.outputs.app_version }}" --draft=false --repo "${{ github.repository }}"
+
+  # ────────────────────────────────────────────────────
+  # 7. Kanal manifestini güncelle (beta/alpha)
   #    Yayınlanan latest.json'u bu dosyaya kopyalayıp main'e commit'ler.
   #    Sadece draft OLMAYAN beta/alpha yayınlarında çalışır.
   # ────────────────────────────────────────────────────
   update-channel-manifest:
-    needs: [publish, merge-updater-manifest]
+    needs: [publish, merge-updater-manifest, publish-release]
     if: ${{ inputs.draft == 'false' && inputs.build_mode != 'debug-only' }}
     runs-on: ubuntu-latest
     permissions:
