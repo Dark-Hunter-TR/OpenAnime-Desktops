@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["native-tls-vendored"] }
+tauri = { version = "2", features = ["native-tls-vendored", "tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-os = "2"
 tauri-plugin-updater = "2"
@@ -21,7 +21,9 @@ tauri-plugin-window-state = "2.4.1"
 discord-rich-presence = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["rustls-tls"] }
+# "stream": bildirim SSE akışını (/user/notifications/sse) parça parça okumak için.
+reqwest = { version = "0.12", features = ["rustls-tls", "stream"] }
+futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
 regex = "1.10"
 rfd = "0.15"
@@ -39,6 +41,8 @@ windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_System_Threading",
   "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Console",
 ] }
 
 # panic = "abort" KULLANILMAZ: async Tauri komutundaki bir panic tüm uygulamayı

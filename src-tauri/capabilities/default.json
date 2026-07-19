@@ -37,6 +37,7 @@
     "allow-session-log",
     "allow-read-local-video",
     "allow-updater",
-    "allow-perf-mode"
+    "allow-perf-mode",
+    "allow-super-notifications"
   ]
 }

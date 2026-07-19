@@ -245,14 +245,12 @@ function buildSettingsCardHTML(hashes, dropdownHashes, isEnabled, activeChannel,
             <span class="text-block type-body ${hashes.textBlockHash}">Güncelleme Ayarları</span>
             <span class="text-block type-caption text-secondary ${hashes.textBlockHash}">Otomatik güncelleme kontrolleri, güncelleme kanalı ve uygulama güncelleme denetimi</span>
           </div>
-          <div class="expander-control ${hashes.controlHash}" style="pointer-events:auto;">
-            <button class="expander-chevron ${hashes.headerHash}" type="button" tabindex="-1" id="tauri-updater-settings-chevron" style="pointer-events:auto;cursor:pointer;">
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;">
-                <path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path>
-              </svg>
-            </button>
-          </div>
         </span>
+        <button class="expander-chevron ${hashes.headerHash}" type="button" tabindex="-1" id="tauri-updater-settings-chevron" style="pointer-events:auto;cursor:pointer;">
+          <svg class="${hashes.headerHash}" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;">
+            <path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path>
+          </svg>
+        </button>
       </div>
     </h>
     
@@ -423,7 +421,7 @@ function injectUpdaterSetting() {
   const settingsCard = document.createElement("div");
   settingsCard.id = "tauri-updater-settings-card";
   // Sitenin native expander'ı "space-between" kullanır (expandable değil)
-  settingsCard.className = `expander direction-down space-between ${hashes.expanderHash}`;
+  settingsCard.className = `expander direction-down expandable ${hashes.expanderHash || "svelte-1b1dfzj"}`;
   settingsCard.setAttribute("role", "region");
 
   // Süper Bildirimler kartı varsa onun ardına, yoksa Discord RPC kartının

@@ -34,6 +34,9 @@ pub struct PerfState {
 
 #[allow(non_snake_case)]
 mod discordRPC;
+mod native_toast;
+mod native_tray_menu;
+mod super_notifications;
 
 mod updater;
 mod local_video_server;
@@ -196,6 +199,93 @@ fn refresh_perf_mode(app: &tauri::AppHandle) {
     }
 }
 
+/// WebView2'yi arka planda askıya alır / geri döndürür.
+///
+/// suspend=true  → controller görünmez yapılır + ICoreWebView2_3::TrySuspend
+///                 (tüm renderer'lar dondurulur) + working set trim.
+/// suspend=false → Resume + controller yeniden görünür.
+///
+/// TrySuspend YALNIZCA WebView görünmezken çalışır; bu yüzden önce SetIsVisible(false).
+/// TrySuspend ayrıca aktif medya/indirme varken başarısız olur — çağrı öncesi
+/// zaten `player_playing` ile korunuyoruz (bkz. update_background_mode), yani
+/// arka planda ses/video sürerken askıya ALINMAZ.
+///
+/// Son uygulanan askıya-alma durumu. YALNIZCA gerçek geçişte iş yapılır:
+/// aksi halde her focus/resized olayında Resume+SetIsVisible(true) yeniden
+/// çağrılır, SetIsVisible odak olayını yeniden tetikler ve `focused` sonsuza
+/// dek flap eder (EcoQoS AÇIK/KAPALI spam'i + ön planda istenmeyen TrySuspend).
+#[cfg(target_os = "windows")]
+static WEBVIEW_SUSPENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+fn set_background_suspend(window: &tauri::WebviewWindow, suspend: bool) {
+    use std::sync::atomic::Ordering;
+    // Durum değişmediyse HİÇBİR ŞEY yapma — geri besleme döngüsünü kırar.
+    if WEBVIEW_SUSPENDED.swap(suspend, Ordering::SeqCst) == suspend {
+        return;
+    }
+
+    let _ = window.with_webview(move |webview| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_3;
+        use webview2_com::TrySuspendCompletedHandler;
+        use windows_core::Interface;
+
+        let controller = webview.controller();
+        if Interface::as_raw(&controller).is_null() {
+            return;
+        }
+        let core = match controller.CoreWebView2() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let wv3 = match core.cast::<ICoreWebView2_3>() {
+            Ok(w) => w,
+            Err(_) => return, // Runtime çok eski — sessiz geç
+        };
+
+        if suspend {
+            let _ = controller.SetIsVisible(false);
+
+            // TrySuspend tamamlanınca (motor gerçekten dondurulunca) working set'i
+            // boşalt — böylece RAM'den atılan sayfalar hemen geri yüklenmez.
+            let core_for_handler = core.clone();
+            let handler = TrySuspendCompletedHandler::create(Box::new(
+                move |_errorcode, is_successful| {
+                    if is_successful {
+                        let mut pid: u32 = 0;
+                        if core_for_handler.BrowserProcessId(&mut pid).is_ok() && pid != 0 {
+                            perf_mode::trim_working_sets(pid);
+                        }
+                    }
+                    Ok(())
+                },
+            ));
+            let _ = wv3.TrySuspend(&handler);
+        } else {
+            let _ = wv3.Resume();
+            let _ = controller.SetIsVisible(true);
+        }
+    });
+}
+
+/// Pencerenin görünürlük durumuna göre arka plan askıya alma kararını verir.
+///
+/// Askıya al = (minimize VEYA gizli) VE video oynamıyor. Oynatma sürerken
+/// (arka planda dinleme/izleme) motor dondurulmaz; o durumda mevcut LOW bellek +
+/// EcoQoS zaten devrede (bkz. refresh_perf_mode).
+#[cfg(target_os = "windows")]
+fn update_background_mode(app: &tauri::AppHandle, label: &str) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let playing = *app.state::<PerfState>().player_playing.lock().unwrap();
+    let minimized = window.is_minimized().unwrap_or(false);
+    let visible = window.is_visible().unwrap_or(true);
+
+    let suspend = (minimized || !visible) && !playing;
+    set_background_suspend(&window, suspend);
+}
+
 /// JS bildirir: oynatıcıda video oynuyor mu?
 #[tauri::command]
 fn oa_set_player_playing(playing: bool, app: tauri::AppHandle) {
@@ -209,8 +299,13 @@ fn oa_set_player_playing(playing: bool, app: tauri::AppHandle) {
             }
             *p = playing;
         }
-        log!("[PerfMode] Video oynuyor = {}", playing);
+        dbg_log!("[PerfMode] Video oynuyor = {}", playing);
         refresh_perf_mode(&app);
+
+        // Oynatma durumu askıya alma kararını da etkiler: arka planda video
+        // biterse (minimize + playing=false) artık askıya alınabilir; minimize
+        // iken oynatma başlarsa geri döndürülmeli.
+        update_background_mode(&app, "main");
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -279,8 +374,10 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n}\n",
 
     // ──────────────────────────────────────────────
-    // BLOK 5B: SÜPER BİLDİRİMLER (Ayar placeholder — "Yakında")
-    // Discord RPC kartının altına devre dışı bir ayar kartı ekler.
+    // BLOK 5B: SÜPER BİLDİRİMLER
+    // Ayar kartı (/settings) + Gateway-Token köprüsü (her sayfada).
+    // Bildirimleri arka planda okuyup toast gösteren kısım Rust tarafında:
+    // src-tauri/src/super_notifications.rs
     // ──────────────────────────────────────────────
     "{\n",
     include_str!("js/modules/super-notifications-ui.js"),
@@ -367,13 +464,13 @@ const COMMON_INIT_SCRIPT: &str = concat!(
 );
 
 #[cfg(target_os = "windows")]
-pub const WINDOWS_BASE_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=2048\" --force-gpu-selection=high-performance --force_high_performance_gpu";
+pub const WINDOWS_BASE_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=1024\" --force-gpu-selection=high-performance --force_high_performance_gpu";
 
 /// Proxy aktifken kullanılacak browser args
 #[cfg(target_os = "windows")]
-pub const WINDOWS_PROXY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=2048\" --force-gpu-selection=high-performance --force_high_performance_gpu --proxy-server=http://127.0.0.1:1453";
+pub const WINDOWS_PROXY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=1024\" --force-gpu-selection=high-performance --force_high_performance_gpu --proxy-server=http://127.0.0.1:1453";
 
-fn platform_user_agent() -> &'static str {
+pub(crate) fn platform_user_agent() -> &'static str {
     #[cfg(target_os = "windows")]
     {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
@@ -389,7 +486,7 @@ fn platform_user_agent() -> &'static str {
 }
 
 fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
-    println!("[Tauri] build_new_window invoked with URL: {}", url);
+    dbg_log!("[Tauri] build_new_window invoked with URL: {}", url);
 
     let label = format!(
         "win_{}",
@@ -418,7 +515,7 @@ fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
     .zoom_hotkeys_enabled(true)
     .user_agent(user_agent)
     .on_new_window(move |new_url, _features| {
-        println!(
+        dbg_log!(
             "[Tauri] Intercepted new window request from secondary window for URL: {}",
             new_url
         );
@@ -426,7 +523,7 @@ fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
         let url_str = new_url.to_string();
         std::thread::spawn(move || {
             if let Err(e) = build_new_window(&app_c, url_str) {
-                eprintln!("[Tauri] on_new_window -> build_new_window error: {}", e);
+                dbg_log!("[Tauri] on_new_window -> build_new_window error: {}", e);
             }
         });
         tauri::webview::NewWindowResponse::Deny
@@ -438,12 +535,12 @@ fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
 
     match win_builder.build() {
         Ok(_) => {
-            println!("[Tauri] Successfully created new window with label: {}", label);
+            dbg_log!("[Tauri] Successfully created new window with label: {}", label);
             Ok(())
         }
         Err(e) => {
             let err_msg = format!("[Tauri] Window build failed: {}", e);
-            eprintln!("{}", err_msg);
+            dbg_log!("{}", err_msg);
             Err(err_msg)
         }
     }
@@ -458,7 +555,7 @@ async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), Strin
 fn set_zoom_level(state: tauri::State<'_, ZoomState>, level: f64) -> Result<(), String> {
     let mut zoom = state.level.lock().map_err(|e| e.to_string())?;
     *zoom = level;
-    println!("[Tauri] Zoom seviyesi kaydedildi: {:.0}%", level * 100.0);
+    dbg_log!("[Tauri] Zoom seviyesi kaydedildi: {:.0}%", level * 100.0);
     Ok(())
 }
 
@@ -470,15 +567,15 @@ fn get_zoom_level(state: tauri::State<'_, ZoomState>) -> Result<f64, String> {
 
 #[tauri::command]
 async fn reopen_with_proxy(app: tauri::AppHandle) -> Result<(), String> {
-    println!("[Tauri] reopen_with_proxy çağrıldı.");
+    dbg_log!("[Tauri] reopen_with_proxy çağrıldı.");
     // Sadece proxy'yi başlat. Pencere açma/kapatma yapmıyoruz çünkü
     // bu Tauri'yi çökertiyor. Proxy en baştan başlatılıp pencere
     // direkt --proxy-server ile açılmalı.
     let dpi = app.state::<dpi_proxy::DpiProxyManager>();
     if let Err(e) = dpi.start_proxy(&app, 1).await {
-        eprintln!("[Tauri] Proxy #1 başlatılamadı: {}", e);
+        dbg_log!("[Tauri] Proxy #1 başlatılamadı: {}", e);
     }
-    println!("[Tauri] Proxy başlatıldı. (not: WebView proxy kullanmıyor olabilir)");
+    dbg_log!("[Tauri] Proxy başlatıldı. (not: WebView proxy kullanmıyor olabilir)");
     Ok(())
 }
 
@@ -525,9 +622,9 @@ async fn close_window_label(app: tauri::AppHandle, label: Option<String>) -> Res
     if let Some(win) = app.get_webview_window(target) {
         win.close()
             .map_err(|e| format!("[Tauri] Pencere kapatma hatası: {}", e))?;
-        println!("[Tauri] Pencere kapatıldı: {}", target);
+        dbg_log!("[Tauri] Pencere kapatıldı: {}", target);
     } else {
-        println!("[Tauri] Kapatılacak pencere bulunamadı: {}", target);
+        dbg_log!("[Tauri] Kapatılacak pencere bulunamadı: {}", target);
     }
     Ok(())
 }
@@ -589,7 +686,7 @@ async fn go_online(window: tauri::WebviewWindow) -> Result<(), String> {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let url_str = format!("https://openani.me/?nocache={}", now);
-    println!("[Tauri] Navigating online to: {}", url_str);
+    dbg_log!("[Tauri] Navigating online to: {}", url_str);
     let parsed_url = url_str.parse::<tauri::Url>()
         .map_err(|e| format!("Failed to parse online URL: {}", e))?;
     window.navigate(parsed_url)
@@ -603,7 +700,7 @@ async fn go_offline(window: tauri::WebviewWindow) -> Result<(), String> {
     } else {
         "tauri://localhost/".to_string()
     };
-    println!("[Tauri] Navigating offline to: {}", url);
+    dbg_log!("[Tauri] Navigating offline to: {}", url);
     window.navigate(url.parse().map_err(|e| format!("{}", e))?)
         .map_err(|e| format!("Failed to navigate offline: {}", e))
 }
@@ -693,7 +790,7 @@ async fn load_theme(app: tauri::AppHandle, name: String) -> Result<ThemeJson, St
 #[tauri::command]
 async fn apply_theme_css(app: tauri::AppHandle, theme_id: String, css: String) -> Result<(), String> {
     use tauri::Emitter;
-    println!("[Tauri] Emitting theme-apply for theme: {}", theme_id);
+    dbg_log!("[Tauri] Emitting theme-apply for theme: {}", theme_id);
     app.emit("openanime://theme-apply", serde_json::json!({
         "themeId": theme_id,
         "css": css
@@ -712,9 +809,9 @@ fn oa_js_log(level: String, msg: String) {
     if n < 300 {
         let mut m = msg;
         m.truncate(1024);
-        log!("[JS {}] {}", level, m);
+        dbg_log!("[JS {}] {}", level, m);
         if n == 299 {
-            log!("[JS] mesaj limiti (300) doldu — sonraki JS logları bastırılıyor");
+            dbg_log!("[JS] mesaj limiti (300) doldu — sonraki JS logları bastırılıyor");
         }
     }
 }
@@ -723,7 +820,7 @@ fn oa_js_log(level: String, msg: String) {
 fn setup_windows_gpu_preference() {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_str) = exe_path.to_str() {
-            println!(
+            dbg_log!(
                 "[Tauri] Setting DirectX GpuPreference to High Performance for: {}",
                 exe_str
             );
@@ -765,7 +862,7 @@ fn get_local_video_port(state: tauri::State<'_, Arc<local_video_server::LocalVid
 }
 
 /// ────────────────────────────────────────────────────────────
-/// 📁 Dosya Seçme Dialogu
+/// Dosya Seçme Dialogu
 /// ────────────────────────────────────────────────────────────
 /// Kullanıcının işletim sistemi dosya seçme dialogu ile MP4
 /// dosyası seçmesini sağlar. Seçilen dosyanın tam yolunu döndürür.
@@ -780,7 +877,7 @@ async fn pick_mp4_file() -> Result<String, String> {
         .ok_or_else(|| "Kullanıcı dosya seçmedi".to_string())?;
     
     let path = file.path().to_string_lossy().to_string();
-    println!("[LocalLibrary] Seçilen dosya: {}", path);
+    dbg_log!("[LocalLibrary] Seçilen dosya: {}", path);
     Ok(path)
 }
 
@@ -821,7 +918,7 @@ fn install_crash_logger() {
             "===== OPENANIME PANIC =====\n{}\n\nBacktrace:\n{}\n",
             info, backtrace
         );
-        log!("{}", report);
+        dbg_log!("{}", report);
 
         let crash_path = dirs_cache_path().join("crash.log");
         if let Some(parent) = crash_path.parent() {
@@ -882,9 +979,9 @@ pub fn run() {
     // Local video server'ı hemen başlat (arka plan thread)
     let lv_state = local_video_state.clone();
     if let Ok(port) = local_video_server::start_server(&lv_state) {
-        log!("[LocalVideo] ✅ Server başlatıldı: 127.0.0.1:{}", port);
+        dbg_log!("[LocalVideo] Server başlatıldı: 127.0.0.1:{}", port);
     } else {
-        log!("[LocalVideo] ❌ Server başlatılamadı!");
+        dbg_log!("[LocalVideo] Server başlatılamadı!");
     }
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -894,6 +991,7 @@ pub fn run() {
         .manage(updater::UpdaterState::new())
         .manage(ZoomState::default())
         .manage(PerfState::default())
+        .manage(super_notifications::SuperNotifState::new())
         .manage(local_video_state);
 
     // DPI Proxy manager'ı oluştur (setup'tan önce olmalı)
@@ -903,9 +1001,9 @@ pub fn run() {
         // Logger'ı en başta başlat
         logger::init(app.handle());
 
-        log!("===== OPENANIME SETUP BAŞLADI =====");
-        log!("[Setup] Build modu: {}", if cfg!(debug_assertions) { "DEBUG" } else { "RELEASE" });
-        log!("[Setup] Platform: {}", std::env::consts::OS);
+        log!("[OpenAnime] Başlatılıyor…");
+        dbg_log!("[Setup] Build modu: {}", if cfg!(debug_assertions) { "DEBUG" } else { "RELEASE" });
+        dbg_log!("[Setup] Platform: {}", std::env::consts::OS);
 
         // DPI Proxy manager'ı başlat
         let app_handle = app.handle().clone();
@@ -921,7 +1019,7 @@ pub fn run() {
                 let settings = tauri::async_runtime::block_on(async { dpi.settings.lock().await });
                 settings.active_method_id.unwrap_or(0) // Default to 0 (Direct) or 1 if none
             };
-            log!("[Setup] Yerel proxy sunucusu başlatılıyor (yöntem #{})...", method_id);
+            dbg_log!("[Setup] Yerel proxy sunucusu başlatılıyor (yöntem #{})...", method_id);
             let _ = tauri::async_runtime::block_on(async {
                 dpi.start_proxy(&app_handle, method_id).await
             });
@@ -933,14 +1031,14 @@ pub fn run() {
         #[cfg(not(target_os = "windows"))]
         let proxy_status_msg = "Proxy DEVADIŞI";
 
-        log!("[Setup] WebView modu: {}", proxy_status_msg);
+        dbg_log!("[Setup] WebView modu: {}", proxy_status_msg);
 
         #[cfg(target_os = "windows")]
         let app_handle_for_check = app_handle.clone();
         #[cfg(target_os = "windows")]
         tauri::async_runtime::spawn(async move {
             let dpi = app_handle_for_check.state::<dpi_proxy::DpiProxyManager>();
-            log!("[Setup Background] Arkaplan bağlantı kontrolü başladı...");
+            dbg_log!("[Setup Background] Arkaplan bağlantı kontrolü başladı...");
 
             // ADIM 1: Doğrudan bağlantı kontrolü (Direct/Method 0)
             {
@@ -960,13 +1058,13 @@ pub fn run() {
 
             match direct_check {
                 Ok(dpi_proxy::ConnectionResult::Ok) => {
-                    log!("[Setup Background] ✅ Doğrudan bağlantı başarılı, bypass gereksiz.");
+                    log!("[Bağlantı] İnternet bağlantısı kuruldu");
                     let mut stage = dpi.connection_stage.lock().await;
                     *stage = "success".to_string();
                     let _ = dpi.start_proxy(&app_handle_for_check, 0).await;
                 }
                 _ => {
-                    log!("[Setup Background] ❌ Doğrudan bağlantı başarısız. Adım 2: DPI bypass deneniyor...");
+                    log!("[Bağlantı] Erişim kısıtlı — engel aşma deneniyor…");
                     {
                         let mut stage = dpi.connection_stage.lock().await;
                         *stage = "trying_dpi".to_string();
@@ -982,14 +1080,14 @@ pub fn run() {
 
                     let mut is_working = false;
                     if let Ok(dpi_proxy::ConnectionResult::Ok) = proxy_check {
-                        log!("[Setup Background] ✅ Kayıtlı DPI yöntemi (#{}) çalışıyor!", test_id);
+                        dbg_log!("[Setup Background] Kayıtlı DPI yöntemi (#{}) çalışıyor!", test_id);
                         is_working = true;
                     }
 
                     if !is_working {
-                        log!("[Setup Background] Kayıtlı DPI yöntemi çalışmadı. Tüm yöntemler taranıyor...");
+                        dbg_log!("[Setup Background] Kayıtlı DPI yöntemi çalışmadı. Tüm yöntemler taranıyor...");
                         if let Some(working_id) = dpi.test_all_methods(&app_handle_for_check).await {
-                            log!("[Setup Background] ✅ Çalışan yeni DPI yöntemi bulundu: #{}", working_id);
+                            dbg_log!("[Setup Background] Çalışan yeni DPI yöntemi bulundu: #{}", working_id);
                             is_working = true;
                         }
                     }
@@ -999,13 +1097,13 @@ pub fn run() {
                         *stage = "success".to_string();
                     } else {
                         // ADIM 3: Proxy Fallback
-                        log!("[Setup Background] ❌ Tüm DPI yöntemleri başarısız. Adım 3: Uzak proxy fallback deneniyor...");
+                        dbg_log!("[Setup Background] Tüm DPI yöntemleri başarısız. Adım 3: Uzak proxy fallback deneniyor...");
                         match dpi.try_remote_proxy_fallback(&app_handle_for_check).await {
                             Ok(_) => {
-                                log!("[Setup Background] ✅ Uzak proxy fallback başarılı!");
+                                dbg_log!("[Setup Background] Uzak proxy fallback başarılı!");
                             }
                             Err(_) => {
-                                log!("[Setup Background] ❌ Tüm bağlantı adımları başarısız. Çevrimdışı moda düşülüyor.");
+                                log!("[Bağlantı] İnternete bağlanılamadı — çevrimdışı moda geçiliyor");
                                 let mut stage = dpi.connection_stage.lock().await;
                                 *stage = "failed".to_string();
                             }
@@ -1016,8 +1114,8 @@ pub fn run() {
         });
 
         let main_url = WebviewUrl::External("https://openani.me/".parse().unwrap());
-        log!("[Setup] Ana URL: https://openani.me/");
-        log!("[Setup] Pencere oluşturuluyor (1280x848, decorations: false)...");
+        dbg_log!("[Setup] Ana URL: https://openani.me/");
+        dbg_log!("[Setup] Pencere oluşturuluyor (1280x848, decorations: false)...");
 
         let app_handle = app.handle().clone();
         let win_builder = WebviewWindowBuilder::new(
@@ -1033,7 +1131,7 @@ pub fn run() {
         .zoom_hotkeys_enabled(true)
         .user_agent(user_agent)
         .on_new_window(move |url, _features| {
-            println!(
+            dbg_log!(
                 "[Tauri] Yeni pencere isteği (main penceresinden): {}",
                 url
             );
@@ -1041,7 +1139,7 @@ pub fn run() {
             let url_str = url.to_string();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = open_new_window(app_c, url_str).await {
-                    eprintln!("[Tauri] Yeni pencere açma hatası: {}", e);
+                    dbg_log!("[Tauri] Yeni pencere açma hatası: {}", e);
                 }
             });
             tauri::webview::NewWindowResponse::Deny
@@ -1051,11 +1149,11 @@ pub fn run() {
         #[cfg(target_os = "windows")]
         let win_builder = win_builder.additional_browser_args(browser_args);
 
-        log!("[Setup] Pencere build ediliyor...");
+        dbg_log!("[Setup] Pencere build ediliyor...");
         match win_builder.build() {
             Ok(_window) => {
-                log!("[Setup] ✅ Ana pencere başarıyla oluşturuldu (label: main)");
-                log!("[Setup] WebView URL: https://openani.me/");
+                dbg_log!("[Setup] Ana pencere başarıyla oluşturuldu (label: main)");
+                dbg_log!("[Setup] WebView URL: https://openani.me/");
 
                 // Periyodik performans modu yenilemesi.
                 // Gerekçe (ölçümle bulundu): WebView2 çalışırken YENİ süreç doğuruyor
@@ -1075,12 +1173,16 @@ pub fn run() {
                     });
                 }
 
-                log!("===== OPENANIME SETUP TAMAM =====");
+                // Tepsi ikonu ve tıklama/eylem izleyicisini her zaman başlat!
+                let _ = super_notifications::ensure_tray(app.handle());
+                super_notifications::start_click_watcher(app.handle());
+
+                log!("[OpenAnime] Hazır");
                 Ok(())
             }
             Err(e) => {
-                log!("[Setup] ❌ ANA PENCERE OLUŞTURULAMADI: {}", e);
-                log!("===== OPENANIME SETUP HATA =====");
+                log!("[Hata] Uygulama penceresi açılamadı: {}", e);
+                dbg_log!("===== OPENANIME SETUP HATA =====");
                 Err(Box::new(e))
             }
         }
@@ -1100,6 +1202,16 @@ pub fn run() {
                         }
                     });
                 }
+                // X butonuna basıldığında uygulamayı kapatmak yerine tepsiye gizleriz.
+                // Tamamen kapatmak için tepsi menüsündeki "Kapat" seçeneği kullanılır.
+                tauri::WindowEvent::CloseRequested { api, .. } if label == "main" => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    dbg_log!("[Tepsi] Ana pencere tepsiye gizlendi");
+                    // Tray'e gizlenince WebView2'yi askıya al (video oynamıyorsa).
+                    #[cfg(target_os = "windows")]
+                    update_background_mode(&window.app_handle(), window.label());
+                }
                 _ => {}
             }
 
@@ -1117,6 +1229,19 @@ pub fn run() {
                         *f = *focused;
                     }
                     refresh_perf_mode(&app);
+
+                    // Odak GELİNCE (pencere geri geldi/gösterildi) askıdan çıkar.
+                    // Odak KAYBINDA askıya ALMA — sadece alt-tab olabilir; askıya
+                    // alma yalnızca minimize/gizleme (Resized/hide) ile tetiklenir.
+                    if *focused {
+                        update_background_mode(&app, window.label());
+                    }
+                }
+
+                // Minimize/geri-yükleme burada yakalanır (Tauri'de ayrı Minimized
+                // eventi yok — Resized + is_minimized ile anlaşılır).
+                if let tauri::WindowEvent::Resized(_) = event {
+                    update_background_mode(&window.app_handle(), window.label());
                 }
             }
         });
@@ -1148,19 +1273,27 @@ pub fn run() {
             get_zoom_level,
             dpi_proxy::dpi_test_methods,
             dpi_proxy::dpi_get_status,
-            // 📁 Yerel dosya seçme dialogu
+            // Yerel dosya seçme dialogu
             pick_mp4_file,
             // 📄 Dosyanın ilk N baytını oku (IndexedDB dummy blob için)
             read_file_head,
             // JS hata köprüsü (webview console/onerror → terminal log)
             oa_js_log,
             // Performans/verimlilik modu — JS oynatıcı durumunu bildirir
-            oa_set_player_playing
+            oa_set_player_playing,
+            // Süper Bildirimler
+            super_notifications::sn_set_enabled,
+            super_notifications::sn_set_gateway_token,
+            super_notifications::sn_set_auth_token,
+            super_notifications::sn_set_account,
+            super_notifications::sn_open_notification,
+            super_notifications::sn_test_toast,
+            super_notifications::sn_test_notifications
         ])
         .run(tauri::generate_context!());
 
     if let Err(err) = run_result {
-        log!("[Fatal] Tauri uygulaması başlatılamadı: {}", err);
+        log!("[Hata] Uygulama başlatılamadı: {}", err);
         show_fatal_startup_error(&err);
         std::process::exit(1);
     }

@@ -4,11 +4,16 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
+use crate::{dbg_log, log};
 
 const CLIENT_ID: &str = "1063494862365806612";
 
-const PLAY_ICON_URL: &str = "https://i.imgur.com/U8xihGX.png";
-const PAUSE_ICON_URL: &str = "https://i.imgur.com/5qg7F7p.png";
+// Play/Pause rozetleri: #7bbfd8 daire + beyaz sembol (BELGELER/discord-icons/).
+// Discord small_image herkese açık bir URL ister; repo GitHub'da olduğundan
+// raw.githubusercontent.com üzerinden servis ediliyor (updater ile aynı yol).
+// NOT: URL'ler yalnızca bu PNG'ler main'e commit+push edildikten sonra çalışır.
+const PLAY_ICON_URL: &str = "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/BELGELER/discord-icons/play.png";
+const PAUSE_ICON_URL: &str = "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/BELGELER/discord-icons/pause.png";
 
 const DASHBOARD_MESSAGES: &[&str] = &[
     "MAKINE SU AN DEVASA BIR FIÇI ASIT ICIYOR AGZINDAN BURUNDAN KAN KARIŞIK KÖPÜKLER FIŞKIYOR CIKIS YOK",
@@ -137,7 +142,7 @@ impl DiscordState {
                 }
 
                 if shutdown {
-                    println!("[Discord RPC] Kapatma sinyali alındı. RPC bağlantısı temizliyor...");
+                    dbg_log!("[Discord RPC] Kapatma sinyali alındı. RPC bağlantısı temizliyor...");
                     if let Some(mut c) = client.take() {
                         let _ = c.clear_activity();
                         let _ = c.close();
@@ -171,7 +176,7 @@ impl DiscordState {
                     if !was_clear {
                         if let Some(c) = &mut client {
                             if let Err(e) = c.clear_activity() {
-                                eprintln!("[Discord RPC] Activity temizlenirken hata oluştu: {:?}", e);
+                                dbg_log!("[Discord RPC] Activity temizlenirken hata oluştu: {:?}", e);
                                 let _ = c.close();
                                 client = None;
                             }
@@ -251,21 +256,21 @@ impl DiscordState {
 
                         if can_connect {
                             last_connect_attempt = Some(now);
-                            println!("[Discord RPC] Discord IPC'ye bağlanmaya çalışılıyor...");
+                            dbg_log!("[Discord RPC] Discord IPC'ye bağlanmaya çalışılıyor...");
                             match DiscordIpcClient::new(CLIENT_ID) {
                                 Ok(mut c) => {
                                     match c.connect() {
                                         Ok(_) => {
-                                            println!("[Discord RPC] Bağlantı başarılı!");
+                                            log!("[Discord] Bağlandı");
                                             client = Some(c);
                                         }
                                         Err(e) => {
-                                            eprintln!("[Discord RPC] Bağlantı başarısız: {:?}", e);
+                                            dbg_log!("[Discord RPC] Bağlantı başarısız: {:?}", e);
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("[Discord RPC] Client oluşturulamadı: {:?}", e);
+                                    dbg_log!("[Discord RPC] Client oluşturulamadı: {:?}", e);
                                 }
                             }
                         }
@@ -520,16 +525,16 @@ impl DiscordState {
                         match c.set_activity(activity) {
                             Ok(_) => {
                                 if is_real_change || current_page.is_none() {
-                                    println!("[Discord RPC] Durum güncellendi: {:?}, Meta: {:?}", page, metadata);
+                                    dbg_log!("[Discord RPC] Durum güncellendi: {:?}, Meta: {:?}", page, metadata);
                                 }
                                 was_clear = false;
                                 current_page = Some(page.clone());
                                 current_metadata = metadata.clone();
                             }
                             Err(e) => {
-                                eprintln!("[Discord RPC] İlk durum güncelleme denemesi başarısız oldu: {:?}", e);
+                                dbg_log!("[Discord RPC] İlk durum güncelleme denemesi başarısız oldu: {:?}", e);
 
-                                println!("[Discord RPC] Güvenli modda (resim yok, buton var) güncelleniyor...");
+                                dbg_log!("[Discord RPC] Güvenli modda (resim yok, buton var) güncelleniyor...");
                                 let mut safe_activity = activity::Activity::new()
                                     .details(&details_str)
                                     .state(&state_str);
@@ -604,14 +609,14 @@ impl DiscordState {
                                 match c.set_activity(safe_activity) {
                                     Ok(_) => {
                                         if is_real_change || current_page.is_none() {
-                                            println!("[Discord RPC] Güvenli modda durum başarıyla güncellendi: {:?}", page);
+                                            dbg_log!("[Discord RPC] Güvenli modda durum başarıyla güncellendi: {:?}", page);
                                         }
                                         was_clear = false;
                                         current_page = Some(page.clone());
                                         current_metadata = metadata.clone();
                                     }
                                     Err(fallback_err) => {
-                                        eprintln!("[Discord RPC] Güvenli modda da güncellenemedi: {:?}", fallback_err);
+                                        dbg_log!("[Discord RPC] Güvenli modda da güncellenemedi: {:?}", fallback_err);
                                         let _ = c.close();
                                         client = None;
                                     }

@@ -393,6 +393,12 @@
           "markdownDescription": "Oturum log dosyasını frontend'den okumaya izin verir"
         },
         {
+          "description": "OpenAnime bildirimlerinin arka planda okunup masaüstü toast bildirimi olarak gösterilmesine izin verir. Ayar aç/kapa, Gateway-Token köprüsü ve toast penceresinin kendi komutlarını kapsar.",
+          "type": "string",
+          "const": "allow-super-notifications",
+          "markdownDescription": "OpenAnime bildirimlerinin arka planda okunup masaüstü toast bildirimi olarak gösterilmesine izin verir. Ayar aç/kapa, Gateway-Token köprüsü ve toast penceresinin kendi komutlarını kapsar."
+        },
+        {
           "description": "Tema oluşturucu Svelte penceresini açma komutuna izin verir",
           "type": "string",
           "const": "allow-theme-builder",

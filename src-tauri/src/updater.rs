@@ -50,7 +50,7 @@ pub async fn check_for_updates(
         let cache_lock = state.cache.lock().unwrap();
         if let Some((instant, cached_channel, data)) = &*cache_lock {
             if instant.elapsed() < Duration::from_secs(300) && cached_channel == &channel {
-                crate::log!("[Updater] Returning cached update manifest for channel: {}", channel);
+                crate::dbg_log!("[Updater] Returning cached update manifest for channel: {}", channel);
                 return Ok(data.clone());
             }
         }
@@ -78,7 +78,7 @@ pub async fn check_for_updates(
         url = format!("{}?t={}", url, timestamp);
     }
 
-    crate::log!(
+    crate::dbg_log!(
         "[Updater] Checking updates on URL: {} (Rollback: {}, Force: {})",
         url, is_rollback, is_force
     );
@@ -92,14 +92,14 @@ pub async fn check_for_updates(
     // Eğer rollback yapılıyorsa, sürüm karşılaştırmasını bypass edip her zaman güncellemeye izin ver
     if is_rollback {
         builder = builder.version_comparator(|_current, _remote| {
-            crate::log!("[Updater] Rollback active, version comparison bypassed.");
+            crate::dbg_log!("[Updater] Rollback active, version comparison bypassed.");
             true
         });
     }
 
     let updater = builder.build().map_err(|e| format!("Updater Build Hatası: {}", e))?;
     let update_result = updater.check().await.map_err(|e| {
-        crate::log!("[Updater] Güncelleme sorgusu başarısız: {}", e);
+        crate::dbg_log!("[Updater] Güncelleme sorgusu başarısız: {}", e);
         format!("Güncelleme kontrolü başarısız: {}", e)
     })?;
 
@@ -189,7 +189,7 @@ pub async fn start_update_download(
                 }));
             },
             move || {
-                crate::log!("[Updater] Download completed, invoking silent install...");
+                crate::log!("[Güncelleme] İndirildi, kuruluyor…");
             }
         ).await;
 
@@ -205,10 +205,10 @@ pub async fn start_update_download(
                     "status": "success",
                     "percent": 100
                 }));
-                crate::log!("[Updater] Update finished successfully. App should exit now.");
+                crate::log!("[Güncelleme] Kuruldu, uygulama yeniden başlatılıyor…");
             }
             Err(e) => {
-                crate::log!("[Updater] Güncelleme hatası: {}", e);
+                crate::log!("[Güncelleme] Başarısız: {}", e);
                 let _ = app_c.emit("openanime://update-progress", serde_json::json!({
                     "status": "error",
                     "message": format!("Güncelleme başarısız: {}", e)

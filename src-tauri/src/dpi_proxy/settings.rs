@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::Manager;
+use crate::dbg_log;
 
 use super::methods::{DpiMethodRecord, MethodStatus};
 
@@ -73,11 +74,11 @@ impl GoodbyeSettings {
                 Ok(content) => {
                     match serde_json::from_str::<GoodbyeSettings>(&content) {
                         Ok(settings) => {
-                            println!("[DPI Proxy] Ayarlar yüklendi: {}", path.display());
+                            dbg_log!("[DPI Proxy] Ayarlar yüklendi: {}", path.display());
                             return settings;
                         }
                         Err(e) => {
-                            eprintln!(
+                            dbg_log!(
                                 "[DPI Proxy] Ayarlar bozuk, sıfırlanıyor: {}",
                                 e
                             );
@@ -85,7 +86,7 @@ impl GoodbyeSettings {
                     }
                 }
                 Err(e) => {
-                    eprintln!("[DPI Proxy] Ayarlar okunamadı: {}", e);
+                    dbg_log!("[DPI Proxy] Ayarlar okunamadı: {}", e);
                 }
             }
         }
@@ -103,13 +104,13 @@ impl GoodbyeSettings {
         match serde_json::to_string_pretty(self) {
             Ok(content) => {
                 if let Err(e) = std::fs::write(&path, content) {
-                    eprintln!("[DPI Proxy] Ayarlar yazılamadı: {}", e);
+                    dbg_log!("[DPI Proxy] Ayarlar yazılamadı: {}", e);
                 } else {
-                    println!("[DPI Proxy] Ayarlar kaydedildi: {}", path.display());
+                    dbg_log!("[DPI Proxy] Ayarlar kaydedildi: {}", path.display());
                 }
             }
             Err(e) => {
-                eprintln!("[DPI Proxy] Ayarlar serialize edilemedi: {}", e);
+                dbg_log!("[DPI Proxy] Ayarlar serialize edilemedi: {}", e);
             }
         }
     }

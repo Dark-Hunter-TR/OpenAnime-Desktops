@@ -14,10 +14,10 @@
 ///   4. WebGPU player stream'i alır ve oynatır.
 ///
 /// Avantajları:
-///   - ✅ MP4 olduğu yerde kalır (Download klasörü)
-///   - ✅ Hiç kopya oluşmaz, IndexedDB kullanılmaz
-///   - ✅ Büyük dosyalar (GB) sorunsuz çalışır
-///   - ✅ Range byte → seeking desteği
+///   - MP4 olduğu yerde kalır (Download klasörü)
+///   - Hiç kopya oluşmaz, IndexedDB kullanılmaz
+///   - Büyük dosyalar (GB) sorunsuz çalışır
+///   - Range byte → seeking desteği
 /// ────────────────────────────────────────────────────────────
 
 use std::io::{Read, Seek, SeekFrom};

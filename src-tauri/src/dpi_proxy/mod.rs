@@ -1,6 +1,8 @@
 // === OpenAnime — DPI Proxy Ana Modülü ===
 // Tüm DPI atlatma sistemini yönetir: proxy, ayarlar, bağlantı kontrolü
 
+use crate::dbg_log;
+
 mod http_mod;
 pub mod methods;
 pub mod remote_proxy;
@@ -53,7 +55,7 @@ impl DpiProxyManager {
         let settings = GoodbyeSettings::load(app);
         let system_running = is_system_goodbye_running();
 
-        println!(
+        dbg_log!(
             "[DPI Proxy] Sistemde harici GoodbyeDPI: {}",
             if system_running { "EVET" } else { "HAYIR" }
         );
@@ -76,7 +78,7 @@ impl DpiProxyManager {
         let method = methods::get_method_by_id(method_id)
             .ok_or_else(|| format!("Yöntem bulunamadı: {}", method_id))?;
 
-        println!(
+        dbg_log!(
             "[DPI Proxy] Proxy yöntemi güncelleniyor: #{} ({})",
             method_id, method.name
         );
@@ -101,8 +103,8 @@ impl DpiProxyManager {
         settings.active_method_id = Some(method_id);
         settings.save(app);
 
-        println!(
-            "[DPI Proxy] ✅ Proxy yöntemi başarıyla uygulandı (#{}).",
+        dbg_log!(
+            "[DPI Proxy] Proxy yöntemi başarıyla uygulandı (#{}).",
             method_id
         );
         Ok(())
@@ -110,7 +112,7 @@ impl DpiProxyManager {
 
     /// Proxy'yi durdur (Direct moduna geçer)
     pub async fn stop_proxy(&self, app: &tauri::AppHandle) {
-        println!("[DPI Proxy] Proxy bypass kapatılıyor (Direct moda geçiliyor)...");
+        dbg_log!("[DPI Proxy] Proxy bypass kapatılıyor (Direct moda geçiliyor)...");
         *self.current_method.lock().await = None;
 
         let mut settings = self.settings.lock().await;
@@ -118,7 +120,7 @@ impl DpiProxyManager {
         settings.active_method_id = Some(0); // 0 means Direct
         settings.save(app);
 
-        println!("[DPI Proxy] Proxy bypass durduruldu (Direct mode aktif).");
+        dbg_log!("[DPI Proxy] Proxy bypass durduruldu (Direct mode aktif).");
     }
 
     /// Detaylı bağlantı kontrolü
@@ -161,11 +163,11 @@ impl DpiProxyManager {
             let method_name = methods::get_method_by_id(method_id)
                 .map(|m| m.name.as_str())
                 .unwrap_or("?");
-            println!("[DPI Proxy] Yöntem #{} deneniyor... ({})", method_id, method_name);
+            dbg_log!("[DPI Proxy] Yöntem #{} deneniyor... ({})", method_id, method_name);
 
             // Proxy'yi bu yöntemle başlat
             if let Err(e) = self.start_proxy(app, method_id).await {
-                eprintln!("[DPI Proxy] Proxy başlatma hatası: {}", e);
+                dbg_log!("[DPI Proxy] Proxy başlatma hatası: {}", e);
                 continue;
             }
 
@@ -176,13 +178,13 @@ impl DpiProxyManager {
 
             match result {
                 ConnectionResult::Ok => {
-                    println!("[DPI Proxy] ✅ Yöntem #{} çalışıyor!", method_id);
+                    dbg_log!("[DPI Proxy] Yöntem #{} çalışıyor!", method_id);
                     settings.mark_method_success(method_id);
                     settings.save(app);
                     return Some(method_id);
                 }
                 _ => {
-                    println!("[DPI Proxy] ❌ Yöntem #{} başarısız: {:?}", method_id, result);
+                    dbg_log!("[DPI Proxy] Yöntem #{} başarısız: {:?}", method_id, result);
                     settings.mark_method_fail(method_id);
                     settings.save(app);
                 }
@@ -191,7 +193,7 @@ impl DpiProxyManager {
             self.stop_proxy(app).await;
         }
 
-        println!("[DPI Proxy] Hiçbir yöntem çalışmadı.");
+        dbg_log!("[DPI Proxy] Hiçbir yöntem çalışmadı.");
         None
     }
 
@@ -199,17 +201,17 @@ impl DpiProxyManager {
     // Windows DPI arka plan akışında kullanılır (cfg(windows)); Linux'ta ölü görünür.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub async fn try_remote_proxy_fallback(&self, _app: &tauri::AppHandle) -> Result<(), String> {
-        println!("[DPI Proxy] Uzak proxy fallback deneniyor...");
+        dbg_log!("[DPI Proxy] Uzak proxy fallback deneniyor...");
         *self.connection_stage.lock().await = "trying_proxy".to_string();
         
         match remote_proxy::try_remote_proxy_connection().await {
             Ok(_) => {
-                println!("[DPI Proxy] ✅ Uzak proxy fallback başarılı!");
+                dbg_log!("[DPI Proxy] Uzak proxy fallback başarılı!");
                 *self.connection_stage.lock().await = "success".to_string();
                 Ok(())
             }
             Err(e) => {
-                println!("[DPI Proxy] ❌ Uzak proxy fallback başarısız: {}", e);
+                dbg_log!("[DPI Proxy] Uzak proxy fallback başarısız: {}", e);
                 *self.connection_stage.lock().await = "failed".to_string();
                 Err(e)
             }
@@ -268,11 +270,11 @@ async fn check_openanime_connection(use_proxy: bool) -> ConnectionResult {
 
     // Bypassing system DNS using Cloudflare DoH (DNS-over-HTTPS)
     if let Some(ip) = remote_proxy::resolve_dns_doh("openani.me").await {
-        println!("[DPI Proxy] DNS Bypass (DoH): openani.me resolved to {}", ip);
+        dbg_log!("[DPI Proxy] DNS Bypass (DoH): openani.me resolved to {}", ip);
         let socket_addr = std::net::SocketAddr::new(ip, 443);
         builder = builder.resolve("openani.me", socket_addr);
     } else {
-        println!("[DPI Proxy] Warning: Cloudflare DoH failed, falling back to system DNS");
+        dbg_log!("[DPI Proxy] Warning: Cloudflare DoH failed, falling back to system DNS");
     }
 
     if use_proxy {

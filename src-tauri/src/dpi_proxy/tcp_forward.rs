@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use super::methods::DpiMethod;
 use super::tls_detect;
+use crate::{dbg_log, log};
 
 const PROXY_ADDR: &str = "127.0.0.1:1453";
 const FRAGMENT_DELAY: Duration = Duration::from_millis(2);
@@ -19,23 +20,24 @@ pub async fn start_proxy_internal(
     current_method: Arc<Mutex<Option<DpiMethod>>>,
     running: Arc<Mutex<bool>>,
 ) {
-    println!("[DPI Proxy] === TCP Proxy Başlatılıyor ===");
-    println!("[DPI Proxy] Adres: {}", PROXY_ADDR);
+    dbg_log!("[DPI Proxy] === TCP Proxy Başlatılıyor ===");
+    dbg_log!("[DPI Proxy] Adres: {}", PROXY_ADDR);
 
     let listener = match TcpListener::bind(PROXY_ADDR).await {
         Ok(l) => {
-            println!("[DPI Proxy] ✅ HTTP proxy başlatıldı: {}", PROXY_ADDR);
+            dbg_log!("[DPI Proxy] HTTP proxy başlatıldı: {}", PROXY_ADDR);
             l
         }
         Err(e) => {
-            eprintln!("[DPI Proxy] ❌ Proxy başlatılamadı (port {} meşgul olabilir): {}", PROXY_ADDR, e);
+            log!("[Bağlantı] Hızlandırıcı başlatılamadı (port meşgul olabilir). Site açılmazsa uygulamayı yeniden başlatın.");
+            dbg_log!("[DPI Proxy] bind hatası ({}): {}", PROXY_ADDR, e);
             return;
         }
     };
 
     loop {
         if !*running.lock().await {
-            println!("[DPI Proxy] Proxy durduruluyor...");
+            dbg_log!("[DPI Proxy] Proxy durduruluyor...");
             break;
         }
 
@@ -55,19 +57,19 @@ pub async fn start_proxy_internal(
                         // Avoid spamming canvas connection reset errors which are expected
                         let is_canvas = e.contains("canvas");
                         if !is_canvas {
-                            eprintln!("[DPI Proxy] Bağlantı hatası ({}): {}", addr, e);
+                            dbg_log!("[DPI Proxy] Bağlantı hatası ({}): {}", addr, e);
                         }
                     }
                 });
             }
             Ok(Err(e)) => {
-                eprintln!("[DPI Proxy] Accept hatası: {}", e);
+                dbg_log!("[DPI Proxy] Accept hatası: {}", e);
             }
             Err(_) => continue,
         }
     }
 
-    println!("[DPI Proxy] Proxy sonlandı.");
+    dbg_log!("[DPI Proxy] Proxy sonlandı.");
 }
 
 /// DNS engellemelerini aşmak için hedef adresi Cloudflare DoH ile çözer
@@ -77,7 +79,7 @@ async fn resolve_target_doh(target: &str) -> String {
         if let Some(ip) = super::remote_proxy::resolve_dns_doh(host).await {
             let port = target.split(':').nth(1).unwrap_or("443");
             let new_target = format!("{}:{}", ip, port);
-            println!("[DPI Proxy] DNS Bypass (DoH): {} -> {}", target, new_target);
+            dbg_log!("[DPI Proxy] DNS Bypass (DoH): {} -> {}", target, new_target);
             return new_target;
         }
     }
@@ -99,7 +101,7 @@ async fn handle_http_proxy(mut client: TcpStream, method: DpiMethod) -> Result<(
         .map_err(|e| format!("Geçersiz UTF-8: {}", e))?;
     let request_line = request_line.trim_end_matches('\r').trim_end_matches('\n');
 
-    println!(
+    dbg_log!(
         "[DPI Proxy] Gelen istek: {} ({} bayt)",
         request_line,
         n
@@ -140,23 +142,23 @@ async fn handle_connect(
     // bu proxy kaynaklı bir hata DEĞİLDİR, normal davranıştır.
     let is_canvas = target.contains("canvas.openani.me");
 
-    println!("[DPI Proxy] CONNECT {} (yöntem: #{}, {})", target, method.id, method.name);
+    dbg_log!("[DPI Proxy] CONNECT {} (yöntem: #{}, {})", target, method.id, method.name);
 
     let connect_target = resolve_target_doh(target).await;
 
     // Hedefe bağlan
     let mut server = match TcpStream::connect(&connect_target).await {
         Ok(s) => {
-            println!("[DPI Proxy]   ✅ Hedefe bağlanıldı: {}", connect_target);
+            dbg_log!("[DPI Proxy]   Hedefe bağlanıldı: {}", connect_target);
             s
         }
         Err(e) => {
             // canvas domainleri için bağlantı hatalarını sessizce geç
             if is_canvas {
-                println!("[DPI Proxy]   ⚠️ Canvas domain bağlantı hatası (beklenen): {} - {}", target, e);
+                dbg_log!("[DPI Proxy]   Canvas domain bağlantı hatası (beklenen): {} - {}", target, e);
                 return Ok(());
             }
-            eprintln!("[DPI Proxy]   ❌ Hedefe bağlanılamadı ({}): {}", connect_target, e);
+            dbg_log!("[DPI Proxy]   Hedefe bağlanılamadı ({}): {}", connect_target, e);
             return Err(format!("Hedefe bağlanılamadı ({}): {}", connect_target, e));
         }
     };
@@ -166,22 +168,22 @@ async fn handle_connect(
 
     // Proxy'den 200 Connection Established cevabı gönder
     let response = "HTTP/1.1 200 Connection Established\r\n\r\n";
-    println!("[DPI Proxy]   200 Connection Established gönderiliyor...");
+    dbg_log!("[DPI Proxy]   200 Connection Established gönderiliyor...");
     client.write_all(response.as_bytes())
         .await
         .map_err(|e| format!("200 CEVABI GÖNDERİLEMEDİ: {}", e))?;
 
     // flush
     client.flush().await.map_err(|e| e.to_string())?;
-    println!("[DPI Proxy]   200 CEVABI gönderildi, TLS tünellemesi başlıyor...");
+    dbg_log!("[DPI Proxy]   200 CEVABI gönderildi, TLS tünellemesi başlıyor...");
 
     // TLS tünellemesi — ClientHello fragmentasyonu
     handle_tls_tunnel(&mut client, &mut server, &method).await?;
 
     // Kalan veriyi çift yönlü kopyala
-    println!("[DPI Proxy]   Çift yönlü kopyalama başlatılıyor: {}", target);
+    dbg_log!("[DPI Proxy]   Çift yönlü kopyalama başlatılıyor: {}", target);
     bidirectional_copy(client, server).await;
-    println!("[DPI Proxy]   Bağlantı kapandı: {}", target);
+    dbg_log!("[DPI Proxy]   Bağlantı kapandı: {}", target);
     Ok(())
 }
 
@@ -215,18 +217,18 @@ async fn handle_http_request(
         format!("{}:80", host)
     };
 
-    println!("[DPI Proxy] HTTP {} -> {} (hedef: {})", parts[0], url_str, target);
+    dbg_log!("[DPI Proxy] HTTP {} -> {} (hedef: {})", parts[0], url_str, target);
 
     let connect_target = resolve_target_doh(&target).await;
 
     // Hedefe bağlan
     let mut server = match TcpStream::connect(&connect_target).await {
         Ok(s) => {
-            println!("[DPI Proxy]   ✅ HTTP hedefe bağlanıldı: {}", connect_target);
+            dbg_log!("[DPI Proxy]   HTTP hedefe bağlanıldı: {}", connect_target);
             s
         }
         Err(e) => {
-            eprintln!("[DPI Proxy]   ❌ HTTP hedefe bağlanılamadı ({}): {}", connect_target, e);
+            dbg_log!("[DPI Proxy]   HTTP hedefe bağlanılamadı ({}): {}", connect_target, e);
             return Err(format!("HTTP hedefe bağlanılamadı ({}): {}", connect_target, e));
         }
     };
@@ -236,7 +238,7 @@ async fn handle_http_request(
 
     // HTTP verisine manipülasyon + fragmentasyon uygula
     let mut data = first_data.to_vec();
-    println!("[DPI Proxy]   HTTP veri boyutu: {} bayt, fragment: {}", data.len(), method.http_fragment_size);
+    dbg_log!("[DPI Proxy]   HTTP veri boyutu: {} bayt, fragment: {}", data.len(), method.http_fragment_size);
 
     // Header manipülasyonu
     if method.http_host_removespace || method.http_host_mixedcase || method.http_host_case {
@@ -253,13 +255,13 @@ async fn handle_http_request(
             let _ = super::http_mod::replace_host_with_host(&mut data);
             manipulations.push("host_case");
         }
-        println!("[DPI Proxy]   Header manipülasyonları uygulandı: {:?}", manipulations);
+        dbg_log!("[DPI Proxy]   Header manipülasyonları uygulandı: {:?}", manipulations);
     }
 
     // Fragmentasyon
     let frag_size = method.http_fragment_size as usize;
     if frag_size > 0 && frag_size < data.len() {
-        println!(
+        dbg_log!(
             "[DPI Proxy]   Fragmentasyon uygulanıyor: {} bayt (reverse: {})",
             frag_size,
             method.reverse_fragment
@@ -273,16 +275,16 @@ async fn handle_http_request(
             tokio::time::sleep(FRAGMENT_DELAY).await;
             server.write_all(&data[frag_size..]).await.map_err(|e| e.to_string())?;
         }
-        println!("[DPI Proxy]   Fragmentasyon tamamlandı");
+        dbg_log!("[DPI Proxy]   Fragmentasyon tamamlandı");
     } else {
-        println!("[DPI Proxy]   Fragmentasyon yok (frag_size={}, data.len={})", frag_size, data.len());
+        dbg_log!("[DPI Proxy]   Fragmentasyon yok (frag_size={}, data.len={})", frag_size, data.len());
         server.write_all(&data).await.map_err(|e| e.to_string())?;
     }
 
     // Kalan veriyi çift yönlü kopyala
-    println!("[DPI Proxy]   HTTP çift yönlü kopyalama başlatılıyor...");
+    dbg_log!("[DPI Proxy]   HTTP çift yönlü kopyalama başlatılıyor...");
     bidirectional_copy(client, server).await;
-    println!("[DPI Proxy]   HTTP bağlantı kapandı: {}", target);
+    dbg_log!("[DPI Proxy]   HTTP bağlantı kapandı: {}", target);
     Ok(())
 }
 
@@ -295,18 +297,18 @@ async fn handle_tls_tunnel(
     let mut buf = vec![0u8; 4096];
     let n = match client.read(&mut buf).await {
         Ok(n) => {
-            println!("[DPI Proxy]   TLS ClientHello okundu: {} bayt", n);
+            dbg_log!("[DPI Proxy]   TLS ClientHello okundu: {} bayt", n);
             n
         }
         Err(e) => {
             // Client bağlantıyı kapattıysa (Cloudflare Turnstile vb.) sessizce dön
-            println!("[DPI Proxy]   ⚠️ TLS ClientHello okuma hatası: {} (muhtemelen canvas/cloudflare)", e);
+            dbg_log!("[DPI Proxy]   TLS ClientHello okuma hatası: {} (muhtemelen canvas/cloudflare)", e);
             return Ok(());
         }
     };
 
     if n == 0 {
-        println!("[DPI Proxy]   ⚠️ TLS ClientHello boş (bağlantı kapandı)");
+        dbg_log!("[DPI Proxy]   TLS ClientHello boş (bağlantı kapandı)");
         return Ok(());
     }
 
@@ -316,25 +318,25 @@ async fn handle_tls_tunnel(
         if method.fragment_by_sni {
             if let Some(sni) = tls_detect::extract_sni(&buf[..n]) {
                 let sni_offset = unsafe { sni.as_ptr().offset_from(buf.as_ptr()) } as usize;
-                println!(
+                dbg_log!(
                     "[DPI Proxy]   SNI fragmentasyon: offset={}, sni={:?}",
                     sni_offset,
                     std::str::from_utf8(sni).unwrap_or("(invalid utf8)")
                 );
                 if sni_offset > 0 && sni_offset < n {
-                    println!("[DPI Proxy]   SNI fragmentasyon uygulanıyor: {} bayt -> bekle -> {} bayt", sni_offset, n - sni_offset);
+                    dbg_log!("[DPI Proxy]   SNI fragmentasyon uygulanıyor: {} bayt -> bekle -> {} bayt", sni_offset, n - sni_offset);
                     let _ = server.write_all(&buf[..sni_offset]).await;
                     tokio::time::sleep(FRAGMENT_DELAY).await;
                     let _ = server.write_all(&buf[sni_offset..n]).await;
-                    println!("[DPI Proxy]   SNI fragmentasyon tamamlandı");
+                    dbg_log!("[DPI Proxy]   SNI fragmentasyon tamamlandı");
                     return Ok(());
                 }
             } else {
-                println!("[DPI Proxy]   ⚠️ SNI çıkarılamadı, normal fragmentasyon deneniyor");
+                dbg_log!("[DPI Proxy]   SNI çıkarılamadı, normal fragmentasyon deneniyor");
             }
         }
 
-        println!(
+        dbg_log!(
             "[DPI Proxy]   HTTPS fragmentasyon: {} bayt (reverse: {}, toplam: {} bayt)",
             frag_size,
             method.reverse_fragment,
@@ -349,9 +351,9 @@ async fn handle_tls_tunnel(
             tokio::time::sleep(FRAGMENT_DELAY).await;
             let _ = server.write_all(&buf[frag_size..n]).await;
         }
-        println!("[DPI Proxy]   HTTPS fragmentasyon tamamlandı");
+        dbg_log!("[DPI Proxy]   HTTPS fragmentasyon tamamlandı");
     } else {
-        println!(
+        dbg_log!(
             "[DPI Proxy]   HTTPS fragmentasyon yok (frag_size={}, n={}), direkt iletiliyor",
             frag_size, n
         );

@@ -11,19 +11,105 @@ use std::time::SystemTime;
 use tauri::Manager;
 
 // ===== Global Static Logger =====
-// Her yerden `log!("mesaj")` ile erişilebilir
+// İki makro:
+//   log!("...")     → kullanıcıya görünür (konsol + dosya), sade dil.
+//   dbg_log!("...") → teknik ayrıntı, yalnızca OA_DEBUG çevre değişkeni ayarlıysa.
+// Her yerden erişilebilir (crate kökünde #[macro_export]).
 
 static LOGGER: std::sync::LazyLock<Mutex<SessionLoggerInner>> =
     std::sync::LazyLock::new(|| Mutex::new(SessionLoggerInner::new()));
 
-/// Global makro — hem console'a yazar hem de log dosyasına
+/// Kullanıcıya GÖRÜNEN log — sade dille, önemli olaylar. Konsol + dosya.
+/// Normal bir kullanıcı okuyunca ne olduğunu anlamalı.
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        println!("{}", msg);
-        $crate::logger::write_to_file(&msg);
+        $crate::logger::emit(&msg, false);
     }};
+}
+
+/// TEKNİK / hata-ayıklama log'u. Görünürlük `debug_enabled()`e bağlı:
+/// dev (debug build) → AÇIK, yayın (release) → temiz. `OA_DEBUG=0/1` ile zorlanır.
+/// Bağlantı-başı ayrıntı, süreç sayıları, bayt boyutları gibi kullanıcıya
+/// anlamsız gelen her şey buraya gider.
+#[macro_export]
+macro_rules! dbg_log {
+    ($($arg:tt)*) => {{
+        if $crate::logger::debug_enabled() {
+            let msg = format!($($arg)*);
+            $crate::logger::emit(&msg, true);
+        }
+    }};
+}
+
+/// `dbg_log!` açık mı? Karar (bir kez okunup önbelleğe alınır):
+///   OA_DEBUG=1 (veya boş/0 dışında)  → AÇIK  (her yerde)
+///   OA_DEBUG=0                        → KAPALI (dev'de de sustur)
+///   OA_DEBUG ayarlı DEĞİL             → DEBUG build'de AÇIK, RELEASE'de KAPALI
+/// Yani `bun run tauri dev` (debug) tüm teknik detayı gösterir; yayınlanan
+/// sürüm (release) temiz kalır. Env değişkeni her ikisini de zorlayabilir.
+pub fn debug_enabled() -> bool {
+    static ENABLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        match std::env::var("OA_DEBUG") {
+            Ok(v) => !v.is_empty() && v != "0",
+            Err(_) => cfg!(debug_assertions),
+        }
+    });
+    *ENABLED
+}
+
+/// Bir log satırını yayar: konsola ANSI renkli, dosyaya DÜZ (renk kodu yok).
+/// `debug=true` → sönük gri (dbg_log). Renkler kategoriye göre seçilir.
+pub fn emit(msg: &str, debug: bool) {
+    #[cfg(windows)]
+    {
+        static ANSI: std::sync::Once = std::sync::Once::new();
+        ANSI.call_once(enable_ansi);
+    }
+    if debug {
+        println!("\x1b[90m{}\x1b[0m", msg); // sönük gri
+    } else {
+        println!("{}{}\x1b[0m", console_color(msg), msg);
+    }
+    write_to_file(msg);
+}
+
+/// `[Kategori]` etiketine göre ANSI renk kodu (konsol için).
+fn console_color(msg: &str) -> &'static str {
+    if msg.contains("[Hata]") {
+        "\x1b[91m" // parlak kırmızı
+    } else if msg.contains("[Bağlantı]") {
+        "\x1b[96m" // parlak camgöbeği
+    } else if msg.contains("[Güncelleme]") {
+        "\x1b[95m" // parlak mor
+    } else if msg.contains("[Bildirim]") || msg.contains("[Süper Bildirim]") {
+        "\x1b[93m" // parlak sarı
+    } else if msg.contains("[Discord]") {
+        "\x1b[94m" // parlak mavi
+    } else if msg.contains("[OpenAnime]") {
+        "\x1b[92m" // parlak yeşil
+    } else {
+        "\x1b[0m" // varsayılan
+    }
+}
+
+/// Windows konsolunda ANSI renklerini etkinleştir (VT işleme). Modern
+/// Windows Terminal zaten destekler; eski conhost için gerekli.
+#[cfg(windows)]
+fn enable_ansi() {
+    use windows::Win32::System::Console::{
+        GetConsoleMode, GetStdHandle, SetConsoleMode, CONSOLE_MODE,
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_OUTPUT_HANDLE,
+    };
+    unsafe {
+        if let Ok(handle) = GetStdHandle(STD_OUTPUT_HANDLE) {
+            let mut mode = CONSOLE_MODE(0);
+            if GetConsoleMode(handle, &mut mode).is_ok() {
+                let _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
+        }
+    }
 }
 
 /// Dosyaya yaz (makro içinden çağrılır)
@@ -95,20 +181,24 @@ impl SessionLoggerInner {
                 self.repeat_count = 0;
 
                 let header = format!(
-                    "===== OpenAnime Session Log =====\n\
-                     Başlangıç: {}\n\
-                     Build: {}\n\
-                     Platform: {}\n\
-                     =================================\n",
+                    "════════════════════════════════════════════════\n\
+                       OpenAnime · Oturum Günlüğü\n\
+                     ────────────────────────────────────────────────\n\
+                       Başlangıç : {}\n\
+                       Yapı      : {}\n\
+                       Platform  : {}\n\
+                     ════════════════════════════════════════════════\n",
                     format_timestamp(now),
                     if cfg!(debug_assertions) { "DEBUG" } else { "RELEASE" },
                     std::env::consts::OS
                 );
                 let _ = self.raw_write(&header);
-                println!("[Logger] ✅ Log dosyası: {}", log_path.display());
+                if debug_enabled() {
+                    println!("[Logger] Log dosyası: {}", log_path.display());
+                }
             }
             Err(e) => {
-                eprintln!("[Logger] ❌ Log dosyası açılamadı ({}): {}", log_path.display(), e);
+                eprintln!("[Logger] Log dosyası açılamadı ({}): {}", log_path.display(), e);
             }
         }
     }

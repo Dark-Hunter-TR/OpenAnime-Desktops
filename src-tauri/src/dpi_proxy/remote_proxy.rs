@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 use std::net::IpAddr;
+use crate::dbg_log;
 
 /// Cloudflare/Google DNS-over-HTTPS (DoH) JSON API kullanarak DNS çözer.
 /// Bu sayede servis sağlayıcının DNS engellemeleri (DNS poisoning) aşılır.
@@ -46,7 +47,7 @@ pub async fn resolve_dns_doh(domain: &str) -> Option<IpAddr> {
 /// DPI engellerinin yanı sıra coğrafi/yurt dışı IP engellerini aşmak için tasarlanmıştır.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub async fn try_remote_proxy_connection() -> Result<(), String> {
-    println!("[Remote Proxy] Cloudflare Worker reverse proxy fallback deneniyor...");
+    dbg_log!("[Remote Proxy] Cloudflare Worker reverse proxy fallback deneniyor...");
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -67,7 +68,7 @@ pub async fn try_remote_proxy_connection() -> Result<(), String> {
     match client.get(worker_proxy_url).send().await {
         Ok(resp) => {
             if resp.status().is_success() {
-                println!("[Remote Proxy] ✅ Cloudflare Worker proxy bağlantısı başarılı!");
+                dbg_log!("[Remote Proxy] Cloudflare Worker proxy bağlantısı başarılı!");
                 Ok(())
             } else {
                 Err(format!("Cloudflare Worker proxy HTTP hata kodu: {}", resp.status()))

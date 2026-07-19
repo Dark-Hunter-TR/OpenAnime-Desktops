@@ -1,0 +1,15 @@
+[[permission]]
+identifier = "allow-super-notifications"
+title = "Süper Bildirimler"
+description = "OpenAnime bildirimlerinin arka planda okunup masaüstü toast bildirimi olarak gösterilmesine izin verir. Ayar aç/kapa, Gateway-Token köprüsü ve toast penceresinin kendi komutlarını kapsar."
+
+[permission.commands]
+allow = [
+    "sn_set_enabled",
+    "sn_set_gateway_token",
+    "sn_set_auth_token",
+    "sn_set_account",
+    "sn_open_notification",
+    "sn_test_toast",
+    "sn_test_notifications"
+]

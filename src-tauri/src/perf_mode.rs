@@ -29,14 +29,15 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
     TH32CS_SNAPPROCESS,
 };
+use windows::Win32::System::ProcessStatus::EmptyWorkingSet;
 use windows::Win32::System::Threading::{
     OpenProcess, SetPriorityClass, SetProcessInformation, IDLE_PRIORITY_CLASS,
     NORMAL_PRIORITY_CLASS, PROCESS_INFORMATION_CLASS, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
     PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
-    PROCESS_SET_INFORMATION,
+    PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION, PROCESS_SET_QUOTA,
 };
 
-use crate::log;
+use crate::dbg_log;
 
 /// ProcessPowerThrottling — windows crate'te sabit olarak yok, ham değer 4.
 const PROCESS_POWER_THROTTLING: PROCESS_INFORMATION_CLASS = PROCESS_INFORMATION_CLASS(4);
@@ -144,7 +145,7 @@ pub fn apply_eco_mode(browser_pid: u32, low: bool) {
     let mut cur = CURRENT_MODE.lock().unwrap();
     if *cur != Some(low) {
         *cur = Some(low);
-        log!(
+        dbg_log!(
             "[PerfMode] EcoQoS {} → {}/{} süreç (browser pid {})",
             if low { "AÇIK (verimlilik)" } else { "KAPALI (tam performans)" },
             ok,
@@ -152,4 +153,41 @@ pub fn apply_eco_mode(browser_pid: u32, low: bool) {
             browser_pid
         );
     }
+}
+
+/// Tüm WebView2 süreç ağacının çalışma kümesini (working set) boşaltır.
+///
+/// EmptyWorkingSet, sürecin fiziksel RAM'deki (private + shareable) sayfalarını
+/// standby/modified listesine iter — Task Manager'daki "Bellek" anında düşer.
+/// Sayfalar silinmez; yeniden erişilince geri sayfalanır. Bu yüzden yalnızca
+/// pencere GİZLİ/MİNİMİZE iken (arka planda) çağrılır: ön plandayken çağırmak
+/// hemen geri sayfalama yaptırıp faydasız CPU harcar.
+///
+/// TrySuspend ile birlikte kullanılır: önce motoru dondur (yeni ayırma olmasın),
+/// sonra mevcut sayfaları RAM'den at.
+pub fn trim_working_sets(browser_pid: u32) {
+    let pids = webview_process_tree(browser_pid);
+    let mut ok = 0;
+    for pid in &pids {
+        unsafe {
+            let handle = match OpenProcess(
+                PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION,
+                false,
+                *pid,
+            ) {
+                Ok(h) => h,
+                Err(_) => continue,
+            };
+            if EmptyWorkingSet(handle).is_ok() {
+                ok += 1;
+            }
+            let _ = CloseHandle(handle);
+        }
+    }
+    dbg_log!(
+        "[PerfMode] Working set trim → {}/{} süreç (browser pid {})",
+        ok,
+        pids.len(),
+        browser_pid
+    );
 }
