@@ -164,65 +164,12 @@ function buildCardHTML(isEnabled, hashes, dropdownHashes, activeVisibility) {
           <span class="text-block type-body ${textBlockHash}">Discord RPC</span>
           <span class="text-block type-caption text-secondary ${textBlockHash}">Durumunuzu (izlediğiniz anime, bölüm vb.) Discord profilinizde gösterir.</span>
         </div>
-        <div class="expander-control ${controlHash}" style="pointer-events:auto;">
-          <button class="expander-chevron ${headerHash}" type="button" tabindex="-1" id="tauri-discord-rpc-settings-chevron" style="pointer-events:auto;cursor:pointer;">
-            <svg class="${headerHash}" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;">
-              <path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path>
-            </svg>
-          </button>
-        </div>
       </span>
-    </div>
-
-    <div class="expander-content-anchor ${headerHash}" id="tauri-discord-rpc-content" style="display:none;">
-      <div class="expander-content ${headerHash}">
-        <div class="expander-content ${itemHeaderHash}">
-
-          <!-- Seçenek 1: Discord RPC Aktiflik Durumu -->
-          <div class="item ${itemHeaderHash}">
-            <span class="text-block type-body ${textBlockHash}">Discord RPC Durumu</span>
-            <div style="display:flex;align-items:center;pointer-events:auto;gap:8px;">
-              <span id="tauri-discord-rpc-status-text" class="${statusSpanClasses}">
-                ${isEnabled ? "Etkin" : "Devre Dışı"}
-              </span>
-              <label class="toggle-switch-container ${toggleContainerHash}" style="pointer-events:auto;">
-                <input
-                  class="toggle-switch ${toggleInputHash}"
-                  type="checkbox"
-                  id="tauri-discord-rpc-toggle"
-                  ${isEnabled ? "checked" : ""}
-                />
-              </label>
-            </div>
-          </div>
-
-          <!-- Seçenek 2: RPC Görünürlüğü (Dropdown) -->
-          <div class="item ${itemHeaderHash}" style="overflow:visible;align-items:flex-start;gap:12px;">
-            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
-              <span class="text-block type-body ${textBlockHash}">RPC Görünürlüğü</span>
-              <span class="text-block type-caption text-secondary ${textBlockHash}">Discord RPC'de nelerin gözükeceğini seçin. "Herşey" uygulamada bulunduğunuz sekmeleri ve izlediğiniz serileri gösterirken, "Sadece İzlenen" ise yalnızca anime izlerken aktif olur.</span>
-            </div>
-            <div class="combo-box ${dropdownHashes.comboBoxHash}" id="tauri-discord-visibility-wrapper" style="position:relative !important;flex-shrink:0;">
-              <button class="button style-standard combo-box-button ${dropdownHashes.buttonHash}" tabindex="0" type="button" id="tauri-discord-visibility-btn" style="pointer-events:auto;width:152px !important;min-width:152px !important;white-space:nowrap !important;" aria-haspopup="listbox">
-                <span class="combo-box-label ${dropdownHashes.comboBoxHash}" id="tauri-discord-visibility-label">${visibilityDisplay}</span>
-                <svg aria-hidden="true" class="combo-box-icon ${dropdownHashes.comboBoxHash}" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
-                  <path fill="currentColor" d="M8.36612 16.1161C7.87796 16.6043 7.87796 17.3957 8.36612 17.8839L23.1161 32.6339C23.6043 33.122 24.3957 33.122 24.8839 32.6339L39.6339 17.8839C40.122 17.3957 40.122 16.6043 39.6339 16.1161C39.1457 15.628 38.3543 15.628 37.8661 16.1161L24 29.9822L10.1339 16.1161C9.64573 15.628 8.85427 15.628 8.36612 16.1161Z"></path>
-                </svg>
-              </button>
-              <ul id="tauri-discord-rpc-visibility-menu" role="listbox" class="combo-box-dropdown ${dropdownHashes.dropdownHash} acrylic" style="display:none;">
-                <li tabindex="0" class="combo-box-item ${dropdownHashes.itemHash} ${activeVisibility === "everything" ? "selected" : ""}" role="option" data-val="everything">
-                  <span class="${dropdownHashes.itemHash}">Herşey</span>
-                </li>
-                <li tabindex="0" class="combo-box-item ${dropdownHashes.itemHash} ${activeVisibility === "watch_only" ? "selected" : ""}" role="option" data-val="watch_only">
-                  <span class="${dropdownHashes.itemHash}">Sadece İzlenen</span>
-                </li>
-              </ul>
-              <input type="hidden" aria-hidden="true" value="${activeVisibility}">
-            </div>
-          </div>
-
-        </div>
-      </div>
+      <button class="expander-chevron ${headerHash}" type="button" tabindex="-1" id="tauri-discord-rpc-settings-chevron" style="pointer-events:auto;cursor:pointer;">
+        <svg class="${headerHash}" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;">
+          <path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path>
+        </svg>
+      </button>
     </div>
 
     <div class="expander-content-anchor ${headerHash}" id="tauri-discord-rpc-content" style="display:none;">
