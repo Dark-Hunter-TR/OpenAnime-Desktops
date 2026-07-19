@@ -95,13 +95,8 @@ function openDiscordDropdownMenu(wrapper) {
   menu.style.setProperty("display", "block", "important");
   menu.style.setProperty("position", "absolute", "important");
   menu.style.setProperty("left", "0", "important");
-<<<<<<< HEAD
-  menu.style.setProperty("width", "152px", "important");
-  menu.style.setProperty("min-width", "152px", "important");
-=======
   menu.style.setProperty("width", "120px", "important");
   menu.style.setProperty("min-width", "120px", "important");
->>>>>>> 2c132efe8dfb980765594909075942ed6b3fb8ed
   menu.style.setProperty("max-height", "256px", "important");
   menu.style.setProperty("overflow-y", "auto", "important");
   menu.style.setProperty("z-index", "1000", "important");
