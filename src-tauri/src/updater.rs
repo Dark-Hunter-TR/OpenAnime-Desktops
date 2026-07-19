@@ -45,12 +45,20 @@ pub async fn check_for_updates(
     let is_rollback = target_version.is_some();
     let is_force = force.unwrap_or(false);
     
+    // Eğer uygulama hata ayıklama (debug/dev) modunda derlendiyse, kanalı otomatik olarak beta'ya zorla
+    let active_channel = if cfg!(debug_assertions) {
+        crate::log!("[Updater] Geliştirici (Dev) derlemesi algılandı. Güncelleme kanalı 'beta' olarak ayarlanıyor.");
+        "beta".to_string()
+    } else {
+        channel.to_lowercase()
+    };
+    
     // 1. Cache Kontrolü (Rollback veya Force değilse ve 5 dakika geçerliyse)
     if !is_rollback && !is_force {
         let cache_lock = state.cache.lock().unwrap();
         if let Some((instant, cached_channel, data)) = &*cache_lock {
-            if instant.elapsed() < Duration::from_secs(300) && cached_channel == &channel {
-                crate::dbg_log!("[Updater] Returning cached update manifest for channel: {}", channel);
+            if instant.elapsed() < Duration::from_secs(300) && cached_channel == &active_channel {
+                crate::log!("[Updater] Returning cached update manifest for channel: {}", active_channel);
                 return Ok(data.clone());
             }
         }
@@ -63,7 +71,7 @@ pub async fn check_for_updates(
             version
         )
     } else {
-        match channel.to_lowercase().as_str() {
+        match active_channel.as_str() {
             "beta" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-beta.json".to_string(),
             "alpha" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-alpha.json".to_string(),
             _ => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-stable.json".to_string(),
