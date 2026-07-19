@@ -164,12 +164,14 @@ function buildCardHTML(isEnabled, hashes, dropdownHashes, activeVisibility) {
           <span class="text-block type-body ${textBlockHash}">Discord RPC</span>
           <span class="text-block type-caption text-secondary ${textBlockHash}">Durumunuzu (izlediğiniz anime, bölüm vb.) Discord profilinizde gösterir.</span>
         </div>
+        <div class="expander-control ${controlHash}" style="pointer-events:auto;">
+          <button class="expander-chevron ${headerHash}" type="button" tabindex="-1" id="tauri-discord-rpc-settings-chevron" style="pointer-events:auto;cursor:pointer;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;">
+              <path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path>
+            </svg>
+          </button>
+        </div>
       </span>
-      <button class="expander-chevron ${headerHash}" type="button" tabindex="-1" id="tauri-discord-rpc-settings-chevron" style="pointer-events:auto;cursor:pointer;">
-        <svg class="${headerHash}" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;">
-          <path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path>
-        </svg>
-      </button>
     </div>
 
     <div class="expander-content-anchor ${headerHash}" id="tauri-discord-rpc-content" style="display:none;">
@@ -251,6 +253,7 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
   document.head.appendChild(styleEl);
 }
 
+
   const kisiselEl = allElements.find(
     (el) => el.textContent.trim() === "Kişiselleştirilmiş öneriler",
   );
@@ -295,7 +298,6 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
       : `text-block type-body ${getSvelteClass(cardEl.querySelector(".text-block")) || "svelte-9tjxrp"}`;
 
     hashes = {
-      expanderHash,
       headerHash:
         getSvelteClass(cardEl.querySelector(".expander-header")) ||
         "svelte-1b1dfzj",
@@ -327,7 +329,7 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
 
   const newCard = document.createElement("div");
   newCard.id = "tauri-discord-rpc-setting";
-  newCard.className = `expander direction-down expandable ${expanderHash}`;
+  newCard.className = `expander direction-down space-between ${expanderHash}`;
   newCard.setAttribute("role", "region");
   newCard.innerHTML = buildCardHTML(
     isEnabled,
