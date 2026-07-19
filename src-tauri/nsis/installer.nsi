@@ -312,12 +312,42 @@ Function OaCustomPageLeave
   ; burada registry'ye bir flag atabiliriz ilerde.
 FunctionEnd
 
+Function StripQuotes
+  ; Input: $0
+  Push $1
+  
+  strip_leading:
+  StrCpy $1 $0 1 0
+  StrCmp $1 `"` 0 strip_trailing
+  StrCpy $0 $0 "" 1
+  Goto strip_leading
+
+  strip_trailing:
+  StrCpy $1 $0 "" -1
+  StrCmp $1 `"` 0 done_strip
+  StrCpy $0 $0 -1
+  Goto strip_trailing
+
+  done_strip:
+  Pop $1
+FunctionEnd
+
 Function OaUninstallPrevious
   HideWindow
-  ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
+  
   ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
-  StrCpy $R1 "$R1 /UPDATE /P _?=$4"
-  ExecWait '$R1' $0
+  StrCmp $R1 "" done_uninstall
+  
+  StrCpy $0 $R1
+  Call StripQuotes
+  StrCpy $R1 $0
+  
+  ${GetParent} "$R1" $R2
+  
+  IfFileExists "$R1" 0 done_uninstall
+  ExecWait '"$R1" /UPDATE /P _?=$R2' $0
+  
+done_uninstall:
   BringToFront
 FunctionEnd
 
@@ -457,7 +487,7 @@ Function .onInit
   ; Online "en son sürüm" bootstrap: eski bir setup.exe interaktif
   ; çalıştırıldığında, GitHub'daki en son yayın daha yeniyse en son
   ; setup.exe'yi indirip çalıştırır. Her hata yolunda fail-open.
-  Call CheckOnlineLatest
+  ; Call CheckOnlineLatest ; Geç açılma sorununu önlemek için devre dışı bırakıldı.
 
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY
