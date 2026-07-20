@@ -104,9 +104,24 @@ pub struct SuperNotifState {
     account: Mutex<Account>,
 }
 
+/// `enabled` durumunun diske yansıması. NEDEN GEREKLİ: `SuperNotifState`
+/// her process başlangıcında `enabled=false` ile başlar; gerçek tercih
+/// yalnızca sayfa yüklenip JS `sn_set_enabled` çağırınca öğrenilir. Kullanıcı
+/// pencereyi bu gerçekleşmeden ÖNCE kapatırsa (ExitRequested), Rust tarafı
+/// "kapalı" sanıp tepsi oturumunu hiç açmadan doğrudan çıkıyordu — bu dosya
+/// son bilinen değeri process'ler arası hatırlatarak bu yarışı ortadan
+/// kaldırır (bkz. lib.rs RunEvent::ExitRequested).
+fn super_notif_flag_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("OpenAnime_super_notif_enabled.flag")
+}
+
 impl SuperNotifState {
     pub fn new() -> Self {
-        Self::default()
+        let state = Self::default();
+        if let Ok(v) = std::fs::read_to_string(super_notif_flag_path()) {
+            state.enabled.store(v.trim() == "1", Ordering::SeqCst);
+        }
+        state
     }
 }
 
@@ -1051,6 +1066,9 @@ fn remove_tray(app: &AppHandle) {
 pub async fn sn_set_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
     let state = app.state::<SuperNotifState>();
     state.enabled.store(enabled, Ordering::SeqCst);
+    // Bir sonraki process başlangıcında (JS henüz bildirmeden önce kapatılsa
+    // bile) doğru değeri bilelim diye diske yansıt (best-effort).
+    let _ = std::fs::write(super_notif_flag_path(), if enabled { "1" } else { "0" });
     crate::log!(
         "[Süper Bildirim] {}",
         if enabled { "açıldı" } else { "kapatıldı" }

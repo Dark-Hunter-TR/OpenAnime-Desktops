@@ -588,7 +588,13 @@ pub(crate) fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<()
 /// tıklanınca bu pencere gösterilir; o andan itibaren sıradan bir pencere
 /// gibi davranır — kapatılırsa bu fonksiyon (koşullar hâlâ sağlanıyorsa)
 /// yenisini açar.
-pub(crate) const TRAY_SESSION_LABEL: &str = "tray_session";
+/// Tepsi oturumu pencerelerinin etiket ön eki. Etiket her açılışta BENZERSİZ
+/// (zaman damgalı) üretilir — sabit bir isim (örn. hep "tray_session")
+/// kullanılsaydı, az önce kapanmış aynı isimli pencere Tauri'nin iç kaydından
+/// silinmeden yenisi açılmaya çalışılırsa `build()` "etiket zaten kullanımda"
+/// hatasıyla SESSİZCE başarısız oluyordu — bu da arka arkaya kapat/aç
+/// denemelerinde bazen tepsi oturumunun hiç açılmamasına yol açıyordu.
+pub(crate) const TRAY_SESSION_LABEL_PREFIX: &str = "tray_session_";
 
 fn maybe_spawn_tray_session(app: &tauri::AppHandle) {
     // Yarış durumu koruması: başka bir yol zaten pencere açmış olabilir.
@@ -607,10 +613,19 @@ fn spawn_tray_session_window(app: &tauri::AppHandle) -> Result<(), String> {
         .parse::<tauri::Url>()
         .map_err(|e| e.to_string())?;
 
+    let label = format!(
+        "{}{}",
+        TRAY_SESSION_LABEL_PREFIX,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+
     let app_handle = app.clone();
     let win_builder = WebviewWindowBuilder::new(
         app,
-        TRAY_SESSION_LABEL,
+        &label,
         WebviewUrl::External(parsed_url),
     )
     .title("OpenAnime")
@@ -636,13 +651,13 @@ fn spawn_tray_session_window(app: &tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
 
-    win_builder.build().map_err(|e| e.to_string())?;
-    dbg_log!("[Tepsi] Hafif arkaplan oturumu oluşturuldu (label: {})", TRAY_SESSION_LABEL);
+    let window = win_builder.build().map_err(|e| e.to_string())?;
+    dbg_log!("[Tepsi] Hafif arkaplan oturumu oluşturuldu (label: {})", label);
 
     // Görünmez + oynatmıyor → hemen askıya alınabilir, açılıştan itibaren
     // minimum RAM/CPU kullanır.
     #[cfg(target_os = "windows")]
-    update_background_mode(app, TRAY_SESSION_LABEL);
+    update_background_mode(app, window.label());
 
     Ok(())
 }

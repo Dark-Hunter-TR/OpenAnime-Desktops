@@ -162,7 +162,20 @@ Add-Type -AssemblyName System.Drawing
 # tetiklenen arka plan süreçlerinde Windows'un foreground kilidi yüzünden
 # güvenilmez olabiliyor; bu kanca menünün dışına her tıklamada kapanmasını
 # garanti eder.
-Add-Type @"
+# PERFORMANS: Add-Type -TypeDefinition her çağrıda C#'ı SIFIRDAN derler
+# (500ms-1sn+ sürebilir) — bu, menü açılışındaki gecikmenin ana kaynağıydı.
+# Derlenmiş DLL'i %TEMP%'e BİR KEZ yazıp sonraki her açılışta -Path ile
+# (derlemesiz, neredeyse anında) yüklüyoruz.
+$hookDllPath = Join-Path $env:TEMP "OpenAnime_TrayHook_v1.dll"
+if (Test-Path $hookDllPath) {
+    try {
+        Add-Type -Path $hookDllPath -ErrorAction Stop
+    } catch {
+        Remove-Item $hookDllPath -Force -ErrorAction SilentlyContinue
+    }
+}
+if (-not ([System.Management.Automation.PSTypeName]'OaMouseHook').Type) {
+    $oaMouseHookSrc = @"
 using System;
 using System.Runtime.InteropServices;
 
@@ -220,6 +233,13 @@ public class OaMouseHook {
     private static extern IntPtr GetModuleHandle(string lpModuleName);
 }
 "@
+    try {
+        Add-Type -TypeDefinition $oaMouseHookSrc -OutputAssembly $hookDllPath -ErrorAction Stop
+    } catch {
+        # Diske yazamadıysak (izin vs.) en azından bu süreç için normal derle.
+        Add-Type -TypeDefinition $oaMouseHookSrc
+    }
+}
 
 $signalFile = __SIGNALFILE_PS__
 
