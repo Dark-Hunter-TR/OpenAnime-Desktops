@@ -334,19 +334,32 @@ FunctionEnd
 
 Function OaUninstallPrevious
   HideWindow
-  
+
   ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
   StrCmp $R1 "" done_uninstall
-  
+
   StrCpy $0 $R1
   Call StripQuotes
   StrCpy $R1 $0
-  
-  ${GetParent} "$R1" $R2
-  
+
+  ${GetParent} "$R1" $R2               ; INSTDIR
+
   IfFileExists "$R1" 0 done_uninstall
-  ExecWait '"$R1" /UPDATE /P _?=$R2' $0
-  
+
+  ; Kaldırıcıyı geçici klasöre kopyala ve ORADAN çalıştır; orijinal
+  ; $INSTDIR\uninstall.exe kilitli kalmasın. Aksi halde temiz kurulumda
+  ; Section Install içindeki WriteUninstaller üzerine yazamayıp
+  ; "Error opening file for writing" NSIS hata penceresi veriyordu.
+  Delete "$TEMP\oa_uninstall_prev.exe"
+  CopyFiles /SILENT "$R1" "$TEMP\oa_uninstall_prev.exe"
+  IfFileExists "$TEMP\oa_uninstall_prev.exe" 0 run_inplace
+    ExecWait '"$TEMP\oa_uninstall_prev.exe" /UPDATE /P _?=$R2' $0
+    Delete "$TEMP\oa_uninstall_prev.exe"
+    Goto done_uninstall
+  run_inplace:
+    ; Kopyalama başarısızsa mevcut davranışa güvenli düşüş.
+    ExecWait '"$R1" /UPDATE /P _?=$R2' $0
+
 done_uninstall:
   BringToFront
 FunctionEnd
@@ -487,7 +500,9 @@ Function .onInit
   ; Online "en son sürüm" bootstrap: eski bir setup.exe interaktif
   ; çalıştırıldığında, GitHub'daki en son yayın daha yeniyse en son
   ; setup.exe'yi indirip çalıştırır. Her hata yolunda fail-open.
-  ; Call CheckOnlineLatest ; Geç açılma sorununu önlemek için devre dışı bırakıldı.
+  ; Not: Kontrol artık `.onInit` içinde YAPILMIYOR. Ağ çağrısı pencerenin
+  ; açılmasını geciktirdiği için `Section Install` başına taşındı; böylece
+  ; installer anında açılır, kontrol kurulum aşamasında yapılır.
 
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY
@@ -635,6 +650,11 @@ Section WebView2
 SectionEnd
 
 Section Install
+  ; Online en-son-sürüm bootstrap: pencere açıldıktan sonra, kurulum
+  ; aşamasında çalışır ki installer geç açılmasın. Fail-open (ağ yok /
+  ; parse hatası / indirme hatası → gömülü sürüm normal kurulur).
+  Call CheckOnlineLatest
+
   ; Eski/Yabancı uygulama çakışmalarını temizle (İkon karışma sorunu çözümü)
   DeleteRegKey HKCR "Applications\OpenAnime.exe"
   DeleteRegKey HKCR "openanime"
@@ -1013,7 +1033,7 @@ Function CheckOnlineLatest
 
   ; 6) En son installer'ı başlat ve bu (eski) installer'ı kapat
   Exec '"$TEMP\oa_latest_setup.exe"'
-;   Quit ; Eski installer'ın hemen kapanmasını engellemek için geçici olarak devre dışı bırakıldı.
+  Quit
 FunctionEnd
 
 Function Skip
