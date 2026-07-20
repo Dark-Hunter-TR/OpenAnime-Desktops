@@ -3,6 +3,13 @@
 use tauri::{WebviewWindowBuilder, WebviewUrl, Manager};
 use std::sync::Mutex;
 use std::sync::Arc;
+use std::collections::HashMap;
+
+/// Uygulama gerçekten kapanıyor mu (tepsi menüsü "Kapat" ile). true iken
+/// pencere/oturum kapanışları arkaplan tepsi oturumunu yeniden AÇMAZ —
+/// aksi halde gerçek çıkışta bile arkada yeni bir pencere doğardı.
+pub(crate) static APP_QUITTING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Zoom seviyesini tüm pencereler arasında paylaşmak için state
 pub struct ZoomState {
@@ -24,12 +31,21 @@ mod perf_mode;
 ///
 /// Kural: TAM PERFORMANS yalnızca (video oynuyor VE pencere odakta) iken.
 /// Diğer her durumda (ana sayfa, duraklatılmış video, alt-tab) → VERİMLİLİK.
+///
+/// NOT: `player_playing` ve `suspended` pencere etiketine göre ayrı ayrı
+/// tutulur — tek bir global bool kullanılırsa bir pencerenin durumu
+/// diğerini eziyor (örn. arkaplandaki hafif tepsi oturumu "oynamıyorum"
+/// derse, asıl izleme penceresindeki video yanlışlıkla askıya alınabilir
+/// ya da tam tersi, kapanan bir pencerenin "oynuyor" durumu takılı kalıp
+/// hiçbir pencere askıya alınamaz).
 #[derive(Default)]
 pub struct PerfState {
-    /// Oynatıcıda video fiilen oynuyor mu (JS bildirir)
-    pub player_playing: Mutex<bool>,
+    /// Pencere etiketi -> o pencerede video fiilen oynuyor mu (JS bildirir)
+    pub player_playing: Mutex<HashMap<String, bool>>,
     /// Herhangi bir pencere odakta mı
     pub focused: Mutex<bool>,
+    /// Pencere etiketi -> WebView2 şu an askıya alınmış mı
+    pub suspended: Mutex<HashMap<String, bool>>,
 }
 
 #[allow(non_snake_case)]
@@ -155,14 +171,16 @@ fn build_init_script() -> String {
 ///   EcoQoS                    → CPU/GÜÇ  (belleği AZALTMAZ)
 #[cfg(target_os = "windows")]
 fn refresh_perf_mode(app: &tauri::AppHandle) {
-    let full_perf = {
-        let st = app.state::<PerfState>();
-        let playing = *st.player_playing.lock().unwrap();
-        let focused = *st.focused.lock().unwrap();
-        playing && focused
-    };
+    let focused = *app.state::<PerfState>().focused.lock().unwrap();
+    // Kopyasını al: aşağıdaki döngü boyunca kilidi tutmayalım.
+    let playing_map = app.state::<PerfState>().player_playing.lock().unwrap().clone();
 
-    for (_label, window) in app.webview_windows() {
+    for (label, window) in app.webview_windows() {
+        // TAM PERFORMANS kararı pencereye özel: yalnızca BU pencerede video
+        // oynuyorsa VE uygulama odaktaysa tam bellek/CPU verilir. Başka bir
+        // pencerede (örn. arkaplan tepsi oturumu) oynayan video BU pencereyi
+        // tam performansa geçirmez.
+        let full_perf = playing_map.get(&label).copied().unwrap_or(false) && focused;
         let _ = window.with_webview(move |webview| unsafe {
             use webview2_com::Microsoft::Web::WebView2::Win32::{
                 ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
@@ -210,19 +228,25 @@ fn refresh_perf_mode(app: &tauri::AppHandle) {
 /// zaten `player_playing` ile korunuyoruz (bkz. update_background_mode), yani
 /// arka planda ses/video sürerken askıya ALINMAZ.
 ///
-/// Son uygulanan askıya-alma durumu. YALNIZCA gerçek geçişte iş yapılır:
-/// aksi halde her focus/resized olayında Resume+SetIsVisible(true) yeniden
-/// çağrılır, SetIsVisible odak olayını yeniden tetikler ve `focused` sonsuza
-/// dek flap eder (EcoQoS AÇIK/KAPALI spam'i + ön planda istenmeyen TrySuspend).
-#[cfg(target_os = "windows")]
-static WEBVIEW_SUSPENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
+/// Son uygulanan askıya-alma durumu PENCERE BAŞINA tutulur (PerfState.suspended).
+/// YALNIZCA gerçek geçişte iş yapılır: aksi halde her focus/resized olayında
+/// Resume+SetIsVisible(true) yeniden çağrılır, SetIsVisible odak olayını
+/// yeniden tetikler ve `focused` sonsuza dek flap eder (EcoQoS AÇIK/KAPALI
+/// spam'i + ön planda istenmeyen TrySuspend).
+/// NOT: Eskiden tek global AtomicBool'du — iki pencere varken birinin
+/// suspend/resume çağrısı diğerininkini "durum zaten böyle" sanıp sessizce
+/// atlatıyordu. Pencere etiketine göre ayrı tutulması bu çakışmayı giderir.
 #[cfg(target_os = "windows")]
 fn set_background_suspend(window: &tauri::WebviewWindow, suspend: bool) {
-    use std::sync::atomic::Ordering;
-    // Durum değişmediyse HİÇBİR ŞEY yapma — geri besleme döngüsünü kırar.
-    if WEBVIEW_SUSPENDED.swap(suspend, Ordering::SeqCst) == suspend {
-        return;
+    let label = window.label().to_string();
+    {
+        let st = window.app_handle().state::<PerfState>();
+        let mut map = st.suspended.lock().unwrap();
+        // Durum değişmediyse HİÇBİR ŞEY yapma — geri besleme döngüsünü kırar.
+        if map.get(&label).copied().unwrap_or(false) == suspend {
+            return;
+        }
+        map.insert(label, suspend);
     }
 
     let _ = window.with_webview(move |webview| unsafe {
@@ -278,7 +302,14 @@ fn update_background_mode(app: &tauri::AppHandle, label: &str) {
     let Some(window) = app.get_webview_window(label) else {
         return;
     };
-    let playing = *app.state::<PerfState>().player_playing.lock().unwrap();
+    let playing = app
+        .state::<PerfState>()
+        .player_playing
+        .lock()
+        .unwrap()
+        .get(label)
+        .copied()
+        .unwrap_or(false);
     let minimized = window.is_minimized().unwrap_or(false);
     let visible = window.is_visible().unwrap_or(true);
 
@@ -286,30 +317,34 @@ fn update_background_mode(app: &tauri::AppHandle, label: &str) {
     set_background_suspend(&window, suspend);
 }
 
-/// JS bildirir: oynatıcıda video oynuyor mu?
+/// JS bildirir: oynatıcıda video oynuyor mu? `window` parametresi Tauri
+/// tarafından otomatik enjekte edilir (çağıran webview) — JS tarafında
+/// ayrıca göndermeye gerek yok. Bu sayede durum pencereye özel tutulur.
 #[tauri::command]
-fn oa_set_player_playing(playing: bool, app: tauri::AppHandle) {
+fn oa_set_player_playing(playing: bool, window: tauri::WebviewWindow, app: tauri::AppHandle) {
     #[cfg(target_os = "windows")]
     {
+        let label = window.label().to_string();
         {
             let st = app.state::<PerfState>();
-            let mut p = st.player_playing.lock().unwrap();
-            if *p == playing {
+            let mut map = st.player_playing.lock().unwrap();
+            if map.get(&label).copied().unwrap_or(false) == playing {
                 return; // durum değişmedi — API'yi boşuna çağırma
             }
-            *p = playing;
+            map.insert(label.clone(), playing);
         }
-        dbg_log!("[PerfMode] Video oynuyor = {}", playing);
+        dbg_log!("[PerfMode] Video oynuyor ({}) = {}", label, playing);
         refresh_perf_mode(&app);
 
         // Oynatma durumu askıya alma kararını da etkiler: arka planda video
         // biterse (minimize + playing=false) artık askıya alınabilir; minimize
-        // iken oynatma başlarsa geri döndürülmeli.
-        update_background_mode(&app, "main");
+        // iken oynatma başlarsa geri döndürülmeli. Artık HER ZAMAN çağıran
+        // pencerenin kendi etiketiyle — sabit "main" değil.
+        update_background_mode(&app, &label);
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (playing, app);
+        let _ = (playing, window, app);
     }
 }
 
@@ -485,7 +520,7 @@ pub(crate) fn platform_user_agent() -> &'static str {
     }
 }
 
-fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
+pub(crate) fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
     dbg_log!("[Tauri] build_new_window invoked with URL: {}", url);
 
     let label = format!(
@@ -544,6 +579,72 @@ fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<(), String> {
             Err(err_msg)
         }
     }
+}
+
+/// Son gerçek pencere kapandığında (bkz. RunEvent::ExitRequested) çağrılır.
+/// Süper Bildirimler açıkken uygulamanın Discord RPC/bildirim/gateway-token
+/// köprüsünü canlı tutması için sitenin `/settings` sayfasında duran, GÖRÜNMEZ
+/// ve hafif (video/ağır DOM içermeyen) bir pencere açar. Tepsi ikonuna
+/// tıklanınca bu pencere gösterilir; o andan itibaren sıradan bir pencere
+/// gibi davranır — kapatılırsa bu fonksiyon (koşullar hâlâ sağlanıyorsa)
+/// yenisini açar.
+pub(crate) const TRAY_SESSION_LABEL: &str = "tray_session";
+
+fn maybe_spawn_tray_session(app: &tauri::AppHandle) {
+    // Yarış durumu koruması: başka bir yol zaten pencere açmış olabilir.
+    if !app.webview_windows().is_empty() {
+        return;
+    }
+    dbg_log!("[Tepsi] Son pencere kapandı, hafif arkaplan oturumu açılıyor (/settings)");
+    if let Err(e) = spawn_tray_session_window(app) {
+        dbg_log!("[Tepsi] Arkaplan oturumu açılamadı: {}", e);
+    }
+}
+
+fn spawn_tray_session_window(app: &tauri::AppHandle) -> Result<(), String> {
+    let user_agent = platform_user_agent();
+    let parsed_url = "https://openani.me/settings"
+        .parse::<tauri::Url>()
+        .map_err(|e| e.to_string())?;
+
+    let app_handle = app.clone();
+    let win_builder = WebviewWindowBuilder::new(
+        app,
+        TRAY_SESSION_LABEL,
+        WebviewUrl::External(parsed_url),
+    )
+    .title("OpenAnime")
+    .inner_size(1280.0, 848.0)
+    .min_inner_size(800.0, 500.0)
+    .center()
+    .decorations(false)
+    .visible(false)
+    .zoom_hotkeys_enabled(true)
+    .user_agent(user_agent)
+    .on_new_window(move |new_url, _features| {
+        let app_c = app_handle.clone();
+        let url_str = new_url.to_string();
+        std::thread::spawn(move || {
+            if let Err(e) = build_new_window(&app_c, url_str) {
+                dbg_log!("[Tauri] tray_session on_new_window error: {}", e);
+            }
+        });
+        tauri::webview::NewWindowResponse::Deny
+    })
+    .initialization_script(build_init_script());
+
+    #[cfg(target_os = "windows")]
+    let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
+
+    win_builder.build().map_err(|e| e.to_string())?;
+    dbg_log!("[Tepsi] Hafif arkaplan oturumu oluşturuldu (label: {})", TRAY_SESSION_LABEL);
+
+    // Görünmez + oynatmıyor → hemen askıya alınabilir, açılıştan itibaren
+    // minimum RAM/CPU kullanır.
+    #[cfg(target_os = "windows")]
+    update_background_mode(app, TRAY_SESSION_LABEL);
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1213,15 +1314,21 @@ pub fn run() {
                         }
                     });
                 }
-                // X butonuna basıldığında uygulamayı kapatmak yerine tepsiye gizleriz.
-                // Tamamen kapatmak için tepsi menüsündeki "Kapat" seçeneği kullanılır.
-                tauri::WindowEvent::CloseRequested { api, .. } if label == "main" => {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    dbg_log!("[Tepsi] Ana pencere tepsiye gizlendi");
-                    // Tray'e gizlenince WebView2'yi askıya al (video oynamıyorsa).
+                // X butonuna basıldığında pencere ARTIK tepsiye gizlenmiyor —
+                // GERÇEKTEN kapanır (video/DOM/decode pipeline dahil tüm
+                // WebView2 kaynağı serbest kalır). Kullanıcı kapattıysa
+                // oynatma da durur; "arkaplanda çalmaya devam et" davranışı
+                // burada yok. Tepsi ikonunun canlı kalması ayrı bir mekanizma:
+                // son pencere kapandığında (RunEvent::ExitRequested) Süper
+                // Bildirimler açıksa hafif, görünmez bir /settings oturumu
+                // otomatik açılır (bkz. maybe_spawn_tray_session).
+                tauri::WindowEvent::Destroyed => {
                     #[cfg(target_os = "windows")]
-                    update_background_mode(&window.app_handle(), window.label());
+                    {
+                        let st = app_handle.state::<PerfState>();
+                        st.player_playing.lock().unwrap().remove(&label);
+                        st.suspended.lock().unwrap().remove(&label);
+                    }
                 }
                 _ => {}
             }
@@ -1301,11 +1408,40 @@ pub fn run() {
             super_notifications::sn_test_toast,
             super_notifications::sn_test_notifications
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(err) = run_result {
-        log!("[Hata] Uygulama başlatılamadı: {}", err);
-        show_fatal_startup_error(&err);
-        std::process::exit(1);
-    }
+    let app = match run_result {
+        Ok(app) => app,
+        Err(err) => {
+            log!("[Hata] Uygulama başlatılamadı: {}", err);
+            show_fatal_startup_error(&err);
+            std::process::exit(1);
+        }
+    };
+
+    // Son pencere kapandığında (RunEvent::ExitRequested) varsayılan davranış
+    // tüm process'i sonlandırmaktır. Süper Bildirimler açıksa bunu engelleyip
+    // hafif, görünmez bir arkaplan oturumu (/settings) açarız — Discord RPC ve
+    // bildirim akışı böylece canlı kalır. Tepsi menüsünden gerçek "Kapat"
+    // (APP_QUITTING=true) bu engellemeyi hiçbir zaman tetiklemez.
+    app.run(move |app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if APP_QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            let enabled = app_handle
+                .try_state::<super_notifications::SuperNotifState>()
+                .map(|s| s.enabled.load(std::sync::atomic::Ordering::SeqCst))
+                .unwrap_or(false);
+            if enabled {
+                api.prevent_exit();
+                let app_c = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    maybe_spawn_tray_session(&app_c);
+                });
+            }
+            // enabled=false ise prevent_exit çağrılmaz — normal çıkış sürer
+            // (Süper Bildirimler kapalıyken arkaplanda yaşamanın anlamı yok).
+        }
+    });
 }

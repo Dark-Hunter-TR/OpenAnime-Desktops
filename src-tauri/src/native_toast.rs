@@ -110,8 +110,10 @@ fn encode_base64(bytes: &[u8]) -> String {
 }
 
 /// PowerShell script'ini gizli pencerede (-EncodedCommand UTF-16LE→Base64) çalıştırır.
-/// Ateşle-unut. Toast ve tepsi menüsü ortak kullanır.
-pub(crate) fn run_ps_script(script: &str) {
+/// Ateşle-unut. Toast ve tepsi menüsü ortak kullanır. Çağıran, dönen `Child`'ı
+/// isterse tutup daha sonra `kill()` edebilir (bkz. native_tray_menu — üst üste
+/// açılan menü pencerelerini önlemek için kullanılıyor).
+pub(crate) fn run_ps_script(script: &str) -> Option<std::process::Child> {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -120,7 +122,7 @@ pub(crate) fn run_ps_script(script: &str) {
     let bytes: Vec<u8> = utf16.iter().flat_map(|w| w.to_le_bytes()).collect();
     let b64 = encode_base64(&bytes);
 
-    let _ = Command::new("powershell.exe")
+    Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-WindowStyle",
@@ -129,7 +131,8 @@ pub(crate) fn run_ps_script(script: &str) {
             &b64,
         ])
         .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
+        .spawn()
+        .ok()
 }
 
 /// Gömülü ikonu %TEMP%'e (bir kez) yazar, mutlak path'i döner.
@@ -191,7 +194,7 @@ pub fn show_rich(content: &ToastContent) {
         // ama yine de kaçışlı olduğu için güvenli.
         .replace("__TITLE__", &title_esc);
 
-    run_ps_script(&script);
+    let _ = run_ps_script(&script);
 }
 
 const PS_TEMPLATE: &str = r###"

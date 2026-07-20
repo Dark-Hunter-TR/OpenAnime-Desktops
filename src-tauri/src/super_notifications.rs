@@ -75,8 +75,6 @@ struct Account {
     profile_url: Option<String>,
     username: Option<String>,
     avatar_url: Option<String>,
-    /// İndirilmiş avatarın yerel dosya yolu (menüde yuvarlak kapak).
-    avatar_path: Option<String>,
     /// SSE bildirimlerindeki userId'den türetilen profil URL'i — JS DOM'dan
     /// profil bulamazsa yedek (menüde "Profil Görüntüle").
     sse_profile_url: Option<String>,
@@ -762,6 +760,9 @@ fn handle_tray_action(app: &AppHandle, action: &str) {
         show_main(app);
     } else if action == "quit" {
         crate::dbg_log!("[TepsiMenu] menüden çıkış");
+        // RunEvent::ExitRequested'te arkaplan oturumunun yeniden açılmasını
+        // engellemek için gerçek çıkış bayrağını ÖNCE set ediyoruz.
+        crate::APP_QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
         app.exit(0);
     } else if let Some(url) = action.strip_prefix("nav:") {
         crate::dbg_log!("[TepsiMenu] menü → {}", url);
@@ -773,14 +774,25 @@ fn handle_tray_action(app: &AppHandle, action: &str) {
 /// ortak kullanır). Tam sayfa yüklemesi: SPA router'ının iç API'sine bağımlı
 /// olmamak için `location.href` set edilir (kırılgan değil, kesin çalışır).
 fn navigate_to(app: &AppHandle, url: &str) {
-    let Some(main) = app.get_webview_window("main") else {
+    let target = absolutize(url);
+
+    // "main" yoksa (artık X ile gerçekten kapanabiliyor) açık başka bir
+    // pencere (örn. arkaplan tepsi oturumu) var mı diye bak; o da yoksa
+    // doğrudan hedef URL'de yeni bir pencere aç.
+    let main = app
+        .get_webview_window("main")
+        .or_else(|| app.webview_windows().into_iter().next().map(|(_, w)| w));
+
+    let Some(main) = main else {
+        if let Err(e) = crate::build_new_window(app, target) {
+            crate::dbg_log!("[Tepsi] navigate_to: pencere açılamadı: {}", e);
+        }
         return;
     };
     let _ = main.show();
     let _ = main.unminimize();
     let _ = main.set_focus();
-    let target = absolutize(url);
-    
+
     if target.ends_with("/logout") {
         if let Ok(cookies) = main.cookies() {
             for cookie in cookies {
@@ -852,11 +864,27 @@ pub fn start_click_watcher(app: &AppHandle) {
 
 const TRAY_ID: &str = "oa-tray";
 
+/// Tepsi ikonuna sol tıklanınca (veya menüden "OpenAnime'ı Aç" seçilince)
+/// çağrılır. Artık "main" penceresi hiçbir zaman gizli tutulmuyor (X
+/// tuşuna basılınca gerçekten kapanıyor) — bu yüzden burada üç durumu ele
+/// alırız: normal içerik penceresi varsa onu göster, yoksa arkaplandaki
+/// hafif tepsi oturumunu (/settings) göster, o da yoksa (örn. Süper
+/// Bildirimler kapalıyken her şey kapatılmıştı) sıfırdan yeni bir pencere aç.
 pub fn show_main(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
+        return;
+    }
+    if let Some((_, win)) = app.webview_windows().into_iter().next() {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        return;
+    }
+    if let Err(e) = crate::build_new_window(app, "https://openani.me/".to_string()) {
+        crate::dbg_log!("[Tepsi] Sıfırdan pencere açılamadı: {}", e);
     }
 }
 
@@ -963,9 +991,6 @@ fn open_tray_menu(app: &AppHandle) {
         Some(MenuHeader {
             name: acc.username.clone().unwrap_or_else(|| "Hesabım".into()),
             subtitle: "Çevrimiçi".into(),
-            avatar_path: acc.avatar_path.clone(),
-            // Avatarın hemen sağındaki çıkış butonu → siteden hesap çıkışı.
-            logout_action: format!("nav:{}/logout", SITE_ORIGIN),
         })
     } else {
         entries.push(MenuEntry {
@@ -991,43 +1016,6 @@ fn open_tray_menu(app: &AppHandle) {
     });
 
     crate::native_tray_menu::show(header, entries);
-}
-
-/// Kullanıcı avatarını %TEMP%'e indirir (menüde yuvarlak kapak). Best-effort.
-async fn download_avatar(app: &AppHandle, url: &str) -> Option<String> {
-    let abs = absolutize(url);
-    let state = app.state::<SuperNotifState>();
-    let auth = state.auth_token.lock().ok().and_then(|t| t.clone());
-    let gateway = state.gateway_token.lock().ok().and_then(|g| g.clone());
-
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(8))
-        .user_agent(crate::platform_user_agent())
-        .build()
-        .ok()?;
-    let mut req = client
-        .get(&abs)
-        .header("Origin", SITE_ORIGIN)
-        .header("Referer", format!("{}/", SITE_ORIGIN));
-    if let Some(a) = auth {
-        req = req.header("Authorization", a);
-    }
-    if let Some(g) = gateway {
-        req = req.header("Gateway-Token", g);
-    }
-    let resp = req.send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let bytes = resp.bytes().await.ok()?;
-    if bytes.is_empty() {
-        return None;
-    }
-    let mut path = std::env::temp_dir();
-    path.push("openanime-tray-avatar.png");
-    std::fs::write(&path, &bytes).ok()?;
-    Some(path.to_string_lossy().into_owned())
 }
 
 #[allow(dead_code)]
@@ -1124,34 +1112,18 @@ pub fn sn_set_account(
     // bazen yok). None gelen alan mevcut iyi değeri EZMESİN; giriş bir kez true
     // olunca sabit kalsın. Böylece anlık boş okuma menüyü bozmaz.
     let state = app.state::<SuperNotifState>();
-    let mut avatar_to_download = None;
-    {
-        let mut a = state.account.lock().map_err(|e| e.to_string())?;
-        if logged_in {
-            a.logged_in = true;
-        }
-        if profile_url.is_some() {
-            a.profile_url = profile_url;
-        }
-        if username.is_some() {
-            a.username = username;
-        }
-        if avatar_url.is_some() && a.avatar_url != avatar_url {
-            a.avatar_url = avatar_url.clone();
-            a.avatar_path = None; // yeniden indirilecek
-            avatar_to_download = avatar_url;
-        }
+    let mut a = state.account.lock().map_err(|e| e.to_string())?;
+    if logged_in {
+        a.logged_in = true;
     }
-
-    if let Some(url) = avatar_to_download.filter(|s| s.starts_with("http") || s.starts_with('/')) {
-        let app_c = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Some(path) = download_avatar(&app_c, &url).await {
-                if let Ok(mut a) = app_c.state::<SuperNotifState>().account.lock() {
-                    a.avatar_path = Some(path);
-                }
-            }
-        });
+    if profile_url.is_some() {
+        a.profile_url = profile_url;
+    }
+    if username.is_some() {
+        a.username = username;
+    }
+    if avatar_url.is_some() {
+        a.avatar_url = avatar_url;
     }
     Ok(())
 }

@@ -7,9 +7,9 @@
 //     bağımlı değil.
 //
 // İÇERİK super_notifications tarafından, oturum durumuna göre kurulur:
-//   • Giriş yapılmış: avatar + kullanıcı adı başlığı, ardından Aç / Profil /
-//     Kütüphanem / Son Eklenenler / Takvim, ayraç, Çıkış.
-//   • Giriş yok: yalnızca Aç + Çıkış.
+//   • Giriş yapılmış: kullanıcı adı başlığı, ardından Aç / Profil / Kütüphanem /
+//     Son Eklenenler / Takvim, ayraç, Kapat.
+//   • Giriş yok: yalnızca Aç + Kapat.
 //
 // TIKLAMA KÖPRÜSÜ: menü öğesine tıklanınca öğenin `action` etiketi bir sinyal
 // dosyasına yazılır; Rust watcher (super_notifications::start_click_watcher)
@@ -19,26 +19,41 @@
 //
 // KONUMLANDIRMA: imlecin konumundan (tepsi = sağ alt) yukarı-sola doğru açılır;
 // çalışma alanına (görev çubuğu hariç) sığacak şekilde kelepçelenir. DPI ölçeği
-// CompositionTarget ile düzeltilir. Dışarı tıklama (Deactivated) veya Esc kapatır.
+// CompositionTarget ile düzeltilir.
+//
+// KAPANMA: iki bağımsız mekanizma var, çünkü tepsi ikonundan tetiklenen bir
+// pencerenin `Activate()` çağrısı Windows'un "foreground kilidi" yüzünden
+// güvenilir şekilde işe yaramayabilir (arka planda oluşturulan süreçler için
+// SetForegroundWindow sık sık reddedilir). Yalnızca WPF `Deactivated`
+// olayına güvenmek, sağ tık üst üste hızlıca basıldığında eski pencerelerin
+// hiç kapanmadan yeni pencerelerin altında/üstünde YIĞILMASINA yol açıyordu:
+//   1) Rust tarafı: yeni menü açılmadan önce bir öncekinin sürecini `kill()`
+//      eder (LAST_MENU_PROC) — aynı anda en fazla bir pencere var olabilir,
+//      stacklenme kökünden engellenir.
+//   2) PS tarafı: düşük seviye global fare kancası (WH_MOUSE_LL) ekrandaki
+//      HERHANGİ bir sol/sağ tıklamayı yakalar; tıklama pencerenin dışındaysa
+//      pencere kapanır. Bu, `Deactivated`'ın güvenilmez olduğu durumlarda da
+//      "dışarı tıklayınca kapanır" davranışını garanti eder. Esc de kapatır.
 
 #![cfg(windows)]
 
-use crate::native_toast::{escape_xml, ps_literal, run_ps_script};
+use crate::native_toast::{escape_xml, run_ps_script};
+use std::process::Child;
+use std::sync::Mutex;
 
 /// Menü öğesi tıklamasının yazıldığı sinyal dosyası (super_notifications izler).
 pub const TRAY_ACTION_FILE: &str = "OpenAnime_tray_action.txt";
 
-const ACCENT: &str = "#62CDFE";
+/// En son açılan tepsi menüsü süreci. Yeni bir menü açılmadan önce bu
+/// öldürülür — aynı anda yalnızca bir menü penceresi var olabilir.
+static LAST_MENU_PROC: Mutex<Option<Child>> = Mutex::new(None);
 
-/// Menü başlığı (yalnızca giriş yapılmışsa).
+/// Menü başlığı (yalnızca giriş yapılmışsa). Avatar/çıkış butonu kasıtlı
+/// olarak yok — kalabalık ve gereksiz bulunduğu için kaldırıldı; hesaptan
+/// çıkış "Profil Görüntüle" üzerinden siteye gidilerek yapılabilir.
 pub struct MenuHeader {
     pub name: String,
     pub subtitle: String,
-    /// İndirilmiş avatarın yerel yolu; yoksa kişi ikonu (fallback) gösterilir.
-    pub avatar_path: Option<String>,
-    /// Avatarın hemen sağındaki çıkış butonunun eylemi (hesaptan çıkış):
-    /// "nav:<logout-url>". Menü öğeleriyle aynı sinyal-dosyası köprüsünü kullanır.
-    pub logout_action: String,
 }
 
 /// Tek bir menü öğesi.
@@ -87,49 +102,23 @@ fn build_items_xaml(entries: &[MenuEntry]) -> String {
 fn build_header_xaml(h: &MenuHeader) -> String {
     format!(
         r##"
-      <DockPanel Margin="12,12,12,8">
-        <Grid Width="40" Height="40" Margin="0,0,12,0" DockPanel.Dock="Left" VerticalAlignment="Center">
-          <Border Name="AvatarGlyph" CornerRadius="20" Background="#3362CDFE">
-            <TextBlock Text="&#xE77B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="20"
-                       Foreground="{accent}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          </Border>
-          <Border Name="AvatarClip" CornerRadius="20" ClipToBounds="True" Visibility="Collapsed">
-            <Image Name="AvatarImg" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality"/>
-          </Border>
-          <!-- Yuvarlak kenar halkası: avatarı her koşulda daire olarak çerçeveler. -->
-          <Border CornerRadius="20" BorderBrush="#33FFFFFF" BorderThickness="1" IsHitTestVisible="False"/>
-        </Grid>
-        <!-- Avatarın hemen sağında: hesaptan çıkış. Tag = logout eylemi; PS
-             tarafı LogoutBtn'i öğelerle aynı şekilde sinyal dosyasına bağlar. -->
-        <Border Name="LogoutBtn" Tag="{logout}" Style="{{StaticResource IconButton}}"
-                DockPanel.Dock="Right" Width="34" Height="34" VerticalAlignment="Center"
-                ToolTip="Hesaptan Çıkış">
-          <TextBlock Text="&#xF3B1;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
-                     Foreground="#F87171" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-        </Border>
-        <StackPanel VerticalAlignment="Center">
-          <TextBlock Text="{name}" Foreground="#F9FAFB" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
-          <TextBlock Text="{sub}" Foreground="#9CA3AF" FontSize="11.5" Margin="0,1,0,0"/>
-        </StackPanel>
-      </DockPanel>
+      <StackPanel Margin="14,12,14,8">
+        <TextBlock Text="{name}" Foreground="#F9FAFB" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
+        <TextBlock Text="{sub}" Foreground="#9CA3AF" FontSize="11.5" Margin="0,1,0,0"/>
+      </StackPanel>
       <Border Height="1" Background="#2D3035" Margin="0,0,0,4"/>
 "##,
-        accent = ACCENT,
-        logout = escape_xml(&h.logout_action),
         name = escape_xml(&h.name),
         sub = escape_xml(&h.subtitle),
     )
 }
 
-/// Özel tepsi menüsünü imlecin yanında gösterir. Ateşle-unut.
+/// Özel tepsi menüsünü imlecin yanında gösterir. Ateşle-unut. Açılmadan önce
+/// bir öncekini (varsa) kapatır ki sağ tık üst üste basıldığında pencereler
+/// yığılmasın.
 pub fn show(header: Option<MenuHeader>, entries: Vec<MenuEntry>) {
     let header_xaml = header.as_ref().map(build_header_xaml).unwrap_or_default();
     let items_xaml = build_items_xaml(&entries);
-
-    // Avatar: başlıkta verilmişse onu, yoksa uygulama ikonunu DENEME (fallback
-    // glyph zaten var; ikon avatar yerine geçmesin diye yalnızca gerçek avatar
-    // verilmişse yükleriz).
-    let avatar_ps = ps_literal(header.as_ref().and_then(|h| h.avatar_path.as_deref()));
 
     let signal_ps = format!(
         "'{}'",
@@ -141,12 +130,15 @@ pub fn show(header: Option<MenuHeader>, entries: Vec<MenuEntry>) {
 
     let script = PS_TEMPLATE
         .replace("__SIGNALFILE_PS__", &signal_ps)
-        .replace("__AVATARPATH_PS__", &avatar_ps)
-        .replace("__ACCENT__", ACCENT)
         .replace("__HEADER_XAML__", &header_xaml)
         .replace("__ITEMS_XAML__", &items_xaml);
 
-    run_ps_script(&script);
+    if let Ok(mut guard) = LAST_MENU_PROC.lock() {
+        if let Some(mut prev) = guard.take() {
+            let _ = prev.kill();
+        }
+        *guard = run_ps_script(&script);
+    }
 }
 
 const PS_TEMPLATE: &str = r###"
@@ -154,8 +146,71 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# Dışarı tıklamayı (soL/sağ, ekranın herhangi bir yerinde) yakalamak için
+# düşük seviye global fare kancası. WPF `Deactivated` olayı, tepsi ikonundan
+# tetiklenen arka plan süreçlerinde Windows'un foreground kilidi yüzünden
+# güvenilmez olabiliyor; bu kanca menünün dışına her tıklamada kapanmasını
+# garanti eder.
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public class OaMouseHook {
+    public delegate IntPtr Proc(int nCode, IntPtr wParam, IntPtr lParam);
+    public const int WH_MOUSE_LL = 14;
+    public const int WM_LBUTTONDOWN = 0x0201;
+    public const int WM_RBUTTONDOWN = 0x0204;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int x; public int y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MSLLHOOKSTRUCT {
+        public POINT pt;
+        public uint mouseData;
+        public uint flags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    private static IntPtr _hookId = IntPtr.Zero;
+    private static Proc _proc;
+    public static event Action<int, int> OnClick;
+
+    public static void Install() {
+        _proc = HookCallback;
+        using (var curProcess = System.Diagnostics.Process.GetCurrentProcess())
+        using (var curModule = curProcess.MainModule) {
+            _hookId = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(curModule.ModuleName), 0);
+        }
+    }
+
+    public static void Uninstall() {
+        if (_hookId != IntPtr.Zero) { UnhookWindowsHookEx(_hookId); _hookId = IntPtr.Zero; }
+    }
+
+    private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+        if (nCode >= 0 && (wParam.ToInt32() == WM_LBUTTONDOWN || wParam.ToInt32() == WM_RBUTTONDOWN)) {
+            var hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
+            var handler = OnClick;
+            if (handler != null) handler(hookStruct.pt.x, hookStruct.pt.y);
+        }
+        return CallNextHookEx(_hookId, nCode, wParam, lParam);
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, Proc lpfn, IntPtr hMod, uint dwThreadId);
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr GetModuleHandle(string lpModuleName);
+}
+"@
+
 $signalFile = __SIGNALFILE_PS__
-$avatarPath = __AVATARPATH_PS__
 
 [xml]$XAML = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -163,7 +218,9 @@ $avatarPath = __AVATARPATH_PS__
         Title="TrayMenu" SizeToContent="WidthAndHeight"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" WindowStartupLocation="Manual"
-        ShowActivated="True">
+        ShowActivated="True" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
+        RenderOptions.ClearTypeHint="Enabled">
     <Window.Resources>
         <Style x:Key="MenuItem" TargetType="Border">
             <Setter Property="Background" Value="Transparent"/>
@@ -176,21 +233,11 @@ $avatarPath = __AVATARPATH_PS__
                 </Trigger>
             </Style.Triggers>
         </Style>
-        <!-- Başlıktaki çıkış (logout) butonu: küçük kare, üzerine gelince kırmızımsı. -->
-        <Style x:Key="IconButton" TargetType="Border">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#3A2226"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
     </Window.Resources>
 
     <Border Padding="10">
-        <Border CornerRadius="12" Background="#1E1E1E" BorderBrush="#2D3035" BorderThickness="1">
+        <Border CornerRadius="12" Background="#1E1E1E" BorderBrush="#2D3035" BorderThickness="1"
+                RenderOptions.ClearTypeHint="Enabled">
             <Border.Effect>
                 <DropShadowEffect Color="Black" BlurRadius="24" Opacity="0.55" Direction="270" ShadowDepth="6"/>
             </Border.Effect>
@@ -208,23 +255,6 @@ $avatarPath = __AVATARPATH_PS__
 $reader = (New-Object System.Xml.XmlNodeReader $XAML)
 $window = [Windows.Markup.XamlReader]::Load($reader)
 
-# Avatar (varsa): fallback glyph yerine yuvarlak kapak
-if ($avatarPath) {
-    $ai = $window.FindName("AvatarImg")
-    if ($ai) {
-        try {
-            $bmp = New-Object System.Windows.Media.Imaging.BitmapImage
-            $bmp.BeginInit()
-            $bmp.UriSource = [Uri]::new($avatarPath, [System.UriKind]::Absolute)
-            $bmp.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
-            $bmp.EndInit()
-            $ai.Source = $bmp
-            $clip = $window.FindName("AvatarClip"); if ($clip) { $clip.Visibility = "Visible" }
-            $gl = $window.FindName("AvatarGlyph"); if ($gl) { $gl.Visibility = "Collapsed" }
-        } catch {}
-    }
-}
-
 # Öğe tıklamaları: action'ı sinyal dosyasına yaz, menüyü kapat. (Öğeler Border;
 # ayraç Border'ının Tag'i yok → atlanır.)
 $items = $window.FindName("Items")
@@ -239,14 +269,7 @@ if ($items) {
     }
 }
 
-# Başlıktaki çıkış (logout) butonu — öğelerle aynı köprü (Tag → sinyal dosyası).
-$logoutBtn = $window.FindName("LogoutBtn")
-if ($logoutBtn -and $logoutBtn.Tag) {
-    $logoutBtn.Add_MouseLeftButtonUp({
-        try { Set-Content -Path $signalFile -Value $this.Tag -Force -Encoding UTF8 } catch {}
-        try { $window.Close() } catch {}
-    })
-}
+$script:hookInstalled = $false
 
 $window.Add_Loaded({
     # Konumlandırma: İmlecin konumunu alıp onun yanına yerleştirelim!
@@ -264,11 +287,11 @@ $window.Add_Loaded({
 
     $w = $window.ActualWidth
     $h = $window.ActualHeight
-    
+
     # Ekran sınırlarına kelepçele (menü ekrandan taşmasın)
     $screen = [System.Windows.Forms.Screen]::FromPoint($cursor)
     $bounds = $screen.WorkingArea
-    
+
     # DIP cinsinden bounds
     $bx = [double]$bounds.X
     $by = [double]$bounds.Y
@@ -298,6 +321,32 @@ $window.Add_Loaded({
 
     $window.Activate()
     $window.Focus() | Out-Null
+
+    # Fare kancasını pencere yerleşip konumlandıktan SONRA kur — açılışı
+    # tetikleyen tıklamanın kendisi "dışarı tıklama" sayılıp menüyü anında
+    # kapatmasın diye.
+    [OaMouseHook]::Install()
+    $script:hookInstalled = $true
+    $outsideClickAction = {
+        param($px, $py)
+        try {
+            $pt = [System.Windows.Point]::new([double]$px, [double]$py)
+            $src2 = [System.Windows.PresentationSource]::FromVisual($window)
+            if ($src2 -and $src2.CompositionTarget) {
+                $pt = $src2.CompositionTarget.TransformFromDevice.Transform($pt)
+            }
+            $inside = ($pt.X -ge $window.Left) -and ($pt.X -le ($window.Left + $window.ActualWidth)) -and
+                      ($pt.Y -ge $window.Top) -and ($pt.Y -le ($window.Top + $window.ActualHeight))
+            if (-not $inside) {
+                $window.Dispatcher.Invoke([Action]{ try { $window.Close() } catch {} })
+            }
+        } catch {}
+    }
+    [OaMouseHook]::add_OnClick([Action[int,int]]$outsideClickAction)
+})
+
+$window.Add_Closed({
+    if ($script:hookInstalled) { try { [OaMouseHook]::Uninstall() } catch {} }
 })
 
 $window.Add_Deactivated({
