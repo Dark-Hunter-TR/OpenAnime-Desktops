@@ -984,6 +984,17 @@ pub fn run() {
         dbg_log!("[LocalVideo] Server başlatılamadı!");
     }
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // İkinci bir kopya başlatılmaya çalışıldığında (örn. hızlı ardışık
+            // çift tık) yeni bir process başlatmak yerine mevcut pencereyi
+            // (tepsideyse bile) öne getiririz. Tek koruma bu olmadığında iki
+            // ayrı process yarışıyor ve sonunda iki pencere birden açılıyordu.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
