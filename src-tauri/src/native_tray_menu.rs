@@ -113,10 +113,15 @@ fn build_header_xaml(h: &MenuHeader) -> String {
     )
 }
 
-/// Özel tepsi menüsünü imlecin yanında gösterir. Ateşle-unut. Açılmadan önce
-/// bir öncekini (varsa) kapatır ki sağ tık üst üste basıldığında pencereler
-/// yığılmasın.
-pub fn show(header: Option<MenuHeader>, entries: Vec<MenuEntry>) {
+/// Özel tepsi menüsünü tepsi İKONUNUN konumuna göre gösterir. Ateşle-unut.
+/// Açılmadan önce bir öncekini (varsa) kapatır ki sağ tık üst üste
+/// basıldığında pencereler yığılmasın.
+/// `icon_rect`: (left, top, width, height) — ikonun fiziksel piksel
+/// cinsinden ekran dikdörtgeni (Tauri `TrayIconEvent::Click`'ten gelir).
+/// İmlecin o anki konumu YERİNE bunu kullanmamızın sebebi: PowerShell/WPF
+/// süreci ayağa kalkana kadar (birkaç yüz ms) fare çoktan hareket etmiş
+/// olabiliyordu, menü ikonun değil son fare konumunun yanında açılıyordu.
+pub fn show(header: Option<MenuHeader>, entries: Vec<MenuEntry>, icon_rect: (f64, f64, f64, f64)) {
     let header_xaml = header.as_ref().map(build_header_xaml).unwrap_or_default();
     let items_xaml = build_items_xaml(&entries);
 
@@ -128,10 +133,16 @@ pub fn show(header: Option<MenuHeader>, entries: Vec<MenuEntry>) {
             .replace('\'', "''")
     );
 
+    let (icon_left, icon_top, icon_width, icon_height) = icon_rect;
+
     let script = PS_TEMPLATE
         .replace("__SIGNALFILE_PS__", &signal_ps)
         .replace("__HEADER_XAML__", &header_xaml)
-        .replace("__ITEMS_XAML__", &items_xaml);
+        .replace("__ITEMS_XAML__", &items_xaml)
+        .replace("__ICON_LEFT__", &icon_left.to_string())
+        .replace("__ICON_TOP__", &icon_top.to_string())
+        .replace("__ICON_WIDTH__", &icon_width.to_string())
+        .replace("__ICON_HEIGHT__", &icon_height.to_string());
 
     if let Ok(mut guard) = LAST_MENU_PROC.lock() {
         if let Some(mut prev) = guard.take() {
@@ -212,6 +223,12 @@ public class OaMouseHook {
 
 $signalFile = __SIGNALFILE_PS__
 
+# Tepsi ikonunun fiziksel piksel cinsinden ekran dikdörtgeni (Rust'tan gelir).
+$iconLeftPx = __ICON_LEFT__
+$iconTopPx = __ICON_TOP__
+$iconWidthPx = __ICON_WIDTH__
+$iconHeightPx = __ICON_HEIGHT__
+
 [xml]$XAML = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -272,24 +289,32 @@ if ($items) {
 $script:hookInstalled = $false
 
 $window.Add_Loaded({
-    # Konumlandırma: İmlecin konumunu alıp onun yanına yerleştirelim!
-    $cursor = [System.Windows.Forms.Cursor]::Position
-    $cx = [double]$cursor.X
-    $cy = [double]$cursor.Y
+    # Konumlandırma: tepsi İKONUNUN kendi dikdörtgenine göre (imlece göre
+    # DEĞİL). Süreç ayağa kalkana kadar geçen sürede fare hareket etmiş
+    # olabilir; ikonun rect'i her zaman doğru referans.
+    $src = [System.Windows.PresentationSource]::FromVisual($window)
 
     # Fiziksel px -> DIP (DPI ölçekleme)
-    $src = [System.Windows.PresentationSource]::FromVisual($window)
+    $ix = [double]$iconLeftPx
+    $iy = [double]$iconTopPx
+    $iw = [double]$iconWidthPx
+    $ih = [double]$iconHeightPx
     if ($src -and $src.CompositionTarget) {
-        $p = $src.CompositionTarget.TransformFromDevice.Transform([System.Windows.Point]::new($cx, $cy))
-        $cx = $p.X
-        $cy = $p.Y
+        $ip1 = $src.CompositionTarget.TransformFromDevice.Transform([System.Windows.Point]::new($iconLeftPx, $iconTopPx))
+        $ip2 = $src.CompositionTarget.TransformFromDevice.Transform([System.Windows.Point]::new(([double]$iconLeftPx + [double]$iconWidthPx), ([double]$iconTopPx + [double]$iconHeightPx)))
+        $ix = $ip1.X
+        $iy = $ip1.Y
+        $iw = $ip2.X - $ip1.X
+        $ih = $ip2.Y - $ip1.Y
     }
 
     $w = $window.ActualWidth
     $h = $window.ActualHeight
 
-    # Ekran sınırlarına kelepçele (menü ekrandan taşmasın)
-    $screen = [System.Windows.Forms.Screen]::FromPoint($cursor)
+    # Ekran sınırlarına kelepçele (menü ekrandan taşmasın) — ikonun bulunduğu
+    # monitörü ikon dikdörtgeninin merkez noktasından bul.
+    $iconCenterPhys = New-Object System.Drawing.Point([int]([double]$iconLeftPx + [double]$iconWidthPx / 2), [int]([double]$iconTopPx + [double]$iconHeightPx / 2))
+    $screen = [System.Windows.Forms.Screen]::FromPoint($iconCenterPhys)
     $bounds = $screen.WorkingArea
 
     # DIP cinsinden bounds
@@ -306,13 +331,15 @@ $window.Add_Loaded({
         $bh = $bp2.Y
     }
 
-    # Menüyü konumlandır (sağ altta olduğunda sola ve yukarı açılması varsayılan)
-    $left = $cx - $w
-    $top = $cy - $h
+    # Menüyü ikonun sağ üst köşesine göre, yukarı-sola açılacak şekilde
+    # konumlandır (tepsi sağ altta olduğunda Windows'un kendi menülerinin
+    # davrandığı gibi).
+    $left = $ix + $iw - $w
+    $top = $iy - $h
 
     # Kelepçeleme kuralları
-    if ($left -lt $bx) { $left = $cx }
-    if ($top -lt $by) { $top = $cy }
+    if ($left -lt $bx) { $left = $bx }
+    if ($top -lt $by) { $top = $iy + $ih }
     if (($left + $w) -gt ($bx + $bw)) { $left = ($bx + $bw) - $w - 4 }
     if (($top + $h) -gt ($by + $bh)) { $top = ($by + $bh) - $h - 4 }
 

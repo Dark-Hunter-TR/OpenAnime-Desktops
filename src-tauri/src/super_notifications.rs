@@ -36,7 +36,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -902,13 +902,29 @@ pub fn ensure_tray(app: &AppHandle) -> Result<(), String> {
             if let TrayIconEvent::Click {
                 button,
                 button_state: MouseButtonState::Up,
+                rect,
                 ..
             } = event
             {
                 let app = tray.app_handle();
                 match button {
                     MouseButton::Left => show_main(app),   // sol tık → göster
-                    MouseButton::Right => open_tray_menu(app), // sağ tık → özel menü
+                    MouseButton::Right => {
+                        // Menüyü FARENİN değil, tepsi İKONUNUN kendi ekran
+                        // dikdörtgenine göre konumlandıracağız — Tauri bunu
+                        // event ile birlikte native olarak veriyor. Windows'ta
+                        // ikon rect'i normalde fiziksel piksel gelir; Logical
+                        // durumunu da (scale_factor=1 varsayarak) ele alıyoruz.
+                        let (icon_x, icon_y) = match rect.position {
+                            tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
+                            tauri::Position::Logical(p) => (p.x, p.y),
+                        };
+                        let (icon_w, icon_h) = match rect.size {
+                            tauri::Size::Physical(s) => (s.width as f64, s.height as f64),
+                            tauri::Size::Logical(s) => (s.width, s.height),
+                        };
+                        open_tray_menu(app, (icon_x, icon_y, icon_w, icon_h));
+                    }
                     _ => {}
                 }
             }
@@ -924,7 +940,9 @@ pub fn ensure_tray(app: &AppHandle) -> Result<(), String> {
 }
 
 /// Oturum durumuna göre özel tepsi menüsünü kurup gösterir.
-fn open_tray_menu(app: &AppHandle) {
+/// `icon_rect`: (left, top, width, height) — tepsi ikonunun fiziksel piksel
+/// cinsinden ekran dikdörtgeni. Menü buna göre konumlanır (fareye göre değil).
+fn open_tray_menu(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
     use crate::native_tray_menu::{MenuEntry, MenuHeader};
 
     let acc = app
@@ -1015,7 +1033,7 @@ fn open_tray_menu(app: &AppHandle) {
         danger: true,
     });
 
-    crate::native_tray_menu::show(header, entries);
+    crate::native_tray_menu::show(header, entries, icon_rect);
 }
 
 #[allow(dead_code)]
