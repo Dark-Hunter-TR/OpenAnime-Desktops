@@ -108,7 +108,7 @@ Uygulama, ne yaptığınıza göre kaynak kullanımını gerçek zamanlı ayarla
 
 İndirdiğiniz bölümleri, uygulamanın kendi oynatıcısında izleyebilirsiniz:
 
-- Sidebar'a eklenen **"Kütüphanem"** ve **bölüm ekle** butonlarıyla yerel video dosyalarınızı (`.mp4`, `.mkv`, `.webm`, `.avi`, `.mov`) kütüphanenize ekleyin.
+- Kütüphanenizin **en sonuna** otomatik olarak bir **"Yerel Kütüphane"** anime kartı eklenir; içindeki **"+"** placeholder bölümüne tıklayarak bilgisayarınızdan video dosyaları (`.mp4`, `.mkv`, `.webm`, `.avi`, `.mov`) seçip ekleyebilirsiniz — ayrı bir sidebar butonu yoktur.
 - Rust tarafında çalışan küçük bir yerel HTTP sunucusu (`127.0.0.1`), dosyayı **hiç kopyalamadan** doğrudan diskten stream eder — IndexedDB şişmesi yok, GB boyutundaki dosyalar sorunsuz çalışır.
 - **Range/byte** istekleri desteklendiğinden ileri-geri sarma (seeking) tam çalışır; video sitenin WebGPU oynatıcısında açılır.
 
