@@ -25,12 +25,17 @@
       if (!isNaN(parsedZoom) && parsedZoom >= minZoom && parsedZoom <= 2.0) {
         var savedScreenW = parseFloat(localStorage.getItem("tauri-zoom-screen-w") || "0");
         var savedScreenH = parseFloat(localStorage.getItem("tauri-zoom-screen-h") || "0");
-        var savedDPR    = parseFloat(localStorage.getItem("tauri-zoom-dpr") || "0");
 
+        // NOT: devicePixelRatio kasıtlı olarak KULLANILMIYOR — Chromium'da
+        // devicePixelRatio = ekranDPI × sayfaZoomOranı olduğundan, kayıtlı
+        // zoom uygulandıktan sonra ölçülen DPR zaten zoom'un etkisini içerir.
+        // Bir sonraki açılışta (zoom henüz uygulanmamışken) ölçülen DPR bu
+        // yüzden hep farklı çıkıyor ve "ekran değişti" sanılıp zoom sürekli
+        // %100'e sıfırlanıyordu. Fiziksel ekran çözünürlüğü (screen.width/
+        // height) zoom'dan etkilenmediği için tek başına güvenilir.
         var screenChanged = savedScreenW > 0 && (
           Math.abs(curScreenW - savedScreenW) > 50 ||
-          Math.abs(curScreenH - savedScreenH) > 50 ||
-          Math.abs(curDPR - savedDPR) > 0.1
+          Math.abs(curScreenH - savedScreenH) > 50
         );
 
         if (screenChanged) {
@@ -39,7 +44,6 @@
             localStorage.setItem("tauri-zoom-level", "1");
             localStorage.setItem("tauri-zoom-screen-w", curScreenW.toString());
             localStorage.setItem("tauri-zoom-screen-h", curScreenH.toString());
-            localStorage.setItem("tauri-zoom-dpr", curDPR.toString());
           } catch (e) {}
         } else {
           currentZoom = Math.min(parsedZoom, maxZoom);
@@ -155,7 +159,6 @@
     try { localStorage.setItem("tauri-zoom-level", newZoom.toString()); } catch(e) {}
     try { localStorage.setItem("tauri-zoom-screen-w", window.screen.width.toString()); } catch(e) {}
     try { localStorage.setItem("tauri-zoom-screen-h", window.screen.height.toString()); } catch(e) {}
-    try { localStorage.setItem("tauri-zoom-dpr", (window.devicePixelRatio || 1).toString()); } catch(e) {}
 
     // Rust backend'e bildir (yeni pencereler)
     if (window.__TAURI__ && window.__TAURI__.core) {

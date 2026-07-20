@@ -1,11 +1,22 @@
-// === OpenAnime Discord RPC Settings UI Module ===
+// ============================================================================
+// 📁 MODULE: Discord Rich Presence Settings UI Module
+// ─── Description: Discord durum kartının enjeksiyonunu, stil optimizasyonlarını,
+//                  açılır menü (dropdown) mantığını ve tauri olaylarını yönetir.
+// ============================================================================
 
-// LocalStorage varsayılan değerlerini başlat
+// [INITIALIZATION] ─── LocalStorage Varsayılan Değer Kurulumu
 if (localStorage.getItem("tauri-discord-rpc-visibility") === null) {
   localStorage.setItem("tauri-discord-rpc-visibility", "everything");
 }
 
-// Discord RPC dropdown için svelte hash'lerini oku (updater-ui.js ile aynı mantık)
+/**
+ * 🛠️ FUNCTION: getDiscordDropdownHashes
+ * ─── Purpose: Sitedeki native Svelte nesnelerinden `.combo-box` yapısına ait
+ *              benzersiz class hash'lerini (örn: `svelte-wggw9f`) dinamik olarak okur.
+ * ─── Neden Önemli? Svelte build alındığında class isimleri değişir. Dinamik okuma
+ *     sayesinde güncelleme sonrası arayüz stillerinin kırılması tamamen önlenir.
+ * ─── Returns: Object (Dinamik Svelte hash sınıf eşleşmeleri)
+ */
 function getDiscordDropdownHashes() {
   if (window.__tauriDropdownHashes) return window.__tauriDropdownHashes;
 
@@ -69,8 +80,20 @@ function getDiscordDropdownHashes() {
   return hashes;
 }
 
+// [STATE] Arka planda aktif kalan scroll olay dinleyicisi referansı (Zayiat önleme)
 let _discordMenuScrollHandler = null;
 
+/**
+ * ⚙️ METHOD: openDiscordDropdownMenu
+ * ─── Purpose: Görünürlük ayarı açılır menüsünün (dropdown) Fluent standartlarına
+ *              uygun şekilde clip-path animasyonuyla açılmasını sağlar.
+ * ─── Kritik Satırlar & Mantık:
+ *     - `btnWidth + 8`: Menünün butondan her iki tarafta 4'er piksel daha geniş taşmasını (+8px) sağlar.
+ *     - `left: -4px`: Menüyü butona göre tam ortalayarak Fluent arayüz derinliğini oluşturur.
+ *     - `direction-top`: Menü açılış animasyonunun yukarı doğru çalışmasını tetikler.
+ * ─── Params:
+ *     - wrapper (HTMLElement): Açılır menünün üst kapsayıcı DOM nesnesi
+ */
 function openDiscordDropdownMenu(wrapper) {
   const menu = wrapper.querySelector("#tauri-discord-rpc-visibility-menu");
   if (!menu) return;
@@ -96,7 +119,7 @@ function openDiscordDropdownMenu(wrapper) {
   menu.style.setProperty("position", "absolute", "important");
   const btnWidth = wrapper.querySelector(".combo-box-button")?.offsetWidth || 152;
   const menuWidth = btnWidth + 8;
-  menu.style.setProperty("left", "-4px", "important");
+  menu.style.setProperty("left", "0", "important");
   menu.style.setProperty("width", `${menuWidth}px`, "important");
   menu.style.setProperty("min-width", `${menuWidth}px`, "important");
   menu.style.setProperty("max-height", "256px", "important");
@@ -138,6 +161,18 @@ function openDiscordDropdownMenu(wrapper) {
   });
 }
 
+/**
+ * 🎨 TEMPLATE: buildCardHTML
+ * ─── Purpose: Discord RPC ayar kartının genişletilebilir (Expander) yapısını,
+ *              durum anahtarını (toggle) ve görünürlük dropdown bileşenini içeren
+ *              birebir Fluent tasarım uyumlu HTML içeriğini üretir.
+ * ─── Params:
+ *     - isEnabled (boolean): Discord RPC servisinin aktiflik durumu
+ *     - hashes (object): Expander genel yapı hash'leri
+ *     - dropdownHashes (object): Combo-box ve item hash'leri
+ *     - activeVisibility (string): "everything" veya "watch_only"
+ * ─── Returns: HTML Template String
+ */
 function buildCardHTML(isEnabled, hashes, dropdownHashes, activeVisibility) {
   const {
     headerHash,
@@ -229,6 +264,17 @@ function buildCardHTML(isEnabled, hashes, dropdownHashes, activeVisibility) {
   `;
 }
 
+/**
+ * 🔌 CORE INJECTION: injectDiscordRpcSetting
+ * ─── Purpose: Orijinal Svelte ayarlar sayfasındaki "Kişiselleştirilmiş öneriler"
+ *              veya "NSFW" kartını referans alarak hemen altına Discord RPC
+ *              ayar kartını pürüzsüzce enjekte eder.
+ * ─── Kritik Mantık:
+ *     - `window.__tauriSettingsHashes`: Bulunan Svelte hash'lerini belleğe (cache)
+ *       yazarak her render işleminde DOM'u tekrar tekrar tarama maliyetini önler.
+ *     - `findScrollParentDiscord()`: Kart açıldığında sayfa dışına taşmasını engellemek
+ *       için pürüzsüz scroll animasyonuyla kartı ekran görünümüne taşır.
+ */
 function injectDiscordRpcSetting() {
   if (document.getElementById("tauri-discord-rpc-setting")) return;
 const allElements = Array.from(
@@ -360,6 +406,12 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
     "#tauri-discord-visibility-label",
   );
 
+  /**
+   * 🗺️ HELPER: findScrollParentDiscord
+   * ─── Purpose: Kart açıldığında, sayfanın taşan kısımlarının kaydırılabilmesi için
+   *              DOM üzerindeki en yakın kaydırılabilir (scrollable) üst elementi bulur.
+   * ─── Critical Level: [🟡 MEDIUM] - Smooth scroll özelliğinin düzgün çalışması için gereklidir.
+   */
   function findScrollParentDiscord(node) {
     if (!node) return document.documentElement;
     let parent = node.parentNode;
@@ -379,6 +431,9 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
     return document.documentElement;
   }
 
+  // [EVENTS] ─── Expander Başlığı Tıklama Olay Dinleyicisi
+  // Akıcı bir Fluent yükseklik geçişi (height transition) ve taşma durumlarında
+  // görünümü otomatik aşağı kaydırma işlemlerini gerçekleştirir.
   if (header && content) {
     header.addEventListener("click", () => {
       const isExpanded = newCard.classList.contains("expanded");
@@ -464,6 +519,8 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
     }
   }
 
+  // [EVENTS] ─── Discord RPC Aktiflik Toggle (Aç/Kapat Anahtarı)
+  // Durum değişimlerini doğrudan Tauri Native katmanına aktarır.
   if (toggle) {
     toggle.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -512,6 +569,8 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
     });
   }
 
+  // [EVENTS] ─── Görünürlük Seçenekleri Dropdown Mantığı
+  // Dropdown açma, kapama ve seçenek değiştirme olaylarını yönetir.
   if (dropdownBtn && dropdownMenu && dropdownWrapper) {
     const bindVisibilityItemEvents = (menuEl) => {
       const items = menuEl.querySelectorAll(".combo-box-item");
@@ -572,6 +631,13 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
   }
 }
 
+/**
+ * 🔍 ROUTE OBSERVER: tryInjectSettings
+ * ─── Purpose: Kullanıcının ayarlar sayfasında olup olmadığını URL path üzerinden
+ *              denetler ve kart enjeksiyon süreçlerini tetikler.
+ * ─── Neden setTimeout Var? Sayfa geçişlerinde DOM'un tamamen yüklenmesini beklemek
+ *     ve dinamik Svelte elementlerinin tamamen oluştuğundan emin olmak için.
+ */
 function tryInjectSettings() {
   if (window.location.pathname.includes("/settings")) {
     startSettingsObserver();
@@ -594,6 +660,13 @@ function tryInjectSettings() {
   }
 }
 
+/**
+ * 📡 DOM OBSERVER: startSettingsObserver
+ * ─── Purpose: Sayfa içi dinamik Svelte rota geçişlerini (SPA) yakalamak için
+ *              body elementini MutationObserver ile izler. URL değiştiğinde
+ *              veya yeni bir sayfa çizildiğinde ayar kartlarının silinmesini
+ *              önler ve dinamik olarak anında geri enjekte eder.
+ */
 function startSettingsObserver() {
   if (!document.body) {
     document.addEventListener(
