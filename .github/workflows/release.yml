@@ -200,68 +200,37 @@ jobs:
           prerelease: ${{ needs.prepare.outputs.prerelease }}
           args: --debug --config src-tauri/tauri.debug.conf.json ${{ matrix.args }} --verbose
 
-      # Bu platformun updater manifestini artifact olarak sakla (merge job birleştirir)
-      - name: Save updater manifest artifact
-        shell: bash
-        run: |
-          if [ -f src-tauri/target/release/bundle/updater/latest.json ]; then
-            cp src-tauri/target/release/bundle/updater/latest.json "latest-${{ matrix.platform }}.json"
-          elif [ -f target/release/bundle/updater/latest.json ]; then
-            cp target/release/bundle/updater/latest.json "latest-${{ matrix.platform }}.json"
-          else
-            echo "::warning::Updater manifesti bulunamadı (imzalama anahtarı eksik olabilir)."
-          fi
-
-      - name: Upload updater manifest artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: latest-${{ matrix.platform }}
-          path: latest-${{ matrix.platform }}.json
-          if-no-files-found: ignore
-
   # ────────────────────────────────────────────────────
-  # 3) Platform latest.json'larını birleştir + release'e yükle
+  # 3) latest.json'u DOGRULA
+  #    tauri-action, createUpdaterArtifacts=true iken latest.json'u KENDISI uretip
+  #    (birden fazla platformu birlestirerek) release'e yukler. Bu yuzden ayri bir
+  #    "merge" adimina gerek yok; eski Save/merge adimlari tauri v1 disk yolunu
+  #    (bundle/updater/latest.json) varsayiyordu ki v2'de o dosya orada olusmaz —
+  #    eski release'lerde latest.json olmamasinin gercek sebebi buydu.
+  #    Burada yalnizca manifest'in release'de gercekten var oldugunu dogruluyoruz;
+  #    yoksa (imza secret'i bozuksa tauri-action zaten patlar) yayini durduruyoruz.
   # ────────────────────────────────────────────────────
-  merge-updater-manifest:
+  verify-manifest:
     needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download all manifest artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: latest-*
-          merge-multiple: true
-
-      - name: Merge updater manifests
-        run: |
-          node -e '
-            const fs = require("fs");
-            let merged = { version: "", notes: "", pub_date: "", platforms: {} };
-            const files = fs.readdirSync(".").filter(f => f.startsWith("latest-") && f.endsWith(".json"));
-            for (const file of files) {
-              try {
-                const d = JSON.parse(fs.readFileSync(file, "utf8"));
-                merged.version  = d.version  || merged.version;
-                merged.notes    = d.notes    || merged.notes;
-                merged.pub_date = d.pub_date || merged.pub_date;
-                if (d.platforms) merged.platforms = { ...merged.platforms, ...d.platforms };
-              } catch (e) { console.error("Okuma hatası", file, e); }
-            }
-            if (Object.keys(merged.platforms).length === 0) {
-              console.error("HATA: Hicbir platform manifesti yok. Imzalama secret degerleri (TAURI_SIGNING_PRIVATE_KEY / _PASSWORD) eksik veya yanlis olabilir; updater latest.json URETILEMEDI. Yayin durduruldu.");
-              process.exit(1);
-            }
-            fs.writeFileSync("latest.json", JSON.stringify(merged, null, 2));
-            console.log("Birleştirilmiş manifest:\n" + JSON.stringify(merged, null, 2));
-          '
-
-      - name: Upload combined latest.json to Release
+      - name: latest.json release'de var mi?
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ needs.prepare.outputs.tag }}" latest.json --clobber --repo "${{ github.repository }}"
+          gh release download "${{ needs.prepare.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "latest.json" \
+            --output latest.json \
+            --clobber || true
+          if [ ! -s latest.json ]; then
+            echo "::error::latest.json release'de yok veya bos. tauri-action updater manifestini uretmedi (imza secret degeri eksik/yanlis olabilir). Yayin durduruldu."
+            exit 1
+          fi
+          echo "latest.json bulundu:"
+          cat latest.json
 
   # ────────────────────────────────────────────────────
   # 4) Aynı kanaldaki ESKİ release + tag'leri sil
@@ -269,7 +238,7 @@ jobs:
   #    Yalnızca yayınlanan kanalla sınırlı: stable yayını beta/alpha'ya dokunmaz.
   # ────────────────────────────────────────────────────
   cleanup-old-releases:
-    needs: [prepare, build, merge-updater-manifest]
+    needs: [prepare, build, verify-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -315,7 +284,7 @@ jobs:
   # 5) Taslak release'i CANLIYA al
   # ────────────────────────────────────────────────────
   publish-release:
-    needs: [prepare, build, merge-updater-manifest, cleanup-old-releases]
+    needs: [prepare, build, verify-manifest, cleanup-old-releases]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -333,7 +302,7 @@ jobs:
   #    updater.rs bu dosyaları okur: updater/latest-<kanal>.json
   # ────────────────────────────────────────────────────
   update-channel-manifest:
-    needs: [prepare, merge-updater-manifest, publish-release]
+    needs: [prepare, verify-manifest, publish-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
