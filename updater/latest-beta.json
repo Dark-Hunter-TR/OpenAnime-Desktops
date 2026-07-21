@@ -1,15 +1,15 @@
 {
   "version": "1.0.0",
   "notes": "Beta kanalı güncelleme manifesti. Bu dosya release iş akışı (.github/workflows/release.yml) tarafından beta yayınlarında otomatik güncellenir; elle düzenlemeyin. Sürüm mevcut uygulamayla eşit tutulduğunda güncelleme önerilmez.",
-  "pub_date": "2026-07-22T00:00:00Z",
+  "pub_date": "2026-07-21T12:55:42.908Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "",
-      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.0.3-beta-01/OpenAnime_1.0.3-beta-01_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUoyWVEzcUZaUkxHRnVpcWpqL0FHeXBIdzJJd25rNHN2QnBXMTZUb2ZwaVhwOG91M2l4aGZoUDRvQmdVK3I4bm5xYTZyazUwOUVubWt2WThxNEhoTEFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NjM4NTQwCWZpbGU6T3BlbkFuaW1lXzEuMC4wX3g2NC1zZXR1cC5leGUKNDB4WkZMcC8rSFZ6UldpWXFVRUJsd2VGODY3a0dBQXA0K1NWSVJOdU5PMkRBdUU2NExOSTFhSWFPSlVncTlEQkI2bmVwVk5PZUJKcTBEeG5ITkJnRFE9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/484680941"
     },
-    "darwin-aarch64": {
-      "signature": "",
-      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.0.3-beta-01/OpenAnime_aarch64.app.tar.gz"
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUoyWVEzcUZaUkxHRnVpcWpqL0FHeXBIdzJJd25rNHN2QnBXMTZUb2ZwaVhwOG91M2l4aGZoUDRvQmdVK3I4bm5xYTZyazUwOUVubWt2WThxNEhoTEFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NjM4NTQwCWZpbGU6T3BlbkFuaW1lXzEuMC4wX3g2NC1zZXR1cC5leGUKNDB4WkZMcC8rSFZ6UldpWXFVRUJsd2VGODY3a0dBQXA0K1NWSVJOdU5PMkRBdUU2NExOSTFhSWFPSlVncTlEQkI2bmVwVk5PZUJKcTBEeG5ITkJnRFE9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/484680941"
     }
   }
 }
