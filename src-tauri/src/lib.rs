@@ -1440,7 +1440,16 @@ pub fn run() {
     // bildirim akışı böylece canlı kalır. Tepsi menüsünden gerçek "Kapat"
     // (APP_QUITTING=true) bu engellemeyi hiçbir zaman tetiklemez.
     app.run(move |app_handle, event| {
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            // AppHandle::restart() (güncelleme kurulumu sonrası tetiklenir) bu
+            // event'i code=RESTART_EXIT_CODE ile fırlatır. Bu durumda hiçbir şey
+            // yapmadan çıkıyoruz: Tauri'nin kendi prevent_exit() implementasyonu
+            // zaten bu code'da no-op (bkz. tauri app.rs ExitRequestApi), ama biz
+            // yine de gereksiz bir arkaplan tepsi oturumu açmayalım — restart
+            // sürüyorken yeni bir pencere doğurmak anlamsız/yarış durumu yaratır.
+            if code == Some(tauri::RESTART_EXIT_CODE) {
+                return;
+            }
             if APP_QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }

@@ -218,8 +218,19 @@ jobs:
                     // curr stable, highest prerelease -> curr daha büyük
                     highest = curr;
                   } else if (highest.prerelease) {
-                    // Her ikisi de prerelease -> metinsel veya sayısal karşılaştır
-                    if (curr.prerelease > highest.prerelease) highest = curr;
+                    // Her ikisi de prerelease -> önce kanal adı, sonra SAYISAL indeks.
+                    // NOT: String karşılaştırma ("beta.10" > "beta.2") YANLIŞ sonuç
+                    // verir çünkü leksikografik olarak "beta.10" < "beta.2" çıkar
+                    // ('1' < '2'). İndeksleri sayıya çevirip öyle kıyaslıyoruz.
+                    const [currChan, currIdxRaw] = curr.prerelease.split(".");
+                    const [highChan, highIdxRaw] = highest.prerelease.split(".");
+                    const currIdx = parseInt(currIdxRaw, 10) || 0;
+                    const highIdx = parseInt(highIdxRaw, 10) || 0;
+                    if (currChan !== highChan) {
+                      if (currChan > highChan) highest = curr;
+                    } else if (currIdx > highIdx) {
+                      highest = curr;
+                    }
                   }
                 }
               }
@@ -273,7 +284,20 @@ jobs:
               console.error("HATA: Hesaplanan sürüm numarası SemVer standartlarına uymuyor:", finalVersion);
               process.exit(1);
             }
-            
+
+            // Kanal <-> sürüm son eki tutarlılığı. Bu özellikle ELLE sürüm
+            // girildiğinde kritik: aksi halde "1.2.0" gibi düz bir sürüm "Beta"
+            // kanalı seçiliyken GitHub'da prerelease=true işaretlenip
+            // latest-beta.json'a yazılabilir (kendi içinde çelişen bir release).
+            if (channel === "stable" && finalVersion.includes("-")) {
+              console.error(`HATA: "Kararlı" kanalı seçildi ama sürüm numarasında ön-sürüm son eki var: ${finalVersion}. Kararlı sürümler "-beta"/"-alpha" gibi bir son ek içeremez.`);
+              process.exit(1);
+            }
+            if (channel !== "stable" && !finalVersion.includes(`-${channel}`)) {
+              console.error(`HATA: "${channel}" kanalı seçildi ama sürüm numarası bunu yansıtmıyor: ${finalVersion}. Beklenen son ek: "-${channel}" veya "-${channel}.N" (örn. elle giriyorsan "1.2.3-${channel}.1" gibi).`);
+              process.exit(1);
+            }
+
             console.log("UYGULANACAK SÜRÜM:", finalVersion);
             
             // Sonraki adımlar için hem GITHUB_ENV hem de GITHUB_OUTPUTya kaydet
@@ -313,11 +337,11 @@ jobs:
           echo "- **Draft Durumu:** ${{ inputs.draft }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Install frontend dependencies
-        if: ${{ inputs.dry_run == 'false' }}
+        if: ${{ inputs.dry_run == false }}
         run: bun install
 
       - name: Build & Publish Stable Version
-        if: ${{ inputs.dry_run == 'false' && (inputs.build_mode == 'Sadece Kararlı Sürüm' || inputs.build_mode == 'Her İki Sürüm De') }}
+        if: ${{ inputs.dry_run == false && (inputs.build_mode == 'Sadece Kararlı Sürüm' || inputs.build_mode == 'Her İki Sürüm De') }}
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -337,7 +361,7 @@ jobs:
       #      (OpenAnime-Debug_<v>_x64-setup.exe). Aksi halde aynı ada sahip debug
       #      kurulumu, release'e önce yüklenen stable kurulumunun ÜZERİNE yazıyordu.
       - name: Build & Publish Debug Version
-        if: ${{ inputs.dry_run == 'false' && (inputs.build_mode == 'Sadece Hata Ayıklama (Debug) Sürümü' || inputs.build_mode == 'Her İki Sürüm De') }}
+        if: ${{ inputs.dry_run == false && (inputs.build_mode == 'Sadece Hata Ayıklama (Debug) Sürümü' || inputs.build_mode == 'Her İki Sürüm De') }}
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -349,7 +373,7 @@ jobs:
           args: --debug --config src-tauri/tauri.debug.conf.json ${{ matrix.args }} --verbose
 
       - name: Save updater manifest artifact
-        if: ${{ inputs.dry_run == 'false' && (inputs.build_mode == 'Sadece Kararlı Sürüm' || inputs.build_mode == 'Her İki Sürüm De') }}
+        if: ${{ inputs.dry_run == false && (inputs.build_mode == 'Sadece Kararlı Sürüm' || inputs.build_mode == 'Her İki Sürüm De') }}
         run: |
           if [ -f src-tauri/target/release/bundle/updater/latest.json ]; then
             cp src-tauri/target/release/bundle/updater/latest.json latest-${{ matrix.platform }}.json
@@ -361,7 +385,7 @@ jobs:
         shell: bash
 
       - name: Upload updater manifest artifact
-        if: ${{ inputs.dry_run == 'false' && (inputs.build_mode == 'Sadece Kararlı Sürüm' || inputs.build_mode == 'Her İki Sürüm De') }}
+        if: ${{ inputs.dry_run == false && (inputs.build_mode == 'Sadece Kararlı Sürüm' || inputs.build_mode == 'Her İki Sürüm De') }}
         uses: actions/upload-artifact@v4
         with:
           name: latest-${{ matrix.platform }}
@@ -373,7 +397,7 @@ jobs:
   # ────────────────────────────────────────────────────
   merge-updater-manifest:
     needs: publish
-    if: ${{ inputs.dry_run == 'false' && inputs.build_mode != 'Sadece Hata Ayıklama (Debug) Sürümü' }}
+    if: ${{ inputs.dry_run == false && inputs.build_mode != 'Sadece Hata Ayıklama (Debug) Sürümü' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -439,7 +463,7 @@ jobs:
     # eşitti ve build'ler patlasa bile taslağı canlıya çekiyordu (asset'siz/bozuk
     # release yayınlanabiliyordu). Artık yalnızca tüm gerekli job'lar başarılıysa
     # ve dry_run kapalıysa yayınlar.
-    if: ${{ inputs.dry_run == 'false' && inputs.draft == 'false' && success() }}
+    if: ${{ inputs.dry_run == false && inputs.draft == false && success() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -457,7 +481,7 @@ jobs:
   # ────────────────────────────────────────────────────
   update-channel-manifest:
     needs: [publish, merge-updater-manifest, publish-release]
-    if: ${{ inputs.dry_run == 'false' && inputs.draft == 'false' && inputs.build_mode != 'Sadece Hata Ayıklama (Debug) Sürümü' }}
+    if: ${{ inputs.dry_run == false && inputs.draft == false && inputs.build_mode != 'Sadece Hata Ayıklama (Debug) Sürümü' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

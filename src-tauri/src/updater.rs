@@ -131,9 +131,13 @@ pub async fn check_for_updates(
     };
 
     // Cache'le (sadece normal ve force olmayan durumlar için)
+    // NOT: `channel` (ham parametre) DEĞİL `active_channel` (debug'da beta'ya
+    // zorlanmış/lowercase edilmiş hali) yazılıyor — okuma tarafı da
+    // active_channel ile karşılaştırıyor. Eskiden ikisi farklı değişkendi;
+    // debug build'lerde asla eşleşmediği için cache hiçbir zaman isabet etmiyordu.
     if !is_rollback && !is_force {
         let mut cache_lock = state.cache.lock().unwrap();
-        *cache_lock = Some((Instant::now(), channel, response.clone()));
+        *cache_lock = Some((Instant::now(), active_channel, response.clone()));
     }
 
     Ok(response)
@@ -214,6 +218,16 @@ pub async fn start_update_download(
                     "percent": 100
                 }));
                 crate::log!("[Güncelleme] Kuruldu, uygulama yeniden başlatılıyor…");
+
+                // KRİTİK: restart() çağrılmazsa bu süreç açık kalmaya devam eder.
+                // NSIS installer download_and_install() içinde zaten başlatıldı,
+                // ama çalışan ana .exe hâlâ bu süreç tarafından kilitli olduğu
+                // sürece installer onun üzerine yazamaz — kurulum burada takılı
+                // kalır ya da kullanıcıdan elle kapatmasını ister. Kısa bekleme,
+                // yukarıdaki "success" event'inin frontend'e ulaşıp UI'da
+                // görünmesi için (restart() döndürmez, hemen süreci sonlandırır).
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                app_c.restart();
             }
             Err(e) => {
                 crate::log!("[Güncelleme] Başarısız: {}", e);
