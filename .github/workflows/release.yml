@@ -250,7 +250,7 @@ jobs:
               } catch (e) { console.error("Okuma hatası", file, e); }
             }
             if (Object.keys(merged.platforms).length === 0) {
-              console.error("HATA: Hiçbir platform manifesti yok. İmzalama secret'ları (TAURI_SIGNING_PRIVATE_KEY / _PASSWORD) eksik veya yanlış olabilir; updater latest.json ÜRETİLEMEDİ. Yayın durduruldu.");
+              console.error("HATA: Hicbir platform manifesti yok. Imzalama secret degerleri (TAURI_SIGNING_PRIVATE_KEY / _PASSWORD) eksik veya yanlis olabilir; updater latest.json URETILEMEDI. Yayin durduruldu.");
               process.exit(1);
             }
             fs.writeFileSync("latest.json", JSON.stringify(merged, null, 2));
