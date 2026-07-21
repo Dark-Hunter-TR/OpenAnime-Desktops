@@ -50,8 +50,45 @@ pub struct PerfState {
 
 #[allow(non_snake_case)]
 mod discordRPC;
+// Süper Bildirim toast'ı + özel tepsi menüsü YALNIZCA Windows'ta native
+// (WPF/PowerShell) olarak gösterilir. Diğer platformlarda (ör. macOS CI derlemesi)
+// super_notifications'ın çapraz-platform derlenebilmesi için no-op stub sağlanır.
+// Uygulama zaten baştan aşağı Windows-native; stub sadece derlemeyi geçirir.
+#[cfg(windows)]
 mod native_toast;
+#[cfg(not(windows))]
+mod native_toast {
+    #![allow(dead_code)]
+    pub const CLICK_SIGNAL_FILE: &str = "OpenAnime_toast_click.txt";
+    pub struct ToastContent<'a> {
+        pub title: &'a str,
+        pub body: &'a str,
+        pub notif_type: &'a str,
+        pub poster_path: Option<&'a str>,
+        pub url: Option<&'a str>,
+    }
+    pub fn show_rich(_content: &ToastContent) {}
+}
+
+#[cfg(windows)]
 mod native_tray_menu;
+#[cfg(not(windows))]
+mod native_tray_menu {
+    #![allow(dead_code)]
+    pub const TRAY_ACTION_FILE: &str = "OpenAnime_tray_action.txt";
+    pub struct MenuHeader {
+        pub name: String,
+        pub subtitle: String,
+    }
+    pub struct MenuEntry {
+        pub label: String,
+        pub glyph: u32,
+        pub action: String,
+        pub danger: bool,
+    }
+    pub fn show(_header: Option<MenuHeader>, _entries: Vec<MenuEntry>, _icon_rect: (f64, f64, f64, f64)) {}
+}
+
 mod super_notifications;
 
 mod updater;
