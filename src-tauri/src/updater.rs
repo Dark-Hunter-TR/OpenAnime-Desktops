@@ -31,7 +31,7 @@ pub struct UpdateCheckResult {
 
 #[tauri::command]
 pub fn get_app_version(app: tauri::AppHandle) -> String {
-    app.config().version.clone().unwrap_or_else(|| "1.0.2-beta-02".to_string())
+    app.config().version.clone().unwrap_or_else(|| "1.0.0".to_string())
 }
 
 #[tauri::command]
@@ -39,12 +39,10 @@ pub async fn check_for_updates(
     app: tauri::AppHandle,
     state: tauri::State<'_, UpdaterState>,
     channel: String,
-    target_version: Option<String>,
     force: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    let is_rollback = target_version.is_some();
     let is_force = force.unwrap_or(false);
-    
+
     // Eğer uygulama hata ayıklama (debug/dev) modunda derlendiyse, kanalı otomatik olarak beta'ya zorla
     let active_channel = if cfg!(debug_assertions) {
         crate::log!("[Updater] Geliştirici (Dev) derlemesi algılandı. Güncelleme kanalı 'beta' olarak ayarlanıyor.");
@@ -52,9 +50,9 @@ pub async fn check_for_updates(
     } else {
         channel.to_lowercase()
     };
-    
-    // 1. Cache Kontrolü (Rollback veya Force değilse ve 5 dakika geçerliyse)
-    if !is_rollback && !is_force {
+
+    // 1. Cache Kontrolü (Force değilse ve 5 dakika geçerliyse)
+    if !is_force {
         let cache_lock = state.cache.lock().unwrap();
         if let Some((instant, cached_channel, data)) = &*cache_lock {
             if instant.elapsed() < Duration::from_secs(300) && cached_channel == &active_channel {
@@ -64,21 +62,14 @@ pub async fn check_for_updates(
         }
     }
 
-    // 2. Kanal / Hedef Sürüm URL'sini belirleme
-    let mut url = if let Some(version) = &target_version {
-        format!(
-            "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/{}/latest.json",
-            version
-        )
-    } else {
-        match active_channel.as_str() {
-            "beta" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-beta.json".to_string(),
-            "alpha" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-alpha.json".to_string(),
-            _ => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-stable.json".to_string(),
-        }
+    // 2. Kanal URL'sini belirleme (kanal manifestleri main dalına commit'lenir)
+    let mut url = match active_channel.as_str() {
+        "beta" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-beta.json".to_string(),
+        "alpha" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-alpha.json".to_string(),
+        _ => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-stable.json".to_string(),
     };
 
-    if is_force && url.contains("raw.githubusercontent.com") {
+    if is_force {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -87,8 +78,8 @@ pub async fn check_for_updates(
     }
 
     crate::dbg_log!(
-        "[Updater] Checking updates on URL: {} (Rollback: {}, Force: {})",
-        url, is_rollback, is_force
+        "[Updater] Checking updates on URL: {} (Force: {})",
+        url, is_force
     );
 
     // 3. Tauri Updater Builder yapılandırması
@@ -96,14 +87,6 @@ pub async fn check_for_updates(
     let mut builder = app.updater_builder();
     builder = builder.endpoints(vec![url.parse().map_err(|e| format!("URL Parse Hatası: {}", e))?])
         .map_err(|e| format!("Updater endpoints hatası: {}", e))?;
-    
-    // Eğer rollback yapılıyorsa, sürüm karşılaştırmasını bypass edip her zaman güncellemeye izin ver
-    if is_rollback {
-        builder = builder.version_comparator(|_current, _remote| {
-            crate::dbg_log!("[Updater] Rollback active, version comparison bypassed.");
-            true
-        });
-    }
 
     let updater = builder.build().map_err(|e| format!("Updater Build Hatası: {}", e))?;
     let update_result = updater.check().await.map_err(|e| {
@@ -130,12 +113,12 @@ pub async fn check_for_updates(
         })
     };
 
-    // Cache'le (sadece normal ve force olmayan durumlar için)
+    // Cache'le (sadece force olmayan durumlar için)
     // NOT: `channel` (ham parametre) DEĞİL `active_channel` (debug'da beta'ya
     // zorlanmış/lowercase edilmiş hali) yazılıyor — okuma tarafı da
     // active_channel ile karşılaştırıyor. Eskiden ikisi farklı değişkendi;
     // debug build'lerde asla eşleşmediği için cache hiçbir zaman isabet etmiyordu.
-    if !is_rollback && !is_force {
+    if !is_force {
         let mut cache_lock = state.cache.lock().unwrap();
         *cache_lock = Some((Instant::now(), active_channel, response.clone()));
     }

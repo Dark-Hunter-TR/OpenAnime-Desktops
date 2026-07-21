@@ -1,53 +1,23 @@
 name: '🚀 Publish'
 
+# Tag push edildiğinde otomatik build + yayın.
+# Kanal, tag'in ön-sürüm son ekinden türetilir:
+#   v1.0.0          -> stable
+#   v1.1.0-beta.1   -> beta
+#   v1.2.0-alpha.1  -> alpha
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Sürüm Numarası (Boş bırakılırsa en büyük sürüm baz alınarak otomatik hesaplanır)'
-        required: false
-        type: string
-      channel:
-        description: 'Yayın Kanalı (Sürümün türünü belirler)'
-        required: true
-        default: 'Beta'
-        type: choice
-        options:
-          - 'Kararlı (Stable)'
-          - 'Beta'
-          - 'Alfa (Alpha)'
-      bump_type:
-        description: 'Sürüm Atlama Türü (Otomatik hesaplama yapılırken hangi hane artırılsın)'
-        required: true
-        default: 'Yama (Patch)'
-        type: choice
-        options:
-          - 'Yama (Patch)'
-          - 'İkincil (Minor)'
-          - 'Birincil (Major)'
-      draft:
-        description: 'Taslak olarak mı oluşturulsun? (Hayır seçilirse derleme bittiğinde otomatik yayınlanır)'
-        required: true
-        default: false
-        type: boolean
-      build_mode:
-        description: 'Derleme Modu (Hata ayıklama / Debug sürümünün de derlenip eklenmesi)'
-        required: true
-        default: 'Her İki Sürüm De'
-        type: choice
-        options:
-          - 'Sadece Kararlı Sürüm'
-          - 'Sadece Hata Ayıklama (Debug) Sürümü'
-          - 'Her İki Sürüm De'
-      dry_run:
-        description: 'Sadece Önizleme (Derleme/yayın YAPILMAZ; yalnızca hesaplanacak sürüm numarasını gösterir)'
-        required: true
-        default: false
-        type: boolean
+  push:
+    tags:
+      - 'v*'
 
 concurrency:
-  group: publish-${{ github.ref }}-${{ inputs.channel }}
-  cancel-in-progress: true
+  # Aynı tag için tek yayın; devam eden bir yayını YARIDA KESME (release/tag
+  # silme ve manifest commit'i atomik olmayan işlemler).
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -55,11 +25,58 @@ env:
   RUSTC_WRAPPER: "sccache"
 
 jobs:
-  publish:
+  # ────────────────────────────────────────────────────
+  # 1) Tag'den sürüm + kanal türet
+  # ────────────────────────────────────────────────────
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      channel: ${{ steps.meta.outputs.channel }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Sürüm ve kanalı tag'den hesapla
+        id: meta
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"      # örn: v1.0.0 veya v1.1.0-beta.1
+          VERSION="${TAG#v}"            # baştaki 'v' atılır
+
+          # SemVer doğrulama (yalnızca -beta / -alpha ön-sürümlerine izin ver)
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag SemVer değil: $TAG (beklenen: v1.2.3 veya v1.2.3-beta.1)"
+            exit 1
+          fi
+
+          case "$VERSION" in
+            *-beta*)  CHANNEL=beta ;;
+            *-alpha*) CHANNEL=alpha ;;
+            *-*)      echo "::error::Desteklenmeyen ön-sürüm son eki: $VERSION (yalnızca -beta / -alpha)"; exit 1 ;;
+            *)        CHANNEL=stable ;;
+          esac
+
+          if [ "$CHANNEL" = "stable" ]; then PRE=false; else PRE=true; fi
+
+          echo "tag=$TAG"           >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL"   >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRE"    >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### 🚀 Yayın Bilgisi"
+            echo "- **Tag:** \`$TAG\`"
+            echo "- **Sürüm:** \`$VERSION\`"
+            echo "- **Kanal:** \`$CHANNEL\` (prerelease=$PRE)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────
+  # 2) Derle + TASLAK release'e yayınla (Windows + macOS)
+  # ────────────────────────────────────────────────────
+  build:
+    needs: prepare
     permissions:
       contents: write
-    outputs:
-      app_version: ${{ steps.versioning.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -78,11 +95,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # Tüm geçmişi ve tag'leri çekmek için
+          fetch-depth: 0
 
-      # ────────────────────────────────────────────────────
       # Toolchain + sccache
-      # ────────────────────────────────────────────────────
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.7
 
@@ -99,9 +114,7 @@ jobs:
         with:
           bun-version: latest
 
-      # ────────────────────────────────────────────────────
-      # 3. Cache
-      # ────────────────────────────────────────────────────
+      # Cache
       - name: Cache Tauri bundler (NSIS, Wix etc.)
         if: matrix.platform == 'windows-latest'
         uses: actions/cache@v6
@@ -129,263 +142,77 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-
 
-      # ────────────────────────────────────────────────────
-      # 4. Build & Release
-      # ────────────────────────────────────────────────────
-      - name: Calculate & Update Version
-        id: versioning
+      # Sürüm alanlarını tag ile eşitle (repo değeri ne olursa olsun tag kazanır)
+      - name: Sürüm alanlarını tag ile eşitle
         shell: bash
         env:
-          INPUT_VERSION: ${{ inputs.version }}
-          INPUT_CHANNEL: ${{ inputs.channel }}
-          INPUT_BUMP_TYPE: ${{ inputs.bump_type }}
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           node -e '
             const fs = require("fs");
-            const { execSync } = require("child_process");
-            
-            let finalVersion = process.env.INPUT_VERSION ? process.env.INPUT_VERSION.trim() : "";
-            
-            // Türkçe kanalları standart SemVer biçimine dönüştür
-            let channel = "beta";
-            const rawChannel = process.env.INPUT_CHANNEL || "Beta";
-            if (rawChannel.includes("Kararlı")) channel = "stable";
-            else if (rawChannel.includes("Alfa")) channel = "alpha";
-            else channel = "beta";
-            
-            // Türkçe sürüm atlama seçeneklerini standart SemVer biçimine dönüştür
-            let bumpType = "patch";
-            const rawBump = process.env.INPUT_BUMP_TYPE || "Yama (Patch)";
-            if (rawBump.includes("Birincil")) bumpType = "major";
-            else if (rawBump.includes("İkincil")) bumpType = "minor";
-            else bumpType = "patch";
-            
-            if (!finalVersion) {
-              console.log("Sürüm girilmedi, yerel git tag geçmişi taranıyor...");
-              let allTags = [];
-              try {
-                // Tüm etiketleri çek
-                allTags = execSync("git tag -l").toString().trim().split("\n").map(t => t.trim()).filter(Boolean);
-              } catch (e) {
-                console.log("Etiketler okunamadı, v0.0.0 baz alınacak.");
-              }
-              
-              // Etiketleri sayısal SemVer kurallarına göre sıralamak için fonksiyon
-              const parseSemVer = (tag) => {
-                const clean = tag.startsWith("v") ? tag.slice(1) : tag;
-                // v1.0.2-beta-02 formatını v1.0.2-beta.2 formatına dönüştürerek SemVer parse başarısını artır
-                const normalized = clean.replace(/-([a-zA-Z]+)-(\d+)/, "-$1.$2");
-                const match = normalized.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.]+))?$/);
-                if (!match) return null;
-                
-                const major = parseInt(match[1]);
-                const minor = parseInt(match[2]);
-                const patch = parseInt(match[3]);
-                const prerelease = match[4] || "";
-                
-                return { major, minor, patch, prerelease, raw: tag, normalized };
-              };
-              
-              const parsedTags = allTags.map(parseSemVer).filter(Boolean);
-              
-              // En yüksek/büyük sürümü bul (SemVer Karşılaştırma)
-              let highest = null;
-              for (const curr of parsedTags) {
-                if (!highest) {
-                  highest = curr;
-                  continue;
-                }
-                
-                // Major karşılaştır
-                if (curr.major !== highest.major) {
-                  if (curr.major > highest.major) highest = curr;
-                  continue;
-                }
-                // Minor karşılaştır
-                if (curr.minor !== highest.minor) {
-                  if (curr.minor > highest.minor) highest = curr;
-                  continue;
-                }
-                // Patch karşılaştır
-                if (curr.patch !== highest.patch) {
-                  if (curr.patch > highest.patch) highest = curr;
-                  continue;
-                }
-                
-                // Prerelease karşılaştır (Boş olan yani kararlı sürüm prerelease olandan büyüktür)
-                if (curr.prerelease !== highest.prerelease) {
-                  if (!curr.prerelease) {
-                    // curr stable, highest prerelease -> curr daha büyük
-                    highest = curr;
-                  } else if (highest.prerelease) {
-                    // Her ikisi de prerelease -> önce kanal adı, sonra SAYISAL indeks.
-                    // NOT: String karşılaştırma ("beta.10" > "beta.2") YANLIŞ sonuç
-                    // verir çünkü leksikografik olarak "beta.10" < "beta.2" çıkar
-                    // ('1' < '2'). İndeksleri sayıya çevirip öyle kıyaslıyoruz.
-                    const [currChan, currIdxRaw] = curr.prerelease.split(".");
-                    const [highChan, highIdxRaw] = highest.prerelease.split(".");
-                    const currIdx = parseInt(currIdxRaw, 10) || 0;
-                    const highIdx = parseInt(highIdxRaw, 10) || 0;
-                    if (currChan !== highChan) {
-                      if (currChan > highChan) highest = curr;
-                    } else if (currIdx > highIdx) {
-                      highest = curr;
-                    }
-                  }
-                }
-              }
-              
-              const latestTag = highest ? highest.raw : "v0.0.0";
-              const cleanTag = highest ? highest.normalized.split("-")[0] : "0.0.0";
-              const prerelease = highest ? (highest.normalized.split("-")[1] || "") : "";
-              
-              console.log("Bulunan sayısal olarak en büyük Git etiketi:", latestTag);
-              
-              const parts = cleanTag.split(".");
-              let major = parseInt(parts[0]);
-              let minor = parseInt(parts[1]);
-              let patch = parseInt(parts[2]);
-              
-              // Sürüm atlama mantığı (Bump Type)
-              if (bumpType === "major") {
-                major += 1;
-                minor = 0;
-                patch = 0;
-              } else if (bumpType === "minor") {
-                minor += 1;
-                patch = 0;
-              } else {
-                // varsayılan: patch
-                patch += 1;
-              }
-              
-              if (channel === "stable") {
-                // Stable kanalinda prerelease etiketini kaldir
-                finalVersion = `${major}.${minor}.${patch}`;
-              } else {
-                // beta veya alpha kanali
-                if (prerelease && prerelease.startsWith(channel) && bumpType === "patch") {
-                  // Eğer patch artırılıyorsa ve en son tag de zaten bu kanaldaysa, indeksi artır
-                  const partsPre = prerelease.split(".");
-                  const index = partsPre.length > 1 ? parseInt(partsPre[1]) : 0;
-                  // Orijinal patch versiyonunu geri çekiyoruz çünkü sadece prerelease indeksi artmalı (örn: 1.0.2-beta.1 -> 1.0.2-beta.2)
-                  let origPatch = parseInt(highest.normalized.split("-")[0].split(".")[2]);
-                  finalVersion = `${major}.${minor}.${origPatch}-${channel}.${index + 1}`;
-                } else {
-                  // Yeni bir pre-release serisi baslat (kanal.1 olur)
-                  finalVersion = `${major}.${minor}.${patch}-${channel}.1`;
-                }
-              }
-            }
-            
-            // SemVer Doğrulama
-            const semverRegex = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/;
-            if (!semverRegex.test(finalVersion)) {
-              console.error("HATA: Hesaplanan sürüm numarası SemVer standartlarına uymuyor:", finalVersion);
-              process.exit(1);
-            }
+            const v = process.env.APP_VERSION;
 
-            // Kanal <-> sürüm son eki tutarlılığı. Bu özellikle ELLE sürüm
-            // girildiğinde kritik: aksi halde "1.2.0" gibi düz bir sürüm "Beta"
-            // kanalı seçiliyken GitHub'da prerelease=true işaretlenip
-            // latest-beta.json'a yazılabilir (kendi içinde çelişen bir release).
-            if (channel === "stable" && finalVersion.includes("-")) {
-              console.error(`HATA: "Kararlı" kanalı seçildi ama sürüm numarasında ön-sürüm son eki var: ${finalVersion}. Kararlı sürümler "-beta"/"-alpha" gibi bir son ek içeremez.`);
-              process.exit(1);
-            }
-            if (channel !== "stable" && !finalVersion.includes(`-${channel}`)) {
-              console.error(`HATA: "${channel}" kanalı seçildi ama sürüm numarası bunu yansıtmıyor: ${finalVersion}. Beklenen son ek: "-${channel}" veya "-${channel}.N" (örn. elle giriyorsan "1.2.3-${channel}.1" gibi).`);
-              process.exit(1);
-            }
-
-            console.log("UYGULANACAK SÜRÜM:", finalVersion);
-            
-            // Sonraki adımlar için hem GITHUB_ENV hem de GITHUB_OUTPUTya kaydet
-            fs.appendFileSync(process.env.GITHUB_ENV, "APP_VERSION=" + finalVersion + "\n");
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, "version=" + finalVersion + "\n");
-            
-            // 1. package.json geçici güncelle
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            pkg.version = finalVersion;
-            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
-            console.log("package.json geçici olarak güncellendi.");
-            
-            // 2. tauri.conf.json geçici güncelle
+            pkg.version = v;
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+
             const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
-            tauri.version = finalVersion;
-            fs.writeFileSync("src-tauri/tauri.conf.json", JSON.stringify(tauri, null, 2));
-            console.log("tauri.conf.json geçici olarak güncellendi.");
-            
-            // 3. Cargo.toml geçici güncelle
+            tauri.version = v;
+            fs.writeFileSync("src-tauri/tauri.conf.json", JSON.stringify(tauri, null, 2) + "\n");
+
             let cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
-            cargo = cargo.replace(/^version = ".*"/m, "version = \"" + finalVersion + "\"");
+            cargo = cargo.replace(/^version = ".*"/m, `version = "${v}"`);
             fs.writeFileSync("src-tauri/Cargo.toml", cargo);
-            console.log("Cargo.toml geçici olarak güncellendi.");
+
+            console.log("Sürüm alanları güncellendi:", v);
           '
 
-      - name: Print Version Summary
-        shell: bash
-        run: |
-          echo "### 🚀 Sürüm Otomasyonu Bilgisi" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ inputs.dry_run }}" == "true" ]; then
-            echo "> ⚠️ **ÖNİZLEME MODU (dry_run)** — Bu çalışmada hiçbir derleme veya yayın yapılmayacak. Aşağıdaki sürüm yalnızca hesaplanan değerdir; onaylarsan aynı seçimlerle dry_run kapalı çalıştır." >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "- **Kanal:** ${{ inputs.channel }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Sürüm Atlama:** ${{ inputs.bump_type }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Belirlenen Sürüm:** \`v$APP_VERSION\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Derleme Tipi:** ${{ inputs.build_mode }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Draft Durumu:** ${{ inputs.draft }}" >> $GITHUB_STEP_SUMMARY
-
       - name: Install frontend dependencies
-        if: ${{ inputs.dry_run == false }}
         run: bun install
 
-      - name: Build & Publish Stable Version
-        if: ${{ inputs.dry_run == false && (inputs.build_mode == 'Sadece Kararlı Sürüm' || inputs.build_mode == 'Her İki Sürüm De') }}
+      # Stable: İMZALI derleme. tauri-action createUpdaterArtifacts=true olduğu
+      # için latest.json + .sig üretir. İmzalama secret'ları ZORUNLU; yoksa
+      # updater manifesti üretilmez ve aşağıdaki merge job'ı BİLEREK patlar.
+      - name: Build & Publish (Stable, imzalı)
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v${{ env.APP_VERSION }}
-          releaseName: v${{ env.APP_VERSION }}
-          releaseDraft: true # Her zaman taslak olarak basla, zamanlama hatasini engelle
-          prerelease: ${{ inputs.channel != 'Kararlı (Stable)' }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: ${{ needs.prepare.outputs.tag }}
+          releaseDraft: true      # Her zaman taslak başla; sonda topluca yayınla
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
           args: ${{ matrix.args }} --verbose
 
-      # Debug sürümü: iki KRİTİK farkla derlenir (tauri.debug.conf.json ile override):
-      #   1) createUpdaterArtifacts=false → imza (.sig) üretilmez, dolayısıyla bu
-      #      adıma imza anahtarı VERİLMEZ ve build imza yokluğundan patlamaz.
-      #   2) productName="OpenAnime-Debug" → dosya adı stable'dan farklı olur
-      #      (OpenAnime-Debug_<v>_x64-setup.exe). Aksi halde aynı ada sahip debug
-      #      kurulumu, release'e önce yüklenen stable kurulumunun ÜZERİNE yazıyordu.
-      - name: Build & Publish Debug Version
-        if: ${{ inputs.dry_run == false && (inputs.build_mode == 'Sadece Hata Ayıklama (Debug) Sürümü' || inputs.build_mode == 'Her İki Sürüm De') }}
+      # Debug sürümü: tauri.debug.conf.json ile override.
+      #   - createUpdaterArtifacts=false -> imza yok, bu yüzden imza anahtarı VERİLMEZ
+      #   - productName="OpenAnime-Debug" -> dosya adı stable'dan farklı olur, üzerine yazmaz
+      - name: Build & Publish (Debug)
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v${{ env.APP_VERSION }}
-          releaseName: v${{ env.APP_VERSION }}
-          releaseDraft: true # Her zaman taslak olarak basla, zamanlama hatasini engelle
-          prerelease: ${{ inputs.channel != 'Kararlı (Stable)' }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: ${{ needs.prepare.outputs.tag }}
+          releaseDraft: true
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
           args: --debug --config src-tauri/tauri.debug.conf.json ${{ matrix.args }} --verbose
 
+      # Bu platformun updater manifestini artifact olarak sakla (merge job birleştirir)
       - name: Save updater manifest artifact
-        if: ${{ inputs.dry_run == false && (inputs.build_mode == 'Sadece Kararlı Sürüm' || inputs.build_mode == 'Her İki Sürüm De') }}
+        shell: bash
         run: |
           if [ -f src-tauri/target/release/bundle/updater/latest.json ]; then
-            cp src-tauri/target/release/bundle/updater/latest.json latest-${{ matrix.platform }}.json
+            cp src-tauri/target/release/bundle/updater/latest.json "latest-${{ matrix.platform }}.json"
           elif [ -f target/release/bundle/updater/latest.json ]; then
-            cp target/release/bundle/updater/latest.json latest-${{ matrix.platform }}.json
+            cp target/release/bundle/updater/latest.json "latest-${{ matrix.platform }}.json"
           else
-            echo "Updater manifest not found (signing key might be missing)."
+            echo "::warning::Updater manifesti bulunamadı (imzalama anahtarı eksik olabilir)."
           fi
-        shell: bash
 
       - name: Upload updater manifest artifact
-        if: ${{ inputs.dry_run == false && (inputs.build_mode == 'Sadece Kararlı Sürüm' || inputs.build_mode == 'Her İki Sürüm De') }}
         uses: actions/upload-artifact@v4
         with:
           name: latest-${{ matrix.platform }}
@@ -393,16 +220,15 @@ jobs:
           if-no-files-found: ignore
 
   # ────────────────────────────────────────────────────
-  # 5. Farklı platformların latest.json dosyalarını birleştir
+  # 3) Platform latest.json'larını birleştir + release'e yükle
   # ────────────────────────────────────────────────────
   merge-updater-manifest:
-    needs: publish
-    if: ${{ inputs.dry_run == false && inputs.build_mode != 'Sadece Hata Ayıklama (Debug) Sürümü' }}
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download all artifacts
+      - name: Download all manifest artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: latest-*
@@ -412,76 +238,102 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
-            let merged = {
-              version: "",
-              notes: "",
-              pub_date: "",
-              platforms: {}
-            };
+            let merged = { version: "", notes: "", pub_date: "", platforms: {} };
             const files = fs.readdirSync(".").filter(f => f.startsWith("latest-") && f.endsWith(".json"));
             for (const file of files) {
               try {
-                const data = JSON.parse(fs.readFileSync(file, "utf8"));
-                merged.version = data.version || merged.version;
-                merged.notes = data.notes || merged.notes;
-                merged.pub_date = data.pub_date || merged.pub_date;
-                if (data.platforms) {
-                  merged.platforms = { ...merged.platforms, ...data.platforms };
-                }
-              } catch (e) {
-                console.error("Error reading file", file, e);
-              }
+                const d = JSON.parse(fs.readFileSync(file, "utf8"));
+                merged.version  = d.version  || merged.version;
+                merged.notes    = d.notes    || merged.notes;
+                merged.pub_date = d.pub_date || merged.pub_date;
+                if (d.platforms) merged.platforms = { ...merged.platforms, ...d.platforms };
+              } catch (e) { console.error("Okuma hatası", file, e); }
             }
-            if (Object.keys(merged.platforms).length > 0) {
-              fs.writeFileSync("latest.json", JSON.stringify(merged, null, 2));
-              console.log("Merged manifest created:", JSON.stringify(merged, null, 2));
-            } else {
-              console.log("Platform manifestoları bulunamadı. Birleştirme adımı sessizce atlanıyor (İmzalama anahtarları eksik olabilir).");
-              process.exit(0);
+            if (Object.keys(merged.platforms).length === 0) {
+              console.error("HATA: Hiçbir platform manifesti yok. İmzalama secret'ları (TAURI_SIGNING_PRIVATE_KEY / _PASSWORD) eksik veya yanlış olabilir; updater latest.json ÜRETİLEMEDİ. Yayın durduruldu.");
+              process.exit(1);
             }
+            fs.writeFileSync("latest.json", JSON.stringify(merged, null, 2));
+            console.log("Birleştirilmiş manifest:\n" + JSON.stringify(merged, null, 2));
           '
 
       - name: Upload combined latest.json to Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -f latest.json ]; then
-            gh release upload "v${{ needs.publish.outputs.app_version }}" latest.json --clobber --repo "${{ github.repository }}"
-          else
-            echo "latest.json bulunamadı, release yüklemesi atlandı."
-          fi
-        shell: bash
+          gh release upload "${{ needs.prepare.outputs.tag }}" latest.json --clobber --repo "${{ github.repository }}"
 
   # ────────────────────────────────────────────────────
-  # 6. Taslak Release'i Canlıya Al (Eşzamanlı Yayınlama)
-  #    Tüm platform derlemeleri (Windows & Mac) bittikten sonra çalışır.
-  #    Eğer "draft: false" seçildiyse, taslağı tek bir komutla canlıya alır.
+  # 4) Aynı kanaldaki ESKİ release + tag'leri sil
+  #    (yeni release henüz TASLAK; canlıya alınmadan önce eskiler temizlenir)
+  #    Yalnızca yayınlanan kanalla sınırlı: stable yayını beta/alpha'ya dokunmaz.
   # ────────────────────────────────────────────────────
-  publish-release:
-    needs: [publish, merge-updater-manifest]
-    # ÖNEMLİ: eskiden `success() || always()` idi — bu mantıken sadece always()'e
-    # eşitti ve build'ler patlasa bile taslağı canlıya çekiyordu (asset'siz/bozuk
-    # release yayınlanabiliyordu). Artık yalnızca tüm gerekli job'lar başarılıysa
-    # ve dry_run kapalıysa yayınlar.
-    if: ${{ inputs.dry_run == false && inputs.draft == false && success() }}
+  cleanup-old-releases:
+    needs: [prepare, build, merge-updater-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Taslak Release'i Canlıya Çek
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Aynı kanaldaki eski release ve tag'leri sil
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CUR_TAG: ${{ needs.prepare.outputs.tag }}
+          CUR_CHAN: ${{ needs.prepare.outputs.channel }}
+        run: |
+          set -euo pipefail
+          chan_of() {
+            case "$1" in
+              *-beta*)  echo beta ;;
+              *-alpha*) echo alpha ;;
+              *)        echo stable ;;
+            esac
+          }
+          echo "Mevcut: $CUR_TAG (kanal=$CUR_CHAN). Aynı kanaldaki eskiler siliniyor..."
+
+          # 4a) Release'ler (tag'iyle birlikte --cleanup-tag)
+          for t in $(gh release list --limit 200 --repo "${{ github.repository }}" --json tagName --jq '.[].tagName'); do
+            [ "$t" = "$CUR_TAG" ] && continue
+            [ "$(chan_of "$t")" = "$CUR_CHAN" ] || continue
+            echo "  - Release siliniyor: $t"
+            gh release delete "$t" --yes --cleanup-tag --repo "${{ github.repository }}" || echo "    (silinemedi, atlandı)"
+          done
+
+          # 4b) Release'i olmayan başıboş tag'ler
+          git fetch --tags --force
+          for t in $(git tag -l); do
+            [ "$t" = "$CUR_TAG" ] && continue
+            [ "$(chan_of "$t")" = "$CUR_CHAN" ] || continue
+            echo "  - Başıboş tag siliniyor: $t"
+            git push origin ":refs/tags/$t" || echo "    (silinemedi, atlandı)"
+          done
+
+  # ────────────────────────────────────────────────────
+  # 5) Taslak release'i CANLIYA al
+  # ────────────────────────────────────────────────────
+  publish-release:
+    needs: [prepare, build, merge-updater-manifest, cleanup-old-releases]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Taslağı yayınla
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release edit "v${{ needs.publish.outputs.app_version }}" --draft=false --repo "${{ github.repository }}"
+          gh release edit "${{ needs.prepare.outputs.tag }}" \
+            --draft=false \
+            --repo "${{ github.repository }}"
 
   # ────────────────────────────────────────────────────
-  # 7. Kanal manifestini güncelle (beta/alpha)
-  #    Yayınlanan latest.json'u bu dosyaya kopyalayıp main'e commit'ler.
-  #    Sadece draft OLMAYAN beta/alpha yayınlarında çalışır.
+  # 6) Kanal manifestini main'e commit'le (beta/alpha/stable)
+  #    updater.rs bu dosyaları okur: updater/latest-<kanal>.json
   # ────────────────────────────────────────────────────
   update-channel-manifest:
-    needs: [publish, merge-updater-manifest, publish-release]
-    if: ${{ inputs.dry_run == false && inputs.draft == false && inputs.build_mode != 'Sadece Hata Ayıklama (Debug) Sürümü' }}
+    needs: [prepare, merge-updater-manifest, publish-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -490,41 +342,27 @@ jobs:
         with:
           ref: main
 
-      - name: Kanal İsmini Standartlaştır
-        id: channel_norm
-        shell: bash
-        run: |
-          # Türkçe kanal ismini küçük harfli dosya ismine dönüştür
-          RAW_CHAN="${{ inputs.channel }}"
-          if [[ "$RAW_CHAN" == *"Kararlı"* ]]; then
-            echo "chan_name=stable" >> "$GITHUB_OUTPUT"
-          elif [[ "$RAW_CHAN" == *"Alfa"* ]]; then
-            echo "chan_name=alpha" >> "$GITHUB_OUTPUT"
-          else
-            echo "chan_name=beta" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Yayınlanan latest.json'u indir
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p updater
-          gh release download "v${{ needs.publish.outputs.app_version }}" \
+          gh release download "${{ needs.prepare.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --pattern "latest.json" \
-            --output "updater/latest-${{ steps.channel_norm.outputs.chan_name }}.json" \
-            --clobber || echo "latest.json bulunamadı veya indirilemedi, atlanıyor."
+            --output "updater/latest-${{ needs.prepare.outputs.channel }}.json" \
+            --clobber
 
       - name: Değişikliği main'e commit'le
         run: |
-          CHAN_NAME="${{ steps.channel_norm.outputs.chan_name }}"
-          if [ -f "updater/latest-${CHAN_NAME}.json" ]; then
-            git config user.name "github-actions[bot]"
+          CHAN="${{ needs.prepare.outputs.channel }}"
+          if [ -f "updater/latest-${CHAN}.json" ]; then
+            git config user.name  "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add "updater/latest-${CHAN_NAME}.json"
-            git commit -m "chore(updater): ${CHAN_NAME} kanal manifestini v${{ needs.publish.outputs.app_version }} olarak güncelle [skip ci]" || echo "Değişiklik yok, commit edilmedi."
+            git add "updater/latest-${CHAN}.json"
+            git commit -m "chore(updater): ${CHAN} kanal manifestini ${{ needs.prepare.outputs.tag }} olarak güncelle [skip ci]" \
+              || echo "Değişiklik yok, commit edilmedi."
             git push origin main
           else
-            echo "Kanal güncelleme dosyası mevcut değil, commit adımı atlandı."
+            echo "Kanal manifesti bulunamadı, commit atlandı."
           fi
-        shell: bash
