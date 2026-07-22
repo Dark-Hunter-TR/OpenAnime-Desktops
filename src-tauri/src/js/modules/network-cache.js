@@ -40,8 +40,8 @@
   // Cache kapsamındaki hostlar:
   // openani.me — site altyapısı
   // yeshi.eu.org, zyapbot.eu.org — anime kapak/postör CDN'leri
-  // NOT: img tag'iyle yüklenen görseller fetch interceptor'dan geçmez.
-  // Bunların cache'i için ayrıca MutationObserver gerekir.
+  // NOT: img tag'iyle yüklenen görseller bu fetch interceptor'dan geçmez —
+  // onlar için dosyanın altındaki ayrı src/setAttribute interceptor'ı var.
   const CACHEABLE_HOSTS = [
     "openani.me", "www.openani.me", "cdn.openani.me",
     "yeshi.eu.org", "zyapbot.eu.org",
@@ -513,4 +513,111 @@
       }
     } catch (e) {}
   })();
+
+  // === İkon/Görsel Cache (<img> etiketleri fetch() interceptor'ından geçmez) ===
+  // Yukarıdaki window.fetch override'ı SADECE fetch() ile yapılan istekleri
+  // yakalar. Sitedeki anime kapak/avatar görselleri <img src="..."> ile
+  // yüklendiği için bu cache'e hiç uğramıyordu — her açılışta yeniden
+  // indiriliyorlardı. Bu blok:
+  //   1) Cache'te varsa → img'i anında cache'teki blob'dan gösterir (yeni ağ
+  //      isteği başlamadan önce src değiştirilir, tarayıcı isteği hiç yapmaz)
+  //   2) Cache'te yoksa → native yükleme normal devam eder, arka planda ayrıca
+  //      indirilip Cache API'ye yazılır (bir sonraki açılışta hazır olsun diye)
+  const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "avif", "gif", "ico", "svg"]);
+
+  function isCacheableImageUrl(url) {
+    try {
+      if (!url || typeof url !== "string") return false;
+      if (url.startsWith("data:") || url.startsWith("blob:")) return false;
+      const u = new URL(url, window.location.href);
+      const isCacheableHost = CACHEABLE_HOSTS.some(
+        (h) => u.hostname === h || u.hostname.endsWith("." + h)
+      );
+      if (!isCacheableHost) return false;
+      const ext = u.pathname.split(".").pop().toLowerCase().split("?")[0];
+      return IMAGE_EXTENSIONS.has(ext);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function makeImageCacheKey(url) {
+    return new Request(url, { method: "GET", credentials: "same-origin" });
+  }
+
+  function cacheImageInBackground(url, cache) {
+    (async () => {
+      try {
+        const cacheKey = makeImageCacheKey(url);
+        const existing = await cache.match(cacheKey);
+        if (existing) return; // başka bir yerden zaten cache'lenmiş
+        const resp = await originalFetch(url, { credentials: "omit" });
+        if (resp && resp.ok) {
+          await cache.put(cacheKey, resp.clone());
+          await evictOldEntries(cache);
+        }
+      } catch (e) {
+        // CORS engeli olabilir — native <img> yüklemesi yine de çalışmaya devam eder
+      }
+    })();
+  }
+
+  // Cache'te varsa img'e blob URL uygular (applySrc ile), yoksa arka planda indirir.
+  function serveImageFromCache(img, url, applySrc) {
+    if (!cacheApiAvailable) return;
+    caches.open(CACHE_NAME).then(async (cache) => {
+      try {
+        const cacheKey = makeImageCacheKey(url);
+        const cached = await cache.match(cacheKey);
+        if (!cached) {
+          cacheImageInBackground(url, cache);
+          return;
+        }
+        const blob = await cached.blob();
+        const objUrl = URL.createObjectURL(blob);
+        img.addEventListener("load", () => {
+          try { URL.revokeObjectURL(objUrl); } catch (e) {}
+        }, { once: true });
+        applySrc(objUrl);
+      } catch (e) {
+        cacheImageInBackground(url, cache);
+      }
+    }).catch(() => {});
+  }
+
+  // ── 1) src property setter'ı yakala ──
+  try {
+    const imgSrcDesc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+    if (imgSrcDesc && imgSrcDesc.set && imgSrcDesc.get) {
+      Object.defineProperty(HTMLImageElement.prototype, "src", {
+        configurable: true,
+        enumerable: imgSrcDesc.enumerable,
+        get: imgSrcDesc.get,
+        set: function (value) {
+          if (isCacheableImageUrl(value)) {
+            serveImageFromCache(this, value, (objUrl) => imgSrcDesc.set.call(this, objUrl));
+          }
+          return imgSrcDesc.set.call(this, value);
+        },
+      });
+    }
+  } catch (e) {
+    console.warn("[Network Cache] img src interceptor kurulamadı:", e);
+  }
+
+  // ── 2) setAttribute("src") yolunu yakala ──
+  // (img.src = ... ile setAttribute("src", ...) ayrı native giriş noktaları,
+  // image-rightsizer.js aynı sebeple ikisini de ayrı ayrı sarmalıyor.)
+  try {
+    const origSetAttr = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function (name, value) {
+      if (this instanceof HTMLImageElement && String(name).toLowerCase() === "src" && isCacheableImageUrl(value)) {
+        serveImageFromCache(this, value, (objUrl) => origSetAttr.call(this, name, objUrl));
+        return origSetAttr.call(this, name, value);
+      }
+      return origSetAttr.call(this, name, value);
+    };
+  } catch (e) {
+    console.warn("[Network Cache] img setAttribute interceptor kurulamadı:", e);
+  }
 }

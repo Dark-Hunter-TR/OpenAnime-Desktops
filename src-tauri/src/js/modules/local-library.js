@@ -428,9 +428,17 @@
         if (head[i+4] === 0x74 && head[i+5] === 0x6B && head[i+6] === 0x68 && head[i+7] === 0x64) {
           var boxSize = (head[i] << 24) | (head[i+1] << 16) | (head[i+2] << 8) | head[i+3];
           var version = head[i+8];
-          var offset = version === 1 ? 32 : 20; // tkhd offset to matrix
-          // matrix'ten sonra (36 byte) width (4 byte) + height (4 byte)
-          var wOff = i + offset + 36 + 16; // skip matrix (36 bytes) + rest
+          // tkhd gövdesi (kutu başı i'den itibaren):
+          //   size(4) + type(4) + version(1) + flags(3) = 12 byte header
+          //   version 0 → creation/mod/track/reserved/duration = 4*5 = 20 byte  → duration biter: i+32
+          //   version 1 → aynı alanlar 8/8/4/4/8 = 32 byte               → duration biter: i+44
+          // (Eskiden version+flags'in 4 byte'ı unutulup offset 12 byte kısa
+          // hesaplanıyordu, bu da width/height'ı yanlış konumdan okutup
+          // çözünürlük algılamasını bozuyordu.)
+          var durationEnd = version === 1 ? (i + 44) : (i + 32);
+          // duration'dan sonra: reserved[2](8) + layer(2) + alt_group(2) + volume(2) + reserved(2) = 16 byte
+          // ardından matrix (36 byte), sonra width(4) + height(4)
+          var wOff = durationEnd + 16 + 36;
           if (wOff + 8 <= head.length) {
             var w = (head[wOff] << 24) | (head[wOff+1] << 16) | (head[wOff+2] << 8) | head[wOff+3];
             var h = (head[wOff+4] << 24) | (head[wOff+5] << 16) | (head[wOff+6] << 8) | head[wOff+7];
