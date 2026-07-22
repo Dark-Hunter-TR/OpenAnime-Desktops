@@ -1,51 +1,80 @@
-// === OpenAnime - Video Optimizer Module ===
-// Video player GPU acceleration, buffer optimizasyonu ve player library detect
-// Site'nin video player'ına runtime'da müdahale eder.
+// ═══════════════════════════════════════════════════════════════════════
+// 🎬 Video Player Optimizasyon Modülü
+// ═══════════════════════════════════════════════════════════════════════
+// Amaç:
+//   Video player (HLS.js, dash.js, video.js) konfigürasyonlarını
+//   runtime'da optimize eder. GPU acceleration, buffer ayarları, adaptive
+//   bitrate (ABR), network-aware preload stratejileri uygulanır.
+//
+// Bağlantılı Dosyalar:
+//   • init.js — SPA navigation (popstate, pushState tracking)
+//   • player-perf.js — Performance monitoring
+// ═══════════════════════════════════════════════════════════════════════
 
 {
+  // ═══════════════════════════════════════════════════════════
+  // Player Konfigürasyonları
+  // ═══════════════════════════════════════════════════════════
+  // WHY: HLS.js ve dash.js farklı buffer + ABR stratejileri kullanır.
+  // Sitelerin default config'i sık performans problemi yaratır.
+  // Bu config'ler uygulanarak latency ↓, buffer overflow ↓.
+
   const VIDEO_CONFIG = {
+    // HLS.js (http-streaming) configuration
     hls: {
-      maxBufferLength: 60,
-      maxMaxBufferLength: 120,
-      maxBufferSize: 80 * 1024 * 1024,
-      maxBufferHole: 0.3,
-      lowLatencyMode: false,
-      progressive: true,
-      enableWorker: true,
-      testBandwidth: true,
-      startLevel: -1,
-      abrEwmaFastLive: 3,
-      abrEwmaSlowLive: 9,
+      maxBufferLength: 60,           // Max buffer duration (sn)
+      maxMaxBufferLength: 120,       // Absolute max (network spike için headroom)
+      maxBufferSize: 80 * 1024 * 1024, // Max buffer bytes (300MB cihazlarda sorun)
+      maxBufferHole: 0.3,            // Gap tolerance (sn)
+      lowLatencyMode: false,         // Live streaming için (false = VOD optimized)
+      progressive: true,             // Progressive download (vs streaming only)
+      enableWorker: true,            // Worker thread ile HLS parsing (CPU relief)
+      testBandwidth: true,           // Initial bandwidth measurement
+      startLevel: -1,                // Auto-select quality (-1 = automatic)
+      abrEwmaFastLive: 3,            // Fast network response (exponential weighted)
+      abrEwmaSlowLive: 9,            // Slow network response
     },
+    // dash.js configuration
     dashjs: {
-      BufferingTarget: 60,
-      StableBufferTime: 30,
-      FastSwitchEnabled: true,
+      BufferingTarget: 60,           // Target buffer duration
+      StableBufferTime: 30,          // Min buffer for playback stability
+      FastSwitchEnabled: true,       // ABR switch detection
     }
   };
 
+  // ═══════════════════════════════════════════════════════════
+  // GPU ve Player Optimizasyonları
+  // ═══════════════════════════════════════════════════════════
+
+  // applyVideoGPUOptimizations(video) — Video element'e GPU acceleration hints ver.
+  // WHY: will-change + transform-3D CSS'i GPU composition layer oluşturur.
+  // Sonuç: rendering ↓, smooth playback (CPU yükü azalır).
+  // Bir kez per element (__openanime_optimized__ flag ile).
   function applyVideoGPUOptimizations(video) {
     if (video.__openanime_optimized__) return;
     video.__openanime_optimized__ = true;
 
     try {
+      // CSS GPU hints
       video.style.willChange = "transform";
-      video.style.transform = "translateZ(0)";
-      video.style.backfaceVisibility = "hidden";
-      video.style.webkitBackfaceVisibility = "hidden";
+      video.style.transform = "translateZ(0)";        // Force GPU layer
+      video.style.backfaceVisibility = "hidden";      // Hide back face (Android)
+      video.style.webkitBackfaceVisibility = "hidden"; // Safari/WebKit
 
+      // Preload strategy
       if (!video.hasAttribute("preload") || video.getAttribute("preload") === "none") {
-        video.preload = "auto";
+        video.preload = "auto";                       // Buffer video metadata + first chunk
       }
 
-      video.setAttribute("playsinline", "");
-      video.setAttribute("webkit-playsinline", "");
-
-      if ("disablePictureInPicture" in video) {
-      }
+      // Mobile native player hints
+      video.setAttribute("playsinline", "");          // Don't fullscreen on iOS tap
+      video.setAttribute("webkit-playsinline", "");   // Webkit fallback
     } catch (e) {}
   }
 
+  // setupVisibilityOptimization(video) — Tab hidden durumda playback kontrol.
+  // WHY: Tab gizli iken video oynatmak CPU + battery çöpe gider.
+  // Bu listener document.hidden sırasında buffer strategy değiştirebilir.
   function setupVisibilityOptimization(video) {
     if (video.__openanime_visibility__) return;
     video.__openanime_visibility__ = true;
@@ -55,6 +84,7 @@
         try {
           if (video.buffered.length > 0) {
             // Buffer yeterliyse suspend (playback'i etkilemez)
+            // Şu an kod empty ama framework hazır; gelecek optimizasyon için yer bırakılmış
           }
         } catch (e) {}
       }
@@ -63,12 +93,20 @@
     document.addEventListener("visibilitychange", handleVisibilityChange, { passive: true });
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // Player Library Patch'leri (Runtime Override)
+  // ═══════════════════════════════════════════════════════════
+
+  // patchHls() — HLS.js (http-streaming) config'ini override et.
+  // WHY: loadSource() ve attachMedia() hook'ları sırasında config daha iyi.
+  // Proxy pattern ile: orijinal fonksiyon çağır, ama ÖNCE config öğren.
   function patchHls() {
     const HlsClass = window.Hls;
     if (!HlsClass || window.__openanime_hls_patched__) return;
     window.__openanime_hls_patched__ = true;
 
     try {
+      // Hook: loadSource() → config apply
       const origLoad = HlsClass.prototype.loadSource;
       if (origLoad) {
         HlsClass.prototype.loadSource = function (src) {
@@ -82,6 +120,7 @@
         };
       }
 
+      // Hook: attachMedia() → config + GPU optimization
       const origAttach = HlsClass.prototype.attachMedia;
       if (origAttach) {
         HlsClass.prototype.attachMedia = function (media) {
@@ -98,6 +137,8 @@
     } catch (e) {}
   }
 
+  // patchDashJs() — dash.js config'ini override et.
+  // WHY: MediaPlayer.create() hook'ında initialize() öncesi config set.
   function patchDashJs() {
     if (!window.dashjs || window.__openanime_dash_patched__) return;
     window.__openanime_dash_patched__ = true;
@@ -124,6 +165,8 @@
     } catch (e) {}
   }
 
+  // patchVideoJs() — video.js (VHS fallback) config'i optimize.
+  // WHY: video.js HLS fallback'i de vardır, o da optimize etmek lazım.
   function patchVideoJs() {
     if (!window.videojs || window.__openanime_vjs_patched__) return;
     window.__openanime_vjs_patched__ = true;
@@ -145,9 +188,17 @@
     } catch (e) {}
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // Video Tag Gözlemcisi ve Network Adaptasyon
+  // ═══════════════════════════════════════════════════════════
+
   let videoObserverStarted = false;
 
+  // observeVideos() — Mevcut + gelecekteki tüm <video> tag'larına optimization'ı uygula.
+  // WHY: SPA rotası değiştiğinde yeni video element'ler eklenebilir.
+  // MutationObserver her addedNode'da check edip optimization ekler.
   function observeVideos() {
+    // İlk olarak DOM'da varsa tüm <video> tag'larını optimize et
     document.querySelectorAll("video").forEach((v) => {
       applyVideoGPUOptimizations(v);
       setupVisibilityOptimization(v);
@@ -156,6 +207,7 @@
     if (videoObserverStarted) return;
     videoObserverStarted = true;
 
+    // Sonrasında eklenecek <video> tag'larını observer ile yakala
     const videoObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
@@ -180,6 +232,8 @@
     });
   }
 
+  // applyAdaptiveNetworkHints() — Navigator.connection API ile network-aware preload.
+  // WHY: Yavaş ağlarda ("2g", "slow-2g") metadata-only preload, normal ağlarda "auto".
   function applyAdaptiveNetworkHints() {
     try {
       const conn =
@@ -195,9 +249,9 @@
 
         document.querySelectorAll("video").forEach((v) => {
           if (isSlowNetwork) {
-            v.preload = "metadata";
+            v.preload = "metadata";  // Sadece metadata yükle, video verisini bekle
           } else {
-            v.preload = "auto";
+            v.preload = "auto";      // Metadata + ilk chunk
           }
         });
       };
@@ -207,6 +261,11 @@
     } catch (e) {}
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // Başlatma ve SPA Navigation Tracking
+  // ═══════════════════════════════════════════════════════════
+
+  // initVideoOptimizer() — Tüm optimizasyonları koordine ve başlat.
   function initVideoOptimizer() {
     patchHls();
     patchDashJs();
@@ -215,14 +274,19 @@
     applyAdaptiveNetworkHints();
   }
 
+  // İlk sayfa yüklemesinde başlat
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initVideoOptimizer, { once: true });
   } else {
     initVideoOptimizer();
   }
 
+  // SPA navigation tracking: yeni sayfa yüklendiğinde yeniden optimize et
+  // WHY: SPA rotası değiştiğinde yeni <video> element'ler eklenir,
+  // patche ihtiyaç kaldı. 300ms delay: DOM update'inin tamamlanmasını bekle.
   window.addEventListener("popstate", () => setTimeout(initVideoOptimizer, 300), { passive: true });
-  
+
+  // history.pushState + replaceState override — SPA route change detection
   const _origPush = history.pushState.bind(history);
   const _origReplace = history.replaceState.bind(history);
   history.pushState = function (...args) {
