@@ -152,4 +152,3 @@
     },
     true, // capture phase
   );
-}
