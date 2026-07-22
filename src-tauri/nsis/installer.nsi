@@ -295,9 +295,12 @@ Function OaCustomPageLeave
     Quit
   ${EndIf}
 
-  ; Eğer temiz kurulum seçildiyse önce eskisini kaldır
+  ; Eğer temiz kurulum seçildiyse önce eskisini kaldır, sonra TÜM kullanıcı
+  ; verisini (ayarlar + WebView2 + cache) sil. Eski uninstaller /UPDATE modunda
+  ; çağrıldığı için app data'yı kendisi silmez; bu yüzden burada elle temizliyoruz.
   ${If} $OaInstallMode == 2
     Call OaUninstallPrevious
+    Call OaWipeUserData
   ${EndIf}
 
   ; Kısayol ve Oto-güncelleme seçimlerini kaydet
@@ -362,6 +365,27 @@ Function OaUninstallPrevious
 
 done_uninstall:
   BringToFront
+FunctionEnd
+
+Function OaWipeUserData
+  ; Temiz kurulum: uygulamanın tüm kullanıcı verisini, ayarlarını, WebView2
+  ; profilini ve cache'ini kalıcı olarak siler ("her dosya silinmeli, cache dahil").
+  ; Kurulum currentUser modunda (yükseltmesiz) çalıştığından "current" bağlamı
+  ; doğrudan gerçek kullanıcının klasörlerine denk gelir.
+  SetShellVarContext current
+
+  ; Tauri uygulama verisi + WebView2 (EBWebView) profili — bundle kimliği altında
+  RMDir /r "$LOCALAPPDATA\${BUNDLEID}"
+  RMDir /r "$APPDATA\${BUNDLEID}"
+
+  ; dirs_cache_path() cache dizini ($LOCALAPPDATA\openanime — crash.log vb.)
+  RMDir /r "$LOCALAPPDATA\openanime"
+
+  ; Geçici toast poster cache'i ve bootstrap artıkları
+  Delete "$TEMP\openanime-toast-poster-*.jpg"
+  Delete "$TEMP\oa_latest.json"
+  Delete "$TEMP\oa_latest_setup.exe"
+  Delete "$TEMP\oa_uninstall_prev.exe"
 FunctionEnd
 
 ; 5. Choose install directory page
@@ -658,6 +682,13 @@ Section Install
   ; Eski/Yabancı uygulama çakışmalarını temizle (İkon karışma sorunu çözümü)
   DeleteRegKey HKCR "Applications\OpenAnime.exe"
   DeleteRegKey HKCR "openanime"
+
+  ; Temiz kurulum: hedef dizinde kalan tüm eski dosyaları da temizle. Uninstaller
+  ; yalnızca bilinen dosyaları siler; artık/yabancı dosyalar kalmasın diye dizini
+  ; komple kaldırıyoruz. SetOutPath dizini hemen yeniden oluşturur.
+  ${If} $OaInstallMode == 2
+    RMDir /r "$INSTDIR"
+  ${EndIf}
 
   SetOutPath $INSTDIR
 
@@ -958,11 +989,20 @@ Function CheckOnlineLatest
     Return
   ${EndIf}
 
-  ; 1) Manifesti indir (fail-open)
+  ; Kurulum sayfasindaki basligi "Guncelleme kontrol ediliyor" yap.
+  Push "Güncelleme kontrol ediliyor..."
+  Call OaSetInstText
+
+  ; 1) Manifesti indir (fail-open) — curl.exe ile SESSIZ + HIZLI.
+  ;    NSISdl eski olup HTTPS/redirect'te "Connecting..." ekraninda takiliyor ve
+  ;    dosya adini kendi arayuzunde gosteriyordu. curl redirect'i (-L) kendisi
+  ;    cozer, sessizdir (-s) ve baglanti/toplam zaman asimi ile hizli fail-open olur.
   Delete "$TEMP\oa_latest.json"
-  NSISdl::download "${OA_LATEST_MANIFEST_URL}" "$TEMP\oa_latest.json"
+  nsExec::Exec '"$SYSDIR\curl.exe" -L -s -f -A "OpenAnime-Installer" --connect-timeout 5 --max-time 20 -o "$TEMP\oa_latest.json" "${OA_LATEST_MANIFEST_URL}"'
   Pop $0
-  ${If} $0 != "success"
+  ${If} $0 != "0"
+    Push "OpenAnime Kuruluyor... Lütfen Bekleyin."
+    Call OaSetInstText
     Return
   ${EndIf}
 
@@ -972,6 +1012,8 @@ Function CheckOnlineLatest
   ClearErrors
   FileOpen $1 "$TEMP\oa_latest.json" r
   ${If} ${Errors}
+    Push "OpenAnime Kuruluyor... Lütfen Bekleyin."
+    Call OaSetInstText
     Return
   ${EndIf}
   read_loop:
@@ -1001,6 +1043,8 @@ Function CheckOnlineLatest
   Delete "$TEMP\oa_latest.json"
 
   ${If} $OaOnlineVersion == ""
+    Push "OpenAnime Kuruluyor... Lütfen Bekleyin."
+    Call OaSetInstText
     Return
   ${EndIf}
 
@@ -1008,6 +1052,8 @@ Function CheckOnlineLatest
   nsis_tauri_utils::SemverCompare "$OaOnlineVersion" "${VERSION}"
   Pop $0
   ${If} $0 <> 1
+    Push "OpenAnime Kuruluyor... Lütfen Bekleyin."
+    Call OaSetInstText
     Return                        ; eşit / daha eski → gömülü sürümü kur
   ${EndIf}
 
@@ -1022,18 +1068,37 @@ Function CheckOnlineLatest
   StrCpy $OaSetupUrl "$OaSetupUrl$OaOnlineVersion"
   StrCpy $OaSetupUrl "$OaSetupUrl/$8"
 
-  ; 5) En son installer'ı indir (fail-open)
+  ; 5) En son installer'ı indir (fail-open) — curl.exe ile (redirect + HTTPS)
+  Push "Yeni sürüm indiriliyor, lütfen bekleyin..."
+  Call OaSetInstText
   Delete "$TEMP\oa_latest_setup.exe"
-  NSISdl::download "$OaSetupUrl" "$TEMP\oa_latest_setup.exe"
+  nsExec::Exec '"$SYSDIR\curl.exe" -L -s -f -A "OpenAnime-Installer" --connect-timeout 5 --max-time 300 -o "$TEMP\oa_latest_setup.exe" "$OaSetupUrl"'
   Pop $0
-  ${If} $0 != "success"
+  ${If} $0 != "0"
     Delete "$TEMP\oa_latest_setup.exe"
+    Push "OpenAnime Kuruluyor... Lütfen Bekleyin."
+    Call OaSetInstText
     Return                        ; indirme başarısız → gömülü sürümü kur
   ${EndIf}
 
   ; 6) En son installer'ı başlat ve bu (eski) installer'ı kapat
   Exec '"$TEMP\oa_latest_setup.exe"'
   Quit
+FunctionEnd
+
+; Kurulum (INSTFILES) sayfasindaki ana baslik metnini (ID 1006) gunceller.
+; OaOnInstFilesShow ilerleme cubugu (1004) ve detay kutusunu (1016) gizledigi
+; icin kullaniciya gorunen tek durum metni budur. Push ile metni yigina koyup cagirin.
+Function OaSetInstText
+  Exch $R0
+  Push $R1
+  Push $R2
+  FindWindow $R1 "#32770" "" $HWNDPARENT
+  GetDlgItem $R2 $R1 1006
+  SendMessage $R2 ${WM_SETTEXT} 0 "STR:$R0"
+  Pop $R2
+  Pop $R1
+  Pop $R0
 FunctionEnd
 
 Function Skip

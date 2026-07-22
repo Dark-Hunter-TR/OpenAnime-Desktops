@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OpenAnime",
-  "version": "1.0.2",
+  "version": "1.0.0",
   "identifier": "com.openanime.desktop",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -35,7 +35,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGM0I5RUI5NEU5ODYzMUEKUldRYVk1aE91WjQ3YnptNm12QUJjMjM2ZlFhODB2bk02Mk9yZElYaktDbkpUcEtGWW1lNkJjUVQK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ0NDM0MjE0M0UzNUFFQUQKUldTdHJqVStGRUpEMVB3R1NZUFJHTlkyYkE0cGJLZFM1WDAwMEVnRDk4eXdEYlk0K05ZVy9Kbm0K",
       "endpoints": [
         "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/latest.json"
       ]
