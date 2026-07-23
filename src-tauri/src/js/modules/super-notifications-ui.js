@@ -15,7 +15,8 @@
 // (Oturum çerezleri HttpOnly — onlar JS'ten değil, WebView2 çerez deposundan
 // Rust tarafında okunuyor.)
 
-const SN_ENABLED_KEY = "tauri-super-notifications-enabled";
+{
+  const SN_ENABLED_KEY = "tauri-super-notifications-enabled";
 const SN_TOKEN_RELAY_MS = 30000;
 
 let snLastToken = null;
@@ -426,3 +427,4 @@ function initSuperNotifications() {
 }
 
 initSuperNotifications();
+}

@@ -1,5 +1,6 @@
 // === OpenAnime Discord RPC Controller Module ===
 
+{
 function isDiscordRpcEnabled() {
   const stored = localStorage.getItem("tauri-discord-rpc-enabled");
   if (stored === null) {
@@ -501,3 +502,4 @@ if (document.body) {
 setInterval(() => {
   updatePresenceFromDOM();
 }, 5000);
+}

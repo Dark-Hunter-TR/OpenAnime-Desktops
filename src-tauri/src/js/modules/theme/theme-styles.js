@@ -1,3 +1,4 @@
+{
 function injectThemeUiCSS() {
   try {
     if (document.getElementById(STYLE_THEME_UI_ID)) return;
@@ -8,4 +9,5 @@ function injectThemeUiCSS() {
   } catch (e) {
     console.error("[Theme] injectThemeUiCSS error:", e);
   }
+}
 }

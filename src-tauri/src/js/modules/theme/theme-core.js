@@ -378,5 +378,6 @@
         }
       });
   }
-  
+
   // Ayrı pencere olarak yeni Svelte 5 Tema Oluşturucusunu açar.
+}

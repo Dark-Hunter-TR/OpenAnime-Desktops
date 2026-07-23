@@ -1,6 +1,6 @@
 // === OpenAnime In-App Updater UI Module ===
 
-
+{
 let isUpdateInProgress = false;
 
 // LocalStorage varsayılan değerlerini başlat (İlk kurulum / İlk açılış)
@@ -949,3 +949,4 @@ window.__showUpdateModalTest = showUpdateModal;
 // Start progress listener and startup check directly
 setupProgressListener();
 checkAutoUpdateOnStartup();
+}
