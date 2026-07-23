@@ -1,6 +1,7 @@
 name: '🚀 Publish'
 
 # Tag push edildiğinde otomatik build + yayın.
+# Veya GitHub Actions arayüzünden manuel trigger.
 # Kanal, tag'in ön-sürüm son ekinden türetilir:
 #   v1.0.0          -> stable
 #   v1.1.0-beta.1   -> beta
@@ -9,6 +10,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (ör: v1.0.0, v1.1.0-beta.1)'
+        required: true
+        type: string
 
 concurrency:
   # Aynı tag için tek yayın; devam eden bir yayını YARIDA KESME (release/tag
@@ -39,8 +46,15 @@ jobs:
       - name: Sürüm ve kanalı tag'den hesapla
         id: meta
         shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          TAG="${GITHUB_REF_NAME}"      # örn: v1.0.0 veya v1.1.0-beta.1
+          # workflow_dispatch veya push'dan tag'ı al
+          if [ -z "$INPUT_TAG" ]; then
+            TAG="${GITHUB_REF_NAME}"    # push: event'i (tag ref)
+          else
+            TAG="$INPUT_TAG"            # workflow_dispatch input
+          fi
           VERSION="${TAG#v}"            # baştaki 'v' atılır
 
           # SemVer doğrulama (yalnızca -beta / -alpha ön-sürümlerine izin ver)
