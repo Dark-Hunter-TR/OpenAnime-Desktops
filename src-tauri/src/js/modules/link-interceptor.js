@@ -1,5 +1,6 @@
-// ═══════════════════════════════════════════════════════════════════════
-// 🔗 Link Interceptor — İç/Dış Link Yönetimi
+{
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🔗 Link Interceptor — İç/Dış Link Yönetimi
 // ═══════════════════════════════════════════════════════════════════════
 // Amaç:
 //   window.open() ve <a> click event'lerini override ederek link navigation'ı
@@ -152,3 +153,4 @@
     },
     true, // capture phase
   );
+}

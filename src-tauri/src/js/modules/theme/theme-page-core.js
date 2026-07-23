@@ -1,26 +1,27 @@
-// ═══════════════════════════════════════════════════════════════════════
-// 🎨 Tema Sayfa Çekirdek Mantığı (Theme Page Core)
-// ═══════════════════════════════════════════════════════════════════════
-// Amaç:
-//   Tema seçim sayfasının (/recommendations?desktop_theme=true) arka uç
-//   mantığını yönetir. CSS indirme, localStorage cache'leme, DOM uygulama,
-//   legacy format migrasyon, FOUC prevention (flash of unstyled content).
-//
-// Bağlantılı Dosyalar:
-//   • theme-core.js — Genel tema yönetimi, getActiveThemeId(), applyThemeStyle()
-//   • theme-observer.js — Route tracking MutationObserver, _obs reference
-//   • theme-page-render.js — renderThemePage() UI rendering
-//   • theme-styles.js — THEME_HIDE_CSS constant
-//
-// Bağlı Özellikler:
-//   • getTauriCore() — tauri-bridge.js'den invoke("fetch_css") komutu
-//   • window.__openAnimeIsLoggedIn — Login state check
-//   • THEMES global — Tema list (theme-styles.js'den gelmesi beklenir)
-// ═══════════════════════════════════════════════════════════════════════
+{
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🎨 Tema Sayfa Çekirdek Mantığı (Theme Page Core)
+  // ═══════════════════════════════════════════════════════════════════════
+  // Amaç:
+  //   Tema seçim sayfasının (/recommendations?desktop_theme=true) arka uç
+  //   mantığını yönetir. CSS indirme, localStorage cache'leme, DOM uygulama,
+  //   legacy format migrasyon, FOUC prevention (flash of unstyled content).
+  //
+  // Bağlantılı Dosyalar:
+  //   • theme-core.js — Genel tema yönetimi, getActiveThemeId(), applyThemeStyle()
+  //   • theme-observer.js — Route tracking MutationObserver, _obs reference
+  //   • theme-page-render.js — renderThemePage() UI rendering
+  //   • theme-styles.js — THEME_HIDE_CSS constant
+  //
+  // Bağlı Özellikler:
+  //   • getTauriCore() — tauri-bridge.js'den invoke("fetch_css") komutu
+  //   • window.__openAnimeIsLoggedIn — Login state check
+  //   • THEMES global — Tema list (theme-styles.js'den gelmesi beklenir)
+  // ═══════════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════
-// Tema Kaldırma ve Sıfırlama
-// ═══════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════
+  // Tema Kaldırma ve Sıfırlama
+  // ═══════════════════════════════════════════════════════════
 
   // removeThemeStyle(themeId) — Belirtilen tema CSS'ini DOM'dan ve localStorage'dan kaldırır.
   // Param: themeId (string) — kaldırılacak tema ID'si
@@ -334,3 +335,4 @@
   } catch (e) {
     console.error("[Theme] event listener setup error:", e);
   }
+}

@@ -1,17 +1,16 @@
-// ═══════════════════════════════════════════════════════════════════════
-// 🎬 Video Player Optimizasyon Modülü
-// ═══════════════════════════════════════════════════════════════════════
-// Amaç:
-//   Video player (HLS.js, dash.js, video.js) konfigürasyonlarını
-//   runtime'da optimize eder. GPU acceleration, buffer ayarları, adaptive
-//   bitrate (ABR), network-aware preload stratejileri uygulanır.
-//
-// Bağlantılı Dosyalar:
-//   • init.js — SPA navigation (popstate, pushState tracking)
-//   • player-perf.js — Performance monitoring
-// ═══════════════════════════════════════════════════════════════════════
-
 {
+  // ═══════════════════════════════════════════════════════════════════════
+  // 🎬 Video Player Optimizasyon Modülü
+  // ═══════════════════════════════════════════════════════════════════════
+  // Amaç:
+  //   Video player (HLS.js, dash.js, video.js) konfigürasyonlarını
+  //   runtime'da optimize eder. GPU acceleration, buffer ayarları, adaptive
+  //   bitrate (ABR), network-aware preload stratejileri uygulanır.
+  //
+  // Bağlantılı Dosyalar:
+  //   • init.js — SPA navigation (popstate, pushState tracking)
+  //   • player-perf.js — Performance monitoring
+  // ═══════════════════════════════════════════════════════════════════════
   // ═══════════════════════════════════════════════════════════
   // Player Konfigürasyonları
   // ═══════════════════════════════════════════════════════════
