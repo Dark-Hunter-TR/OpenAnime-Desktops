@@ -1,7 +1,27 @@
-// === OpenAnime - Tauri Bridge Module ===
-// Tauri IPC polyfill: __TAURI__ objesini oluşturur (eğer yoksa)
+// ═══════════════════════════════════════════════════════════════════════
+// 🌉 Tauri Bridge — IPC Polyfill ve API Wrapper
+// ═══════════════════════════════════════════════════════════════════════
+// Amaç:
+//   window.__TAURI__ API'sini polyfill'e dönüştür. Tauri native kernel
+//   belki henüz yüklenmemişse, bu bridge placeholder invoke/event sistemi
+//   oluşturur. Callback-based IPC → Promise-based API.
+//
+// WHY: SvelteKit SPA WebView'da çalışacağından __TAURI__ backend
+// (Rust src-tauri) tarafından enjekte edilmediği senaryolar var.
+// Bu polyfill window.__TAURI_IPC__ hook'unu bekler (bridge sağlayıcı).
+// ═══════════════════════════════════════════════════════════════════════
 
 if (!window.__TAURI__) {
+  // ═══════════════════════════════════════════════════════════
+  // IPC Invoke Sistem
+  // ═══════════════════════════════════════════════════════════
+
+  // tauriInvoke(cmd, args) — Tauri backend'e komut gönder, Promise döndür.
+  // Param: cmd (string) — Tauri plugin command (ör: "plugin:window|minimize")
+  // Param: args (object) — Komut parametreleri
+  // Return: Promise<any> — Backend response
+  // WHY: Callback-based window.__TAURI_IPC__ → Promise wrapper.
+  // window.callback/window.error global fonksiyonları random ID ile gözlemlenir.
   const tauriInvoke = function (cmd, args = {}) {
     return new Promise((resolve, reject) => {
       const callback = '_' + Math.random().toString(36).substr(2, 9);
@@ -32,6 +52,7 @@ if (!window.__TAURI__) {
     });
   };
 
+  // Window control API (minimize, maximize, close, vb.)
   const currentWindowInstance = {
     minimize: () => tauriInvoke('plugin:window|minimize'),
     maximize: () => tauriInvoke('plugin:window|maximize'),
@@ -44,11 +65,21 @@ if (!window.__TAURI__) {
     show: () => tauriInvoke('plugin:window|show'),
   };
 
+  // Webview zoom control
   const currentWebviewInstance = {
     setZoom: (value) => tauriInvoke('plugin:webview|set_webview_zoom', { value }),
   };
 
+  // ═══════════════════════════════════════════════════════════
+  // Event Listen Sistem
+  // ═══════════════════════════════════════════════════════════
+
+  // Event listener registry (eventName → {id → handler})
   const eventListeners = {};
+
+  // eventListen(eventName, handler) — Tauri backend'den event dinle.
+  // WHY: Backend'den gelen event'ler window.__TAURI_EVENT_INVOKE__ ile tetiklenir.
+  // Unsubscribe fonksiyonu döndürülür (cleanup).
   const eventListen = function (eventName, handler) {
     return new Promise((resolve, reject) => {
       const eventId =
@@ -71,7 +102,9 @@ if (!window.__TAURI__) {
       }
     });
   };
-  
+
+  // __TAURI_EVENT_INVOKE__(eventName, payload) — Backend'den event tetiklemesi.
+  // Tüm dinleme handler'larını çağır (dispatch pattern).
   window.__TAURI_EVENT_INVOKE__ = function (eventName, payload) {
     const handlers = eventListeners[eventName];
     if (handlers) {
@@ -85,7 +118,13 @@ if (!window.__TAURI__) {
     }
   };
 
+  // ═══════════════════════════════════════════════════════════
+  // OS Platform Detection
+  // ═══════════════════════════════════════════════════════════
+
   // OS platform detection polyfill (user-agent fallback)
+  // WHY: Backend yüklenmediyse, User-Agent'ten OS detect ederiz.
+  // macOS (Darwin) vs Windows (NT) platform'u ayırt etmek gerek.
   const _detectPlatform = () => {
     const ua = navigator.userAgent || '';
     if (/macintosh|mac os x/i.test(ua)) return 'macos';
