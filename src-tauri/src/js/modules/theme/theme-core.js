@@ -1,6 +1,5 @@
 // === OpenAnime - Theme Module === //
 
-{
   const getTauriCore = () => {
     try {
       return window.__TAURI__?.core || window.parent?.__TAURI__?.core;
@@ -380,4 +379,3 @@
   }
 
   // Ayrı pencere olarak yeni Svelte 5 Tema Oluşturucusunu açar.
-}

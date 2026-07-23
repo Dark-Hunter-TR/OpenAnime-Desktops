@@ -1,4 +1,3 @@
-{
 function hidePageTitle() {
   try {
     if (!isThemePageActive() || THEMES.length > 0) return;
@@ -177,5 +176,4 @@ function onRouteChange() {
   } catch (e) {
     console.error("[Theme] onRouteChange error:", e);
   }
-}
 }
