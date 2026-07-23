@@ -1,5 +1,14 @@
-// === OpenAnime — DPI Proxy Ayarları / Veritabanı Yönetimi ===
-// goodbye_settings.json dosyasını okur, yazar, günceller
+// ═══════════════════════════════════════════════════════════════════════
+// 🛡️ DPI Proxy Ayarları ve Veritabanı Yönetimi
+// ═══════════════════════════════════════════════════════════════════════
+// Amaç:
+//   DPI bypass test sonuçlarını ve proxy durumunu goodbye_settings.json'da
+//   persist etmek. Yöntem başarı/başarısız kayıtları, hangi yöntem çalışıyor,
+//   ISP blocking detection state'i kaydeder.
+//
+// WHY: DPI proxy'nin başarısı ağ/ISP bağlıdır. Test result'larını cache'lemek
+// her açılış sırasında tüm yöntemleri tekrar test etmekten kaçınır.
+// ═══════════════════════════════════════════════════════════════════════
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -8,28 +17,25 @@ use crate::dbg_log;
 
 use super::methods::{DpiMethodRecord, MethodStatus};
 
+/// GoodbyeSettings — DPI proxy state persistence.
+/// WHY: Ağ test'leri maliyetli (latency, trafik). Geçmiş sonuçları saklayıp
+/// startup'ta hızlı recovery yapabiliriz.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoodbyeSettings {
-    pub version: u32,
-    pub last_updated: String,
+    pub version: u32,                      // Schema version (future migration)
+    pub last_updated: String,              // Son update timestamp
 
-    /// En son başarılı yöntemin ID'si
-    pub active_method_id: Option<u32>,
+    // Test sonuçları
+    pub active_method_id: Option<u32>,     // En son başarılı yöntem ID'si (active)
+    pub methods: Vec<DpiMethodRecord>,     // Tüm yöntemlerin test history
 
-    /// Tüm denenmiş yöntemlerin kayıtları
-    pub methods: Vec<DpiMethodRecord>,
+    // Proxy durumu
+    pub is_active: bool,                   // Proxy şu an çalışır mı
+    pub is_blocking_detected: bool,        // ISP blocking tespit edildi mi
+    pub blocked_reason: String,            // Blocking nedeni ("bypassed", "timeout", vb.)
 
-    /// Proxy şu an çalışıyor mu?
-    pub is_active: bool,
-
-    /// ISP engellemesi tespit edildi mi?
-    pub is_blocking_detected: bool,
-
-    /// Son engel nedeni
-    pub blocked_reason: String,
-
-    /// Sistemde harici GoodbyeDPI çalışıyor mu?
-    pub system_goodbye_running: bool,
+    // Sistem durumu
+    pub system_goodbye_running: bool,      // Harici GoodbyeDPI process çalışıyor mu
 }
 
 impl Default for GoodbyeSettings {
@@ -58,6 +64,7 @@ impl Default for GoodbyeSettings {
 }
 
 impl GoodbyeSettings {
+    /// default_path() — goodbye_settings.json dosyasının standart konumu.
     fn default_path(app: &tauri::AppHandle) -> PathBuf {
         let local_data = app
             .path()
@@ -66,7 +73,9 @@ impl GoodbyeSettings {
         local_data.join("goodbye_settings.json")
     }
 
-    /// Veritabanını yükle (yoksa varsayılan oluştur)
+    /// load() — goodbye_settings.json'ı yükle veya default oluştur.
+    /// WHY: Disk dosyası hatalı/eksik ise fallback to default + save.
+    /// Böylece her startup'ta settings var.
     pub fn load(app: &tauri::AppHandle) -> Self {
         let path = Self::default_path(app);
         if path.exists() {
@@ -95,7 +104,7 @@ impl GoodbyeSettings {
         default
     }
 
-    /// Veritabanını kaydet
+    /// save() — goodbye_settings.json'a kaydet (pretty JSON).
     pub fn save(&self, app: &tauri::AppHandle) {
         let path = Self::default_path(app);
         if let Some(parent) = path.parent() {
@@ -115,7 +124,8 @@ impl GoodbyeSettings {
         }
     }
 
-    /// Bir yöntemi başarılı olarak işaretle
+    /// mark_method_success(method_id) — Yöntemi başarılı olarak işaretle.
+    /// WHY: Başarı sayısını artır, timestamps'i set, active_method_id güncelle.
     pub fn mark_method_success(&mut self, method_id: u32) {
         let now = chrono_now();
         if let Some(record) = self.methods.iter_mut().find(|m| m.id == method_id) {
@@ -131,7 +141,7 @@ impl GoodbyeSettings {
         self.blocked_reason = "bypassed".to_string();
     }
 
-    /// Bir yöntemi başarısız olarak işaretle
+    /// mark_method_fail(method_id) — Yöntemi başarısız olarak işaretle.
     pub fn mark_method_fail(&mut self, method_id: u32) {
         if let Some(record) = self.methods.iter_mut().find(|m| m.id == method_id) {
             record.status = MethodStatus::Failed;
@@ -139,25 +149,28 @@ impl GoodbyeSettings {
             record.last_tested = Some(chrono_now());
         }
     }
-
 }
 
+/// chrono_now() — ISO 8601 zaman damgası (chrono kütüphanesi olmadan).
+/// Return: String — YYYY-MM-DDTHH:MM:SS+03:00 formatı
+/// WHY: chrono dependency eklememek için SystemTime'dan basit hesap.
+/// Note: Basit approximate — precise tarih hesabı yapmaz, sadece HH:MM:SS doğru.
 fn chrono_now() -> String {
-    // Basit ISO 8601 zaman damgası (chrono kütüphanesi olmadan)
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let secs = now.as_secs();
-    // Saniyeleri ISO formatına çevir (basit)
-    let days = secs / 86400;
-    let time_secs = secs % 86400;
+
+    let time_secs = secs % 86400; // Günün içindeki saniye
     let hours = time_secs / 3600;
     let minutes = (time_secs % 3600) / 60;
     let seconds = time_secs % 60;
 
-    // 2026-01-01'den beri gün sayısı (yaklaşık)
+    // Basit approximation: UNIX epoch (1970-01-01) → 2026
+    let days = secs / 86400;
     let year = 1970 + (days as f64 / 365.25) as u64;
+
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}+03:00",
         year, 1, 1, hours, minutes, seconds
