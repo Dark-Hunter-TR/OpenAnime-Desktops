@@ -1,15 +1,15 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "notes": "",
-  "pub_date": "2026-07-21T12:55:42.908Z",
+  "pub_date": "2026-07-23T12:09:29.544Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUoyWVEzcUZaUkxHRnVpcWpqL0FHeXBIdzJJd25rNHN2QnBXMTZUb2ZwaVhwOG91M2l4aGZoUDRvQmdVK3I4bm5xYTZyazUwOUVubWt2WThxNEhoTEFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NjM4NTQwCWZpbGU6T3BlbkFuaW1lXzEuMC4wX3g2NC1zZXR1cC5leGUKNDB4WkZMcC8rSFZ6UldpWXFVRUJsd2VGODY3a0dBQXA0K1NWSVJOdU5PMkRBdUU2NExOSTFhSWFPSlVncTlEQkI2bmVwVk5PZUJKcTBEeG5ITkJnRFE9PQo=",
-      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/484680941"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUNLeWo3Y2tnWFl0OWhmSHhBTGtQZnJqR2RHY3ovWE5HNkRuSGdnUEwzRkRPd1MzQ3pYdmtQbTRjc2JUVFVKSnhrczE4ME5DK0dDaXNhc0lzNk5SWWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODA4NTY3CWZpbGU6T3BlbkFuaW1lXzEuMS4wX3g2NC1zZXR1cC5leGUKU1IwNTZ4bzMxWFdnM1hJYXR4RDB5RDVCVDhRR3pnREZqa2dGUm9oME1YM0lGZHJ6aEZZcDR3VkcvMFA3Z0d3SndiZEZrL0ZpOGFyRlVtSi9RaHdHQWc9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/487147505"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUoyWVEzcUZaUkxHRnVpcWpqL0FHeXBIdzJJd25rNHN2QnBXMTZUb2ZwaVhwOG91M2l4aGZoUDRvQmdVK3I4bm5xYTZyazUwOUVubWt2WThxNEhoTEFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NjM4NTQwCWZpbGU6T3BlbkFuaW1lXzEuMC4wX3g2NC1zZXR1cC5leGUKNDB4WkZMcC8rSFZ6UldpWXFVRUJsd2VGODY3a0dBQXA0K1NWSVJOdU5PMkRBdUU2NExOSTFhSWFPSlVncTlEQkI2bmVwVk5PZUJKcTBEeG5ITkJnRFE9PQo=",
-      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/484680941"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUNLeWo3Y2tnWFl0OWhmSHhBTGtQZnJqR2RHY3ovWE5HNkRuSGdnUEwzRkRPd1MzQ3pYdmtQbTRjc2JUVFVKSnhrczE4ME5DK0dDaXNhc0lzNk5SWWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODA4NTY3CWZpbGU6T3BlbkFuaW1lXzEuMS4wX3g2NC1zZXR1cC5leGUKU1IwNTZ4bzMxWFdnM1hJYXR4RDB5RDVCVDhRR3pnREZqa2dGUm9oME1YM0lGZHJ6aEZZcDR3VkcvMFA3Z0d3SndiZEZrL0ZpOGFyRlVtSi9RaHdHQWc9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/487147505"
     }
   }
 }
