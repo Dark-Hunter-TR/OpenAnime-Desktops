@@ -182,7 +182,7 @@
       }
     }
 
-    // ADIM 3: Ilk sayfa yüklemesinde aktif tema varsa applica et
+    // ADIM 3: İlk sayfa yüklemesinde aktif tema varsa applica et
     const activeId = getActiveThemeId();
     if (activeId && activeId !== "default") {
       const savedCss = localStorage.getItem("theme_content_" + activeId);

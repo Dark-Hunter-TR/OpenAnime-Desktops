@@ -112,7 +112,7 @@ if (!window.__TAURI__) {
         try {
           handlers[id]({ event: eventName, id, payload });
         } catch (e) {
-          console.error("[Tauri-bridge] Olay handler hatası:", e);
+          console.error("[Tauri-bridge] Olay dinleyicisi hatası:", e);
         }
       }
     }

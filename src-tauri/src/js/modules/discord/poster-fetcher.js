@@ -11,6 +11,9 @@
 //   3. API fetch openani.me/anime/{slug} (network)
 // ═══════════════════════════════════════════════════════════════════════
 
+// Slug başına API fetch'in bir kez yapılması için (deduplication)
+let posterFetchedSlugs = new Set();
+
 // normalizePosterUrl(url) — TMDB poster URL'ini normalize et.
 // WHY: TMDB image.tmdb.org → openanime.net mirror'ına yönlendir,
 // resolution'u w500 fix (thumbnail, şevket).
