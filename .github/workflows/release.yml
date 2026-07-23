@@ -112,7 +112,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.x
 
       # Cache
       - name: Cache Tauri bundler (NSIS, Wix etc.)
@@ -323,15 +323,17 @@ jobs:
             --clobber
 
       - name: Değişikliği main'e commit'le
+        env:
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
-          CHAN="${{ needs.prepare.outputs.channel }}"
+          CHAN="$CHANNEL"
           if [ -f "updater/latest-${CHAN}.json" ]; then
             git config user.name  "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add "updater/latest-${CHAN}.json"
             git commit -m "chore(updater): ${CHAN} kanal manifestini ${{ needs.prepare.outputs.tag }} olarak güncelle [skip ci]" \
               || echo "Değişiklik yok, commit edilmedi."
-            git push origin main
+            git push origin main || { echo "::error::git push başarısız oldu"; exit 1; }
           else
             echo "Kanal manifesti bulunamadı, commit atlandı."
           fi
