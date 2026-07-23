@@ -263,58 +263,10 @@ jobs:
           cat latest.json
 
   # ────────────────────────────────────────────────────
-  # 4) Aynı kanaldaki ESKİ release + tag'leri sil
-  #    (yeni release henüz TASLAK; canlıya alınmadan önce eskiler temizlenir)
-  #    Yalnızca yayınlanan kanalla sınırlı: stable yayını beta/alpha'ya dokunmaz.
-  # ────────────────────────────────────────────────────
-  cleanup-old-releases:
-    needs: [prepare, build, verify-manifest]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Aynı kanaldaki eski release ve tag'leri sil
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CUR_TAG: ${{ needs.prepare.outputs.tag }}
-          CUR_CHAN: ${{ needs.prepare.outputs.channel }}
-        run: |
-          set -euo pipefail
-          chan_of() {
-            case "$1" in
-              *-beta*)  echo beta ;;
-              *-alpha*) echo alpha ;;
-              *)        echo stable ;;
-            esac
-          }
-          echo "Mevcut: $CUR_TAG (kanal=$CUR_CHAN). Aynı kanaldaki eskiler siliniyor..."
-
-          # 4a) Release'ler (tag'iyle birlikte --cleanup-tag)
-          for t in $(gh release list --limit 200 --repo "${{ github.repository }}" --json tagName --jq '.[].tagName'); do
-            [ "$t" = "$CUR_TAG" ] && continue
-            [ "$(chan_of "$t")" = "$CUR_CHAN" ] || continue
-            echo "  - Release siliniyor: $t"
-            gh release delete "$t" --yes --cleanup-tag --repo "${{ github.repository }}" || echo "    (silinemedi, atlandı)"
-          done
-
-          # 4b) Release'i olmayan başıboş tag'ler
-          git fetch --tags --force
-          for t in $(git tag -l); do
-            [ "$t" = "$CUR_TAG" ] && continue
-            [ "$(chan_of "$t")" = "$CUR_CHAN" ] || continue
-            echo "  - Başıboş tag siliniyor: $t"
-            git push origin ":refs/tags/$t" || echo "    (silinemedi, atlandı)"
-          done
-
-  # ────────────────────────────────────────────────────
-  # 5) Taslak release'i CANLIYA al
+  # 4) Taslak release'i CANLIYA al
   # ────────────────────────────────────────────────────
   publish-release:
-    needs: [prepare, build, verify-manifest, cleanup-old-releases]
+    needs: [prepare, build, verify-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -328,7 +280,7 @@ jobs:
             --repo "${{ github.repository }}"
 
   # ────────────────────────────────────────────────────
-  # 6) Kanal manifestini main'e commit'le (beta/alpha/stable)
+  # 5) Kanal manifestini main'e commit'le (beta/alpha/stable)
   #    updater.rs bu dosyaları okur: updater/latest-<kanal>.json
   # ────────────────────────────────────────────────────
   update-channel-manifest:
