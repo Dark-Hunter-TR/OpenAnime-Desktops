@@ -7,5 +7,7 @@ allow = [
     "get_local_video_port",
     "register_local_video",
     "pick_mp4_file",
-    "read_file_head"
+    "read_file_head",
+    "get_super_opening_video_url",
+    "get_super_opening_video_data"
 ]

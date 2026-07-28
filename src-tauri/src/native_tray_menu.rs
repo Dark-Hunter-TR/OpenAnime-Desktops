@@ -166,15 +166,13 @@ Add-Type -AssemblyName System.Drawing
 # (500ms-1sn+ sürebilir) — bu, menü açılışındaki gecikmenin ana kaynağıydı.
 # Derlenmiş DLL'i %TEMP%'e BİR KEZ yazıp sonraki her açılışta -Path ile
 # (derlemesiz, neredeyse anında) yüklüyoruz.
-$hookDllPath = Join-Path $env:TEMP "OpenAnime_TrayHook_v1.dll"
-if (Test-Path $hookDllPath) {
-    try {
-        Add-Type -Path $hookDllPath -ErrorAction Stop
-    } catch {
-        Remove-Item $hookDllPath -Force -ErrorAction SilentlyContinue
+if (-not ('OaMouseHook' -as [type])) {
+    $hookDllPath = Join-Path $env:TEMP "OpenAnime_TrayHook_v1.dll"
+    if (Test-Path $hookDllPath) {
+        try { Add-Type -Path $hookDllPath -ErrorAction SilentlyContinue } catch {}
     }
 }
-if (-not ([System.Management.Automation.PSTypeName]'OaMouseHook').Type) {
+if (-not ('OaMouseHook' -as [type])) {
     $oaMouseHookSrc = @"
 using System;
 using System.Runtime.InteropServices;
@@ -234,10 +232,9 @@ public class OaMouseHook {
 }
 "@
     try {
-        Add-Type -TypeDefinition $oaMouseHookSrc -OutputAssembly $hookDllPath -ErrorAction Stop
+        Add-Type -TypeDefinition $oaMouseHookSrc -OutputAssembly $hookDllPath -ErrorAction SilentlyContinue
     } catch {
-        # Diske yazamadıysak (izin vs.) en azından bu süreç için normal derle.
-        Add-Type -TypeDefinition $oaMouseHookSrc
+        try { Add-Type -TypeDefinition $oaMouseHookSrc -ErrorAction SilentlyContinue } catch {}
     }
 }
 
@@ -372,24 +369,28 @@ $window.Add_Loaded({
     # Fare kancasını pencere yerleşip konumlandıktan SONRA kur — açılışı
     # tetikleyen tıklamanın kendisi "dışarı tıklama" sayılıp menüyü anında
     # kapatmasın diye.
-    [OaMouseHook]::Install()
-    $script:hookInstalled = $true
-    $outsideClickAction = {
-        param($px, $py)
-        try {
-            $pt = [System.Windows.Point]::new([double]$px, [double]$py)
-            $src2 = [System.Windows.PresentationSource]::FromVisual($window)
-            if ($src2 -and $src2.CompositionTarget) {
-                $pt = $src2.CompositionTarget.TransformFromDevice.Transform($pt)
+    try {
+        if ('OaMouseHook' -as [type]) {
+            [OaMouseHook]::Install()
+            $script:hookInstalled = $true
+            $outsideClickAction = {
+                param($px, $py)
+                try {
+                    $pt = [System.Windows.Point]::new([double]$px, [double]$py)
+                    $src2 = [System.Windows.PresentationSource]::FromVisual($window)
+                    if ($src2 -and $src2.CompositionTarget) {
+                        $pt = $src2.CompositionTarget.TransformFromDevice.Transform($pt)
+                    }
+                    $inside = ($pt.X -ge $window.Left) -and ($pt.X -le ($window.Left + $window.ActualWidth)) -and
+                              ($pt.Y -ge $window.Top) -and ($pt.Y -le ($window.Top + $window.ActualHeight))
+                    if (-not $inside) {
+                        $window.Dispatcher.Invoke([Action]{ try { $window.Close() } catch {} })
+                    }
+                } catch {}
             }
-            $inside = ($pt.X -ge $window.Left) -and ($pt.X -le ($window.Left + $window.ActualWidth)) -and
-                      ($pt.Y -ge $window.Top) -and ($pt.Y -le ($window.Top + $window.ActualHeight))
-            if (-not $inside) {
-                $window.Dispatcher.Invoke([Action]{ try { $window.Close() } catch {} })
-            }
-        } catch {}
-    }
-    [OaMouseHook]::add_OnClick([Action[int,int]]$outsideClickAction)
+            [OaMouseHook]::add_OnClick([Action[int,int]]$outsideClickAction)
+        }
+    } catch {}
 })
 
 $window.Add_Closed({

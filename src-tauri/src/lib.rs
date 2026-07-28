@@ -396,8 +396,10 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n",
 
     // ──────────────────────────────────────────────
-    // BLOK 2: AĞ ÖNBELLEK & GÖRSEL BOYUTLANDIRMA
+    // BLOK 2: AĞ DURUMU & ÖNBELLEK & GÖRSEL BOYUTLANDIRMA
     // ──────────────────────────────────────────────
+    include_str!("js/modules/networkStore.js"),
+    "\n",
     "{\nconst NETWORK_CACHE_CSS = String.raw`",
     include_str!("js/modules/network-cache.css"),
     "`;\n",
@@ -461,6 +463,13 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // ──────────────────────────────────────────────
     "{\n",
     include_str!("js/modules/updater-ui.js"),
+    "\n}\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 6B: SÜPER AÇILIŞ (SPLASH SCREEN VARYANTLARI)
+    // ──────────────────────────────────────────────
+    "{\n",
+    include_str!("js/modules/super-opening.js"),
     "\n}\n",
 
     // ──────────────────────────────────────────────
@@ -1014,6 +1023,96 @@ fn get_local_video_port(state: tauri::State<'_, Arc<local_video_server::LocalVid
     Ok(*port)
 }
 
+/// Süper Açılış videosunu (superlogo.mp4) diskte arar.
+/// Sıra: (1) Tauri resource dizini (paketlenmiş NSIS kurulumunda asıl yer —
+/// bkz. tauri.conf.json > bundle.resources), (2) cwd/exe göreli tahminler
+/// (dev ortamı / portable kullanım için yedek).
+fn resolve_super_opening_video_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(resource_path) = app.path().resolve("superlogo.mp4", tauri::path::BaseDirectory::Resource) {
+        candidates.push(resource_path);
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("static").join("superlogo.mp4"));
+        candidates.push(cwd.join("static").join("super_logo.mp4"));
+        candidates.push(cwd.join("static").join("openings").join("superlogo.mp4"));
+        candidates.push(cwd.join("static").join("openings").join("super_logo.mp4"));
+
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.join("static").join("superlogo.mp4"));
+            candidates.push(parent.join("static").join("super_logo.mp4"));
+            candidates.push(parent.join("static").join("openings").join("superlogo.mp4"));
+            candidates.push(parent.join("static").join("openings").join("super_logo.mp4"));
+        }
+    }
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        let mut cur = exe_path.parent();
+        for _ in 0..4 {
+            if let Some(dir) = cur {
+                candidates.push(dir.join("static").join("superlogo.mp4"));
+                candidates.push(dir.join("static").join("super_logo.mp4"));
+                candidates.push(dir.join("superlogo.mp4"));
+                candidates.push(dir.join("super_logo.mp4"));
+                cur = dir.parent();
+            } else {
+                break;
+            }
+        }
+    }
+
+    candidates.into_iter().find(|p| p.exists())
+}
+
+/// ARTIK KULLANILMIYOR (bkz. get_super_opening_video_data): `openani.me`
+/// gibi PUBLIC bir HTTPS sayfasından `127.0.0.1`'e `<video src>` isteği,
+/// Chromium/WebView2'nin Private Network Access korumasına takılıp
+/// SESSİZCE engelleniyordu — video hiç görünmüyordu. Komut geriye dönük
+/// uyumluluk için duruyor, super-opening.js artık bunu çağırmıyor.
+#[tauri::command]
+fn get_super_opening_video_url(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<local_video_server::LocalVideoState>>,
+) -> Result<String, String> {
+    let port = *state.port.lock().map_err(|e| e.to_string())?;
+    if port == 0 {
+        return Err("Local video server port not ready".to_string());
+    }
+
+    let path = resolve_super_opening_video_path(&app)
+        .ok_or_else(|| "No super opening video file found on disk".to_string())?;
+    let path_str = path.to_string_lossy().to_string();
+    let encoded = percent_encoding::utf8_percent_encode(&path_str, percent_encoding::NON_ALPHANUMERIC).to_string();
+    Ok(format!("http://127.0.0.1:{}/local-video?path={}", port, encoded))
+}
+
+/// Süper Açılış videosunu doğrudan Tauri IPC üzerinden (ağ isteği YOK) JS'e
+/// base64 olarak taşır. `get_super_opening_video_url`'in aksine bu bir HTTP
+/// isteği değil — bu yüzden Private Network Access / mixed-content gibi
+/// tarayıcı korumalarına hiç takılmaz. JS tarafı base64'ü Blob'a çevirip
+/// `URL.createObjectURL` ile video.src'e verir.
+#[tauri::command]
+fn get_super_opening_video_data(app: tauri::AppHandle) -> Result<String, String> {
+    use base64::Engine;
+
+    let path = resolve_super_opening_video_path(&app)
+        .ok_or_else(|| "No super opening video file found on disk".to_string())?;
+
+    let bytes = std::fs::read(&path).map_err(|e| {
+        format!("Video dosyası okunamadı ({}): {}", path.to_string_lossy(), e)
+    })?;
+
+    dbg_log!(
+        "[Süper Açılış] Video IPC ile taşınıyor: {} ({} bayt)",
+        path.to_string_lossy(),
+        bytes.len()
+    );
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
 /// ────────────────────────────────────────────────────────────
 /// Dosya Seçme Dialogu
 /// ────────────────────────────────────────────────────────────
@@ -1338,7 +1437,10 @@ pub fn run() {
                 }
 
                 // Tepsi ikonu ve tıklama/eylem izleyicisini her zaman başlat!
-                let _ = super_notifications::ensure_tray(app.handle());
+                match super_notifications::ensure_tray(app.handle()) {
+                    Ok(()) => log!("[OpenAnime] Tepsi ikonu oluşturuldu"),
+                    Err(e) => log!("[OpenAnime][HATA] Tepsi ikonu oluşturulamadı: {}", e),
+                }
                 super_notifications::start_click_watcher(app.handle());
 
                 log!("[OpenAnime] Hazır");
@@ -1356,6 +1458,15 @@ pub fn run() {
             let label = window.label().to_string();
 
             match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    let quitting = APP_QUITTING.load(std::sync::atomic::Ordering::SeqCst);
+
+                    if !quitting {
+                        api.prevent_close();
+                        let _ = window.hide();
+                        log!("[Tauri] Pencere tepsiye gizlendi: {}", label);
+                    }
+                }
                 tauri::WindowEvent::Focused(true) => {
                     let label_c = label.clone();
                     tauri::async_runtime::spawn(async move {
@@ -1423,8 +1534,10 @@ pub fn run() {
             set_discord_rpc_enabled,
             set_focused_window,
             close_window_label,
-            // 🎥 Local video server — port sorgula
+            // 🎥 Local video server — port sorgula & süper açılış videosu
             get_local_video_port,
+            get_super_opening_video_url,
+            get_super_opening_video_data,
             // 🎥 Local video server — videoId ↔ dosya yolu eşlemesi kaydet
             fetch_css,
             check_connection,
@@ -1490,19 +1603,12 @@ pub fn run() {
             if APP_QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
-            let enabled = app_handle
-                .try_state::<super_notifications::SuperNotifState>()
-                .map(|s| s.enabled.load(std::sync::atomic::Ordering::SeqCst))
-                .unwrap_or(false);
-            if enabled {
-                api.prevent_exit();
-                let app_c = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    maybe_spawn_tray_session(&app_c);
-                });
-            }
-            // enabled=false ise prevent_exit çağrılmaz — normal çıkış sürer
-            // (Süper Bildirimler kapalıyken arkaplanda yaşamanın anlamı yok).
+            // Tray her zaman aktif: çıkışı engelle ve arkaplan oturumu aç.
+            api.prevent_exit();
+            let app_c = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                maybe_spawn_tray_session(&app_c);
+            });
         }
     });
 }

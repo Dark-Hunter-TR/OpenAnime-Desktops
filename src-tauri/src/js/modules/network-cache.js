@@ -279,7 +279,6 @@
       showOfflineIndicator(msg);
       startOfflinePolling();
     } else {
-      // Sebep değişmiş olabilir, tooltip'i güncelle
       showOfflineIndicator(msg);
     }
   }
@@ -287,19 +286,20 @@
   function triggerOnline() {
     if (isOffline) {
       isOffline = false;
-      console.log("[Network Cache] Bağlantı geri geldi -> F5 atılıyor.");
+      console.log("[Network Cache] Bağlantı geri geldi -> Çevrim dışı göstergesi kaldırılıyor.");
       if (offlineCheckInterval) {
         clearTimeout(offlineCheckInterval);
         offlineCheckInterval = null;
       }
       hideOfflineIndicator();
-      // 1. reload’u tetikle — flag "1" set et
-      try { sessionStorage.setItem(_RELOAD_FLAG, "1"); } catch (e) {}
-      setTimeout(() => { try { window.location.reload(); } catch (e) {} }, 300);
     }
   }
 
   function startOfflinePolling() {
+    if (window.networkStore) {
+      window.networkStore.checkConnectivity();
+      return;
+    }
     if (offlineCheckInterval) return;
     let attempt = 0;
     function poll() {
@@ -318,6 +318,16 @@
       }, attempt === 0 ? 3000 : 8000);
     }
     poll();
+  }
+
+  if (window.networkStore) {
+    window.networkStore.subscribe((state) => {
+      if (state.isOnline) {
+        triggerOnline();
+      } else if (state.reason) {
+        triggerOffline(state.reason);
+      }
+    });
   }
 
   // Tarayıcının native online/offline event'leri — anında algılama

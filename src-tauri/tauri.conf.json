@@ -20,6 +20,9 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": ["nsis", "dmg"],
+    "resources": {
+      "../static/superlogo.mp4": "superlogo.mp4"
+    },
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"

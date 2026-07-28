@@ -192,24 +192,24 @@ function buildCardHTML(isEnabled, hashes, dropdownHashes, activeVisibility) {
   const discordIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057c.002.022.015.043.03.056a19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>`;
 
   return `
-    <div role="button" id="tauri-discord-rpc-settings-header" class="expander-header ${headerHash}" aria-expanded="false" tabindex="-1">
-      <div class="expander-icon ${iconHash}" style="display:flex;align-items:center;justify-content:center;">
-        ${discordIconSvg}
+    <h>
+      <div role="button" id="tauri-discord-rpc-settings-header" class="expander-header ${headerHash}" aria-expanded="false" tabindex="-1">
+        <div class="expander-icon ${iconHash}" style="display:flex;align-items:center;justify-content:center;">
+          ${discordIconSvg}
+        </div>
+        <span class="expander-header-title ${headerTitleHash}">
+          <div class="item-header ${itemHeaderHash}">
+            <span class="text-block type-body ${textBlockHash}">Discord RPC</span>
+            <span class="text-block type-caption text-secondary ${textBlockHash}">Durumunuzu (izlediğiniz anime, bölüm vb.) Discord profilinizde gösterir.</span>
+          </div>
+        </span>
+        <button class="expander-chevron ${headerHash}" type="button" tabindex="-1" id="tauri-discord-rpc-settings-chevron" style="pointer-events:auto;cursor:pointer;">
+          <svg class="${headerHash}" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;">
+            <path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path>
+          </svg>
+        </button>
       </div>
-      <span class="expander-header-title ${headerTitleHash}">
-        <div class="item-header ${itemHeaderHash}">
-          <span class="text-block type-body ${textBlockHash}">Discord RPC</span>
-          <span class="text-block type-caption text-secondary ${textBlockHash}">Durumunuzu (izlediğiniz anime, bölüm vb.) Discord profilinizde gösterir.</span>
-        </div>
-        <div class="expander-control ${controlHash}" style="pointer-events:auto;">
-          <button class="expander-chevron ${headerHash}" type="button" tabindex="-1" id="tauri-discord-rpc-settings-chevron" style="pointer-events:auto;cursor:pointer;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;">
-              <path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path>
-            </svg>
-          </button>
-        </div>
-      </span>
-    </div>
+    </h>
 
     <div class="expander-content-anchor ${headerHash}" id="tauri-discord-rpc-content" style="display:none;">
       <div class="expander-content ${headerHash}">
@@ -286,6 +286,13 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
   const styleEl = document.createElement("style");
   styleEl.id = "tauri-discord-rpc-custom-styles";
   styleEl.textContent = `
+    #tauri-discord-rpc-settings-chevron svg {
+      transition: transform 0.2s cubic-bezier(0.55, 0, 0.1, 1);
+    }
+    #tauri-discord-rpc-setting.expanded #tauri-discord-rpc-settings-chevron svg {
+      transform: rotate(180deg);
+    }
+
     /* direction-top için clip-path tanımı */
     #tauri-discord-rpc-visibility-menu.direction-top {
       --fds-grow-clip-path: polygon(0 0, 100% 0, 100% 25%, 0 25%) !important;
@@ -377,7 +384,7 @@ if (!document.getElementById("tauri-discord-rpc-custom-styles")) {
 
   const newCard = document.createElement("div");
   newCard.id = "tauri-discord-rpc-setting";
-  newCard.className = `expander direction-down space-between ${expanderHash}`;
+  newCard.className = `expander direction-down expandable ${expanderHash}`;
   newCard.setAttribute("role", "region");
   newCard.innerHTML = buildCardHTML(
     isEnabled,
@@ -648,6 +655,9 @@ function tryInjectSettings() {
     if (typeof injectUpdaterSetting === "function") {
       injectUpdaterSetting();
     }
+    if (typeof injectSuperOpeningSetting === "function") {
+      injectSuperOpeningSetting();
+    }
     setTimeout(() => {
       injectDiscordRpcSetting();
       if (typeof injectSuperNotificationsSetting === "function") {
@@ -655,6 +665,9 @@ function tryInjectSettings() {
       }
       if (typeof injectUpdaterSetting === "function") {
         injectUpdaterSetting();
+      }
+      if (typeof injectSuperOpeningSetting === "function") {
+        injectSuperOpeningSetting();
       }
     }, 600);
   }
@@ -685,8 +698,9 @@ function startSettingsObserver() {
       "tauri-super-notifications-setting",
     );
     const hasUpdater = !!document.getElementById("tauri-updater-settings-card");
+    const hasSuperOpening = !!document.getElementById("tauri-super-opening-setting");
 
-    if (hasRpc && hasSuper && hasUpdater) return;
+    if (hasRpc && hasSuper && hasUpdater && hasSuperOpening) return;
 
     if (window.location.pathname.includes("/settings")) {
       if (!hasRpc) {
@@ -697,6 +711,9 @@ function startSettingsObserver() {
       }
       if (!hasUpdater && typeof injectUpdaterSetting === "function") {
         injectUpdaterSetting();
+      }
+      if (!hasSuperOpening && typeof injectSuperOpeningSetting === "function") {
+        injectSuperOpeningSetting();
       }
     }
   });
@@ -713,6 +730,9 @@ function startSettingsObserver() {
     }
     if (typeof injectUpdaterSetting === "function") {
       injectUpdaterSetting();
+    }
+    if (typeof injectSuperOpeningSetting === "function") {
+      injectSuperOpeningSetting();
     }
   }
 }

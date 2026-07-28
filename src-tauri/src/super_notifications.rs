@@ -119,7 +119,9 @@ impl SuperNotifState {
     pub fn new() -> Self {
         let state = Self::default();
         if let Ok(v) = std::fs::read_to_string(super_notif_flag_path()) {
-            state.enabled.store(v.trim() == "1", Ordering::SeqCst);
+            state.enabled.store(v.trim() != "0", Ordering::SeqCst);
+        } else {
+            state.enabled.store(true, Ordering::SeqCst);
         }
         state
     }
@@ -788,6 +790,17 @@ fn handle_tray_action(app: &AppHandle, action: &str) {
 /// Ana pencereyi öne getirip verilen URL'ye gider (SSE toast tıklaması + komut
 /// ortak kullanır). Tam sayfa yüklemesi: SPA router'ının iç API'sine bağımlı
 /// olmamak için `location.href` set edilir (kırılgan değil, kesin çalışır).
+pub fn restore_and_focus_window(win: &tauri::WebviewWindow) {
+    if win.is_minimized().unwrap_or(false) {
+        let _ = win.unminimize();
+    }
+    let _ = win.show();
+    let _ = win.set_focus();
+}
+
+/// Ana pencereyi öne getirip verilen URL'ye gider (SSE toast tıklaması + komut
+/// ortak kullanır). Tam sayfa yüklemesi: SPA router'ının iç API'sine bağımlı
+/// olmamak için `location.href` set edilir (kırılgan değil, kesin çalışır).
 fn navigate_to(app: &AppHandle, url: &str) {
     let target = absolutize(url);
 
@@ -804,9 +817,7 @@ fn navigate_to(app: &AppHandle, url: &str) {
         }
         return;
     };
-    let _ = main.show();
-    let _ = main.unminimize();
-    let _ = main.set_focus();
+    restore_and_focus_window(&main);
 
     if target.ends_with("/logout") {
         if let Ok(cookies) = main.cookies() {
@@ -879,23 +890,13 @@ pub fn start_click_watcher(app: &AppHandle) {
 
 const TRAY_ID: &str = "oa-tray";
 
-/// Tepsi ikonuna sol tıklanınca (veya menüden "OpenAnime'ı Aç" seçilince)
-/// çağrılır. Artık "main" penceresi hiçbir zaman gizli tutulmuyor (X
-/// tuşuna basılınca gerçekten kapanıyor) — bu yüzden burada üç durumu ele
-/// alırız: normal içerik penceresi varsa onu göster, yoksa arkaplandaki
-/// hafif tepsi oturumunu (/settings) göster, o da yoksa (örn. Süper
-/// Bildirimler kapalıyken her şey kapatılmıştı) sıfırdan yeni bir pencere aç.
 pub fn show_main(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
+        restore_and_focus_window(&win);
         return;
     }
     if let Some((_, win)) = app.webview_windows().into_iter().next() {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
+        restore_and_focus_window(&win);
         return;
     }
     if let Err(e) = crate::build_new_window(app, "https://openani.me/".to_string()) {
@@ -906,7 +907,8 @@ pub fn show_main(app: &AppHandle) {
 pub fn ensure_tray(app: &AppHandle) -> Result<(), String> {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    if app.tray_by_id(TRAY_ID).is_some() {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_visible(true);
         return Ok(());
     }
 
@@ -914,34 +916,42 @@ pub fn ensure_tray(app: &AppHandle) -> Result<(), String> {
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("OpenAnime")
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button,
-                button_state: MouseButtonState::Up,
-                rect,
-                ..
-            } = event
-            {
-                let app = tray.app_handle();
-                match button {
-                    MouseButton::Left => show_main(app),   // sol tık → göster
-                    MouseButton::Right => {
-                        // Menüyü FARENİN değil, tepsi İKONUNUN kendi ekran
-                        // dikdörtgenine göre konumlandıracağız — Tauri bunu
-                        // event ile birlikte native olarak veriyor. Windows'ta
-                        // ikon rect'i normalde fiziksel piksel gelir; Logical
-                        // durumunu da (scale_factor=1 varsayarak) ele alıyoruz.
-                        let (icon_x, icon_y) = match rect.position {
-                            tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
-                            tauri::Position::Logical(p) => (p.x, p.y),
-                        };
-                        let (icon_w, icon_h) = match rect.size {
-                            tauri::Size::Physical(s) => (s.width as f64, s.height as f64),
-                            tauri::Size::Logical(s) => (s.width, s.height),
-                        };
-                        open_tray_menu(app, (icon_x, icon_y, icon_w, icon_h));
-                    }
-                    _ => {}
+            let app = tray.app_handle().clone();
+            match event {
+                TrayIconEvent::Click { button, button_state, rect, .. } => {
+                    crate::log!("[Tepsi] Tıklama olayı: button={:?} state={:?}", button, button_state);
+                    let (icon_x, icon_y) = match rect.position {
+                        tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
+                        tauri::Position::Logical(p) => (p.x, p.y),
+                    };
+                    let (icon_w, icon_h) = match rect.size {
+                        tauri::Size::Physical(s) => (s.width as f64, s.height as f64),
+                        tauri::Size::Logical(s) => (s.width, s.height),
+                    };
+
+                    tauri::async_runtime::spawn(async move {
+                        match button {
+                            MouseButton::Left => {
+                                if button_state == MouseButtonState::Up {
+                                    crate::log!("[Tepsi] Sol tık → show_main");
+                                    show_main(&app);
+                                }
+                            }
+                            MouseButton::Right => {
+                                crate::log!("[Tepsi] Sağ tık → open_tray_menu rect=({},{},{},{})", icon_x, icon_y, icon_w, icon_h);
+                                open_tray_menu(&app, (icon_x, icon_y, icon_w, icon_h));
+                            }
+                            _ => {}
+                        }
+                    });
                 }
+                TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
+                    crate::log!("[Tepsi] Çift tık → show_main");
+                    tauri::async_runtime::spawn(async move {
+                        show_main(&app);
+                    });
+                }
+                _ => {}
             }
         });
 
@@ -959,6 +969,7 @@ pub fn ensure_tray(app: &AppHandle) -> Result<(), String> {
 /// cinsinden ekran dikdörtgeni. Menü buna göre konumlanır (fareye göre değil).
 fn open_tray_menu(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
     use crate::native_tray_menu::{MenuEntry, MenuHeader};
+    crate::log!("[TepsiMenu] open_tray_menu çağrıldı, rect={:?}", icon_rect);
 
     let acc = app
         .state::<SuperNotifState>()
@@ -1052,7 +1063,7 @@ fn open_tray_menu(app: &AppHandle, icon_rect: (f64, f64, f64, f64)) {
 }
 
 #[allow(dead_code)]
-fn remove_tray(app: &AppHandle) {
+pub fn remove_tray(app: &AppHandle) {
     if app.remove_tray_by_id(TRAY_ID).is_some() {
         crate::dbg_log!("[SüperBildirim] Tepsi ikonu kaldırıldı");
     }
@@ -1074,6 +1085,8 @@ pub async fn sn_set_enabled(app: AppHandle, enabled: bool) -> Result<(), String>
         if enabled { "açıldı" } else { "kapatıldı" }
     );
 
+    // Süper Bildirimler yalnızca SSE bildirim akışını kontrol eder.
+    // Tepsi ikonu her zaman görünür (bkz. lib.rs setup).
     if enabled {
         start_listener(&app);
     }

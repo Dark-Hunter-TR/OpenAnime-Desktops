@@ -1,268 +1,212 @@
-// === OpenAnime - Page Recovery Module === //
-// === Beyaz/boş veya hatalı sayfa tespiti, otomatik retry ve başarısızlık durumunda pencere kapatma. === //
+// === OpenAnime - DOM Watchdog & Fast Recovery UI Module ===
+// Hızlı beyaz/boş ekran tespiti, otomatik retry (3 hakkı) ve Kurtarma Arayüzü (Fallback Recovery UI).
 
 {
-  const MAX_RETRIES      = 3;
-  const INITIAL_CHECK_MS = 6000;
-  const RETRY_DELAY_MS   = 5000;
-  const MIN_TEXT_LEN     = 40;
-  const MIN_DOM_NODES    = 8;
+  const WATCHDOG_TIMEOUT_MS = 1800; // 1.8 saniyede hızlı boş DOM tespiti
+  const MAX_RETRIES = 3;
+  const RETRY_STORAGE_KEY = "_oa_watchdog_retries";
 
-  const IGNORED_TAGS = new Set([
-    "SCRIPT", "STYLE", "LINK", "META", "NOSCRIPT", "TEMPLATE", "BR", "HR", "TITLE",
-  ]);
+  let watchdogTimer = null;
+  let observer = null;
 
-  let retryCount = 0;
-  let checkTimer = null;
-  let isRetrying = false;
-
-  function getNavigationStatus() {
+  function getRetryCount() {
     try {
-      const entries = performance.getEntriesByType("navigation");
-      const nav = entries && entries[0];
-      if (nav && typeof nav.responseStatus === "number" && nav.responseStatus !== 0) {
-        return nav.responseStatus;
-      }
-    } catch (e) {}
-    return null;
-  }
-
-  function isBrowserErrorPage() {
-    try {
-      if (location.protocol === "chrome-error:") return true;
-      if (document.getElementById("main-frame-error")) return true;
-      if (document.querySelector("body.neterror, .neterror, #neterror")) return true;
-    } catch (e) {}
-    return false;
-  }
-
-  function countMeaningfulNodes(root) {
-    let count = 0;
-    const all = root.querySelectorAll("*");
-    for (let i = 0; i < all.length; i++) {
-      if (!IGNORED_TAGS.has(all[i].tagName)) count++;
-    }
-    return count;
-  }
-
-  function hasGenericContent() {
-    try {
-      const body = document.body;
-      if (!body) return false;
-
-      const text = (body.innerText || body.textContent || "").replace(/\s+/g, " ").trim();
-      if (text.length >= MIN_TEXT_LEN) return true;
-
-      if (countMeaningfulNodes(body) >= MIN_DOM_NODES) return true;
-
-      return false;
+      return parseInt(sessionStorage.getItem(RETRY_STORAGE_KEY) || "0", 10);
     } catch (e) {
-      return true;
+      return 0;
     }
   }
 
-  function evaluatePage() {
-    if (isBrowserErrorPage()) {
-      return { ok: false, reason: "browser-error-page" };
-    }
-
-    const status = getNavigationStatus();
-    if (status !== null && (status === 0 || status >= 400)) {
-      return { ok: false, reason: `http-status-${status}` };
-    }
-
-    if (document.readyState !== "complete") {
-      return { ok: false, reason: "document-not-ready" };
-    }
-
-    if (!hasGenericContent()) {
-      return { ok: false, reason: "empty-dom" };
-    }
-
-    return { ok: true, reason: "ok" };
-  }
-
-  function closeWindow() {
-    const label = getWindowLabel();
-    console.warn(`[Recovery] Max retry aşıldı (label: ${label})`);
-
-    if (!label || label === "main") {
-      console.warn("[Recovery] Main window connection lost → DPI proxy ile yeniden başlatılıyor...");
-      // DPI proxy'yi başlat ve pencereyi --proxy-server ile yeniden oluştur
-      try {
-        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-          // once settings'te kayıtlı yöntem varsa onu test et
-          window.__TAURI__.core.invoke("dpi_get_status").then(function(status) {
-            if (status && status.active_method_id !== null) {
-              // Önceden çalışan yöntem var → direkt proxy'li pencereyi aç
-              window.__TAURI__.core.invoke("reopen_with_proxy");
-            } else {
-              // Önce tüm yöntemleri test et, sonra proxy'li pencereyi aç
-              window.__TAURI__.core.invoke("dpi_test_methods").then(function(result) {
-                if (result !== null) {
-                  console.log("[Recovery-DPI] ✅ Çalışan yöntem:", result);
-                } else {
-                  console.warn("[Recovery-DPI] ❌ Hiçbir yöntem çalışmadı");
-                }
-                // Yine de proxy'li pencereyi dene
-                window.__TAURI__.core.invoke("reopen_with_proxy");
-              }).catch(function() {
-                window.__TAURI__.core.invoke("reopen_with_proxy");
-              });
-            }
-          }).catch(function() {
-            window.__TAURI__.core.invoke("reopen_with_proxy");
-          });
-          return;
-        }
-      } catch (e) {
-        console.error("[Recovery] DPI proxy hatası:", e);
-        // Fallback: offline'a git
-        try {
-          if (window.__TAURI__.core) {
-            window.__TAURI__.core.invoke("go_offline");
-          }
-        } catch(e2) {}
-      }
-    }
-
-    console.warn("[Recovery] Closing window.");
+  function setRetryCount(count) {
     try {
-      if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-        window.__TAURI__.core
-          .invoke("close_window_label", { label: label })
-          .catch(() => {
-            window.__TAURI__.core.invoke("plugin:window|close").catch(() => {});
-          });
-        return;
-      }
+      sessionStorage.setItem(RETRY_STORAGE_KEY, String(count));
     } catch (e) {}
+  }
 
+  function resetRetryCount() {
     try {
-      if (window.__TAURI__ && window.__TAURI__.window) {
-        const appWin = window.__TAURI__.window.getCurrentWindow();
-        if (appWin && typeof appWin.close === "function") {
-          appWin.close();
-          return;
-        }
-      }
+      sessionStorage.removeItem(RETRY_STORAGE_KEY);
     } catch (e) {}
-
-    try { window.close(); } catch (e) {}
   }
 
-  function getWindowLabel() {
-    try {
-      if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.metadata) {
-        return window.__TAURI_INTERNALS__.metadata.currentWindow.label;
-      }
-    } catch (e) {}
-    return null;
+  function getTargetContainer() {
+    return document.getElementById("app") ||
+           document.getElementById("svelte") ||
+           document.querySelector("main") ||
+           document.body;
   }
 
-  function attemptReload(reason) {
-    if (isRetrying) return;
-    isRetrying = true;
-    retryCount++;
-
-    console.warn(
-      `[Recovery] Sorunlu sayfa tespit edildi (${reason}) — retry ${retryCount}/${MAX_RETRIES}`,
-      window.location.href
-    );
-
-    if (retryCount > MAX_RETRIES) {
-      console.warn("[Recovery] Max retry aşıldı, DPI atlatma deneniyor...");
-      tryDpiBypass();
-      closeWindow();
-      return;
-    }
-
-    const targetUrl = window.location.href;
-    try {
-      window.location.replace(targetUrl);
-    } catch (e) {
-      try { window.location.reload(); } catch (e2) {}
-    }
-
-    clearTimeout(checkTimer);
-    checkTimer = setTimeout(() => {
-      isRetrying = false;
-      scheduleCheck(INITIAL_CHECK_MS);
-    }, RETRY_DELAY_MS + 2000);
+  function isContainerEmpty(container) {
+    if (!container) return true;
+    // Gövde veya app container içinde anlamlı HTML düğümü var mı?
+    const meaningfulChildren = Array.from(container.children).filter(el => {
+      const tag = el.tagName.toUpperCase();
+      return !["SCRIPT", "STYLE", "LINK", "META", "NOSCRIPT", "TEMPLATE"].includes(tag) &&
+             !el.id?.includes("openanime-api-status");
+    });
+    return meaningfulChildren.length === 0;
   }
 
-  function scheduleCheck(delayMs) {
-    clearTimeout(checkTimer);
-    checkTimer = setTimeout(() => {
-      const result = evaluatePage();
-      if (result.ok) {
-        console.log("[Recovery] Sayfa doğrulandı ✓");
-        return;
-      }
-      attemptReload(result.reason);
-    }, delayMs);
-  }
+  function renderRecoveryUI(reason, details) {
+    clearTimeout(watchdogTimer);
+    if (observer) observer.disconnect();
 
-  // === DPI Proxy Entegrasyonu ===
-  // Sayfa yüklenemeyince DPI atlatma proxy'sini otomatik dener
-  let dpiTried = false;
+    const existingUI = document.getElementById("openanime-recovery-ui");
+    if (existingUI) return;
 
-  function getDpiStatus() {
-    try {
-      if (window.__TAURI__ && window.__TAURI__.core) {
-        window.__TAURI__.core.invoke("dpi_get_status").then(function(s) {
-          if (s && s.proxy_running) {
-            console.log("[Recovery-DPI] Proxy çalışıyor, yöntem:", s.active_method_name);
-          }
-        }).catch(function(){});
-      }
-    } catch(e) {}
-  }
+    console.error("[Watchdog] Kurtarma Arayüzü Gösteriliyor. Nedeni:", reason, details || "");
 
-  function tryDpiBypass() {
-    if (dpiTried) return;
-    dpiTried = true;
-    console.log("[Recovery-DPI] Bağlantı sorunu tespit edildi, DPI atlatma deneniyor...");
-    try {
-      if (window.__TAURI__ && window.__TAURI__.core) {
-        window.__TAURI__.core.invoke("dpi_test_methods").then(function(result) {
-          if (result !== null) {
-            console.log("[Recovery-DPI] ✅ Çalışan yöntem bulundu:", result);
-          } else {
-            console.warn("[Recovery-DPI] ❌ Hiçbir yöntem çalışmadı");
-          }
-        }).catch(function(e) {
-          console.error("[Recovery-DPI] Hata:", e);
+    const recoveryOverlay = document.createElement("div");
+    recoveryOverlay.id = "openanime-recovery-ui";
+    recoveryOverlay.style.cssText = `
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      background: #0f0f13 !important;
+      color: #f3f4f6 !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+      z-index: 99999999 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      padding: 24px !important;
+      box-sizing: border-box !important;
+    `;
+
+    recoveryOverlay.innerHTML = `
+      <div style="max-width: 480px; width: 100%; background: #18181c; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 28px; box-shadow: 0 20px 40px rgba(0,0,0,0.6); text-align: center;">
+        <div style="width: 56px; height: 56px; margin: 0 auto 16px auto; background: rgba(239, 68, 68, 0.12); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #ef4444;">
+          <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+        
+        <h2 style="margin: 0 0 8px 0; font-size: 20px; font-weight: 600; color: #ffffff;">Uygulama Yüklenemedi</h2>
+        <p style="margin: 0 0 20px 0; font-size: 13.5px; color: #9ca3af; line-height: 1.5;">
+          Sayfa içeriği oluşturulurken bir sorun oluştu (${reason}). Otomatik kurtarma denemeleri tamamlandı.
+        </p>
+
+        ${details ? `
+          <div style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 10px; margin-bottom: 20px; font-family: monospace; font-size: 11.5px; color: #f87171; text-align: left; word-break: break-all; max-height: 80px; overflow-y: auto;">
+            ${details}
+          </div>
+        ` : ''}
+
+        <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+          <button id="oa-recovery-retry-btn" style="flex: 1; min-width: 130px; padding: 10px 16px; background: #5865f2; color: #fff; border: none; border-radius: 6px; font-weight: 500; cursor: pointer; font-size: 13px; transition: background 0.15s ease;">
+            Yeniden Dene
+          </button>
+          <button id="oa-recovery-dpi-btn" style="flex: 1; min-width: 130px; padding: 10px 16px; background: rgba(255,255,255,0.08); color: #e5e7eb; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; font-weight: 500; cursor: pointer; font-size: 13px; transition: background 0.15s ease;">
+            DPI Proxy ile Dene
+          </button>
+          <button id="oa-recovery-home-btn" style="width: 100%; padding: 8px 16px; background: transparent; color: #9ca3af; border: none; border-radius: 6px; font-size: 12.5px; cursor: pointer; margin-top: 4px;">
+            Ana Sayfaya Dön
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(recoveryOverlay);
+
+    document.getElementById("oa-recovery-retry-btn")?.addEventListener("click", () => {
+      resetRetryCount();
+      window.location.reload();
+    });
+
+    document.getElementById("oa-recovery-dpi-btn")?.addEventListener("click", () => {
+      resetRetryCount();
+      if (window.__TAURI__?.core?.invoke) {
+        window.__TAURI__.core.invoke("reopen_with_proxy").catch(() => {
+          window.location.reload();
         });
+      } else {
+        window.location.reload();
       }
-    } catch(e) {}
+    });
+
+    document.getElementById("oa-recovery-home-btn")?.addEventListener("click", () => {
+      resetRetryCount();
+      window.location.href = "/";
+    });
   }
 
-  // evaluatePage başarısız olduğunda DPI'yi dene
-  function startWatch() {
-    retryCount = 0;
-    isRetrying = false;
-    clearTimeout(checkTimer);
-    scheduleCheck(INITIAL_CHECK_MS);
-    getDpiStatus();
+  function handleWatchdogTrigger(reason, details) {
+    const currentRetries = getRetryCount();
+    console.warn(`[Watchdog] Boş ekran / hata algılandı (${reason}). Deneme: ${currentRetries + 1}/${MAX_RETRIES}`);
+
+    if (currentRetries < MAX_RETRIES) {
+      setRetryCount(currentRetries + 1);
+      setTimeout(() => {
+        try { window.location.reload(); } catch (e) {}
+      }, 200);
+    } else {
+      renderRecoveryUI(reason, details);
+    }
   }
 
-  if (document.readyState === "complete") {
-    startWatch();
+  function startWatchdog() {
+    clearTimeout(watchdogTimer);
+    if (observer) observer.disconnect();
+
+    const container = getTargetContainer();
+
+    // Düğüm değişikliklerini dinle — içerik oluştuğu an başarılı say
+    observer = new MutationObserver(() => {
+      if (!isContainerEmpty(container)) {
+        clearTimeout(watchdogTimer);
+        resetRetryCount();
+        observer.disconnect();
+      }
+    });
+
+    try {
+      observer.observe(container, { childList: true, subtree: true });
+    } catch (e) {}
+
+    // Zaman aşımı kontrolü (1.8 saniye)
+    watchdogTimer = setTimeout(() => {
+      if (isContainerEmpty(container)) {
+        handleWatchdogTrigger("Boş ekran (blank DOM)", "Container elementinde child node oluşturulamadı.");
+      } else {
+        resetRetryCount();
+      }
+    }, WATCHDOG_TIMEOUT_MS);
+  }
+
+  // Fatal JS Hatalarını Yakala
+  window.addEventListener("error", (event) => {
+    if (event?.message?.includes("Script error") || event?.filename?.includes("extension")) return;
+    const msg = event?.message || "Uncaught JavaScript Exception";
+    const src = event?.filename ? `${event.filename}:${event.lineno}` : "";
+    handleWatchdogTrigger("JS Çalışma Zamanı Hatası", `${msg} ${src}`);
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event?.reason?.message || String(event?.reason || "Unhandled Promise Rejection");
+    handleWatchdogTrigger("Unhandled Rejection", reason);
+  });
+
+  // Sayfa başlangıcında ve SPA route değişimlerinde başlat
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startWatchdog, { once: true });
   } else {
-    window.addEventListener("load", startWatch, { once: true, passive: true });
+    startWatchdog();
   }
 
-  const _rPush    = history.pushState.bind(history);
+  const _rPush = history.pushState.bind(history);
   const _rReplace = history.replaceState.bind(history);
 
   history.pushState = function (...args) {
     _rPush(...args);
-    startWatch();
+    startWatchdog();
   };
+
   history.replaceState = function (...args) {
     _rReplace(...args);
-    startWatch();
+    startWatchdog();
   };
-  window.addEventListener("popstate", startWatch, { passive: true });
+
+  window.addEventListener("popstate", startWatchdog, { passive: true });
 }
