@@ -3,6 +3,7 @@
   "productName": "OpenAnime-Debug",
   "identifier": "com.openanime.desktop.debug",
   "bundle": {
-    "createUpdaterArtifacts": false
+    "createUpdaterArtifacts": false,
+    "targets": ["nsis", "dmg"]
   }
 }

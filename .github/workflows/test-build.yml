@@ -118,8 +118,12 @@ jobs:
         with:
           node-version: lts/*
 
+      # universal binary için iki hedef de gerekli: tauri-cli ikisini ayrı ayrı
+      # derleyip `lipo` ile tek pakette birleştirir.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -147,6 +151,8 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      # `--target` MUTLAKA `--` ayracından önce gelmeli: `--` sonrasındaki her şey
+      # doğrudan cargo'ya aktarılır ve tauri CLI onu görmez.
       - name: Build
         uses: tauri-apps/tauri-action@v1
         env:
@@ -156,14 +162,15 @@ jobs:
         with:
           releaseDraft: false
           prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
+          args: --target universal-apple-darwin ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
 
+      # Hedef verildiğinde çıktılar target/<triple>/<profil>/bundle altına düşer.
       - name: Upload artifacts
         if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: macOS-ARM64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
+          name: macOS-Universal-${{ github.event.inputs.build_mode }}
+          path: src-tauri/target/universal-apple-darwin/${{ github.event.inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
 
