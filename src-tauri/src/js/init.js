@@ -26,8 +26,35 @@
     }
   }
 
+  // Sayılmaması gereken "hata"lar: bunlar bağlantının engellendiğini DEĞİL,
+  // isteğin bizim tarafımızdan bırakıldığını gösterir.
+  //   • AbortError        → AbortController veya sayfa gezinmesi iptal etti
+  //   • sayfa kapanırken  → yarım kalan istekler toplu hâlde reddedilir
+  // Bunlar sayıldığında tek bir sayfa yenilemesi eşiği (3) tek başına
+  // doldurup gereksiz yere DPI bypass'ı tetikleyebiliyordu.
+  function isIgnorableFetchError(err) {
+    if (!err) return false;
+    if (err.name === "AbortError") return true;
+    if (document.visibilityState === "hidden") return true;
+    return false;
+  }
+
+  function noteHealthy(source) {
+    if (dpiFailCount > 0) {
+      console.log("[DPI-Init] " + source + " başarılı, hata sayacı sıfırlandı (" + dpiFailCount + " → 0)");
+      dpiFailCount = 0;
+    }
+  }
+
   function triggerDpiBypass() {
     if (dpiTriggered) return;
+    // navigator.onLine false ise sorun DPI değil, ağın kendisi (kablo/Wi-Fi).
+    // Yöntem değiştirmek bunu düzeltmez; bağlantı gelince sayaç zaten sıfırlanır.
+    if (navigator.onLine === false) {
+      console.log("[DPI-Init] Ağ arayüzü çevrim dışı — DPI bypass tetiklenmedi");
+      dpiFailCount = 0;
+      return;
+    }
     dpiTriggered = true;
     console.log("[DPI-Init] ⚠️ Bağlantı sorunu tespit edildi, DPI bypass başlatılıyor...");
     if (window.__TAURI__ && window.__TAURI__.core) {
@@ -46,7 +73,18 @@
   window.fetch = function(input, init) {
     const url = typeof input === "string" ? input : (input.url || input.toString());
     if (isOpenaniUrl(url)) {
-      return _origFetch(input, init).catch(function(err) {
+      return _origFetch(input, init).then(function(resp) {
+        // Yanıt GELDİYSE yol açıktır — 401/403 (Vanguard/Cloudflare) bile
+        // olsa bu bir ağ/DPI sorunu değildir, sunucunun cevabıdır. Sayaç
+        // sıfırlanır; aksi halde oturum sorunları DPI bypass'ı tetikliyordu.
+        // (Rust tarafındaki aynı ayrım: ConnectionResult::is_reachable.)
+        noteHealthy("Fetch");
+        return resp;
+      }).catch(function(err) {
+        if (isIgnorableFetchError(err)) {
+          console.debug("[DPI-Init] İptal edilen istek sayılmadı:", url.substring(0, 80));
+          throw err;
+        }
         dpiFailCount++;
         console.warn(`[DPI-Init] ⚠️ Fetch hatası #${dpiFailCount}/${DPI_FAIL_THRESHOLD}: ${url.substring(0, 80)}`);
         if (dpiFailCount >= DPI_FAIL_THRESHOLD) {
@@ -68,13 +106,26 @@
     if (dpiTriggered) return;
     fetch("https://openani.me/?health=1", { method: "HEAD", mode: "cors", cache: "no-store" })
       .then(function(r) {
+        // Sayacı SIFIRLA — eşik "üst üste 3 hata" demek, "açılıştan beri
+        // toplam 3 hata" değil. Sıfırlama olmadan saatler süren bir izleme
+        // oturumunda (özellikle yerel video: sayfa hiç gezinmediği için
+        // sayaç ömür boyu birikiyor) birbirinden bağımsız 3 anlık ağ
+        // kesintisi eşiği doldurup reopen_with_proxy'yi tetikliyordu —
+        // kullanıcıya uygulama kendiliğinden yenilenmiş gibi görünür.
+        //
+        // Statü koduna BAKILMAZ: 403 (Cloudflare "Just a moment") veya 401
+        // (Vanguard) da sunucuya ulaştığımızın kanıtıdır. Eski kodda bunlar
+        // "başarısız" sayılmıyordu ama sayacı da sıfırlamıyordu; site bot
+        // koruması gösterirken sayaç tek yönlü doluyordu.
+        noteHealthy("Health check");
         if (r.ok) {
           console.log("[DPI-Init] ✅ Health check başarılı (", r.status, ")");
         } else {
-          console.warn("[DPI-Init] ⚠️ Health check yanıt: ", r.status);
+          console.warn("[DPI-Init] ⚠️ Health check yanıt: ", r.status, "(sunucuya ulaşıldı, ağ sorunu değil)");
         }
       })
       .catch(function(err) {
+        if (isIgnorableFetchError(err)) return;
         dpiFailCount++;
         console.warn(`[DPI-Init] ⚠️ Health check başarısız #${dpiFailCount}/${DPI_FAIL_THRESHOLD}: ${err.message}`);
         if (dpiFailCount >= DPI_FAIL_THRESHOLD) {

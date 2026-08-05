@@ -87,6 +87,61 @@
     }
   }
 
+  // ── Idempotent inline-style yazımı ──
+  // setupTauriWindow / setupDragRegion, init.js'teki MutationObserver'dan HER
+  // DOM mutation batch'inde çağrılıyor. Değeri değişmemiş bir style'ı yeniden
+  // yazmak (a) Blink'te stil/layout geçersizleştirmesi maliyeti doğurur,
+  // (b) yazım SİTE elementine yapıldığında (.header-right, .sheet-content,
+  // OverlayScrollbars viewport'u) observer'ın attributeFilter:["style"]
+  // filtresine takılıp aynı callback'i yeniden tetikler — yani kendi kendini
+  // besleyen bir döngü. Inline style OKUMAK layout'u zorlamaz, o yüzden
+  // yazmadan önce karşılaştırmak bedava.
+  function setStyleIfChanged(el, prop, value) {
+    if (!el) return;
+    if (el.style.getPropertyValue(prop) !== value) {
+      el.style.setProperty(prop, value, "important");
+    }
+  }
+
+  // ── Topbar yüksekliği: ResizeObserver ile önbellekli ──
+  // ÖNCEDEN: setupTauriWindow her batch'te topbar.getBoundingClientRect()'i
+  // (üstelik iki kez) çağırıyordu; bu senkron layout'u zorlar ve hemen ardından
+  // gelen style yazımlarıyla birlikte klasik layout thrash'i oluşturur.
+  // ResizeObserver callback'i layout SONRASI çalıştığı için oradaki ölçüm
+  // ek layout'a mal olmaz ve yalnızca yükseklik gerçekten değişince tetiklenir.
+  var _wcTopbarH = 48;      // topbar bulunamazsa kullanılan eski yedek değer
+  var _wcTopbarNode = null;
+  var _wcTopbarRO = null;
+
+  function watchTopbar(topbar) {
+    if (topbar === _wcTopbarNode) return; // aynı düğüm — yeniden bağlama yok
+    _wcTopbarNode = topbar;
+
+    if (_wcTopbarRO) {
+      try { _wcTopbarRO.disconnect(); } catch (e) {}
+      _wcTopbarRO = null;
+    }
+    if (!topbar || typeof ResizeObserver === "undefined") {
+      _wcTopbarH = 48;
+      return;
+    }
+
+    try {
+      _wcTopbarRO = new ResizeObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          // getBoundingClientRect (border-box) eski davranışla birebir aynı
+          // ölçüyü verir; RO callback'i post-layout olduğu için ücretsizdir.
+          var h = entries[i].target.getBoundingClientRect().height;
+          if (h > 0 && h !== _wcTopbarH) {
+            _wcTopbarH = h;
+            setupTauriWindow(); // ölçü değişti → düzeni bir kez yenile
+          }
+        }
+      });
+      _wcTopbarRO.observe(topbar);
+    } catch (e) {}
+  }
+
   // ── Main setup function ──
   function setupTauriWindow() {
     let controls = document.getElementById("tauri-controls-container");
@@ -163,40 +218,33 @@
     }
 
     // ── Ensure platform class is current ──
-    controls.className = `tauri-window-controls platform-${_wcPlatform}`;
+    const wantClass = `tauri-window-controls platform-${_wcPlatform}`;
+    if (controls.className !== wantClass) controls.className = wantClass;
 
     // ── Zoom-aware scaling (shared with zoom-manager) ──
     const topbar = document.querySelector(".topbar");
+    watchTopbar(topbar);
     const s = 1 / currentZoom;
-    const topbarH = (topbar && topbar.getBoundingClientRect().height > 0)
-      ? topbar.getBoundingClientRect().height
-      : 48;
-    const displayH = `${topbarH * currentZoom}px`;
+    const displayH = `${_wcTopbarH * currentZoom}px`;
 
-    controls.style.setProperty("transform", `scale(${s})`, "important");
+    setStyleIfChanged(controls, "transform", `scale(${s})`);
+    setStyleIfChanged(
+      controls,
+      "transform-origin",
+      _wcPlatform === 'macos' ? "top left" : "top right",
+    );
+    setStyleIfChanged(controls, "height", displayH);
 
-    if (_wcPlatform === 'macos') {
-      controls.style.setProperty("transform-origin", "top left", "important");
-    } else {
-      controls.style.setProperty("transform-origin", "top right", "important");
+    // macOS traffic lights have fixed size, don't stretch height
+    if (_wcPlatform !== 'macos') {
+      controls.querySelectorAll(".tauri-window-control-btn").forEach(btn => {
+        setStyleIfChanged(btn, "height", displayH);
+      });
     }
-
-    controls.style.setProperty("height", displayH, "important");
-
-    controls.querySelectorAll(".tauri-window-control-btn").forEach(btn => {
-      // macOS traffic lights have fixed size, don't stretch height
-      if (_wcPlatform !== 'macos') {
-        btn.style.setProperty("height", displayH, "important");
-      }
-    });
 
     const headerRight = document.querySelector(".header-right");
     if (headerRight) {
-      headerRight.style.setProperty(
-        "margin-right",
-        `${CONTROLS_WIDTH / currentZoom}px`,
-        "important",
-      );
+      setStyleIfChanged(headerRight, "margin-right", `${CONTROLS_WIDTH / currentZoom}px`);
     }
     if (topbar && topbar.style.marginRight && topbar.style.marginRight !== "0px") {
       topbar.style.removeProperty("margin-right");
@@ -216,9 +264,28 @@
     var zoom = typeof currentZoom !== 'undefined' ? currentZoom : 1.0;
     // margin-top: 48/zoom → WebView zoom'u uyguladığında 48px fiziksel kalır
     var mt = Math.round(48 / zoom * 10) / 10;
+    var marginChanged = false;
     Array.from(sheets).forEach(function(sheet) {
-      sheet.style.setProperty('margin-top', mt + 'px', 'important');
+      var want = mt + 'px';
+      if (sheet.style.getPropertyValue('margin-top') !== want) {
+        sheet.style.setProperty('margin-top', want, 'important');
+        marginChanged = true;
+      }
     });
+
+    // Ölçüm frame'ini SADECE gerçekten gerekliyse planla.
+    // .sheet-content site elementi olduğu için buraya yapılan her yazım
+    // init.js'teki observer'ı yeniden tetikliyor; margin zaten doğruyken
+    // ölçüm rAF'ını da kurmak, sheet açık kaldığı sürece her frame
+    // getBoundingClientRect + style yazımı yapan bir salınım üretiyordu.
+    // İmza: ölçümü etkileyen her girdi. Bunlardan biri değişmedikçe yeniden
+    // ölçmenin anlamı yok (pencere yeniden boyutlanınca innerHeight değişir ve
+    // ölçüm kendiliğinden yeniden çalışır).
+    var sizeSig = window.innerHeight + '|' + mt;
+    var needsMeasure = marginChanged || Array.from(sheets).some(function(sheet) {
+      return sheet.__oaSheetSized !== sizeSig;
+    });
+    if (!needsMeasure) return;
 
     // Bir frame bekle (margin uygulandıktan sonra pozisyonu ölç)
     requestAnimationFrame(function() {
@@ -235,9 +302,10 @@
           '[data-overlayscrollbars], [data-overlayscrollbars-viewport]'
         );
         Array.from(scrolls).forEach(function(el) {
-          el.style.setProperty('max-height', remaining + 'px', 'important');
           // overflow-y auto zaten OverlayScrollbars tarafından yönetiliyor
+          setStyleIfChanged(el, 'max-height', remaining + 'px');
         });
+        sheet.__oaSheetSized = sizeSig;
       });
     });
   }
@@ -257,12 +325,21 @@
     } else {
       if (fallbackDragBar) fallbackDragBar.remove();
     }
+    // Attribute yazımları KOŞULLU: setAttribute/removeAttribute, değer aynı olsa
+    // bile Blink'te attribute mutasyonu üretir ve o elementin stil eşleşmesini
+    // geçersizleştirir. Bu fonksiyon her DOM mutation batch'inde çalıştığından,
+    // koşulsuz yazım topbar'daki her düğüm için batch başına gereksiz stil
+    // yeniden hesabı demekti.
     topbar.querySelectorAll("div, span, img, a").forEach((el) => {
       const isInteractive = el.closest(
         'input, button, svg, .tauri-window-controls, #account, #search, #notification-center, #download-manager, .header-right, [role="button"], .account-flyout, .context-menu-wrapper',
       );
-      if (!isInteractive) el.setAttribute("data-tauri-drag-region", "");
-      else el.removeAttribute("data-tauri-drag-region");
+      const has = el.hasAttribute("data-tauri-drag-region");
+      if (!isInteractive) {
+        if (!has) el.setAttribute("data-tauri-drag-region", "");
+      } else if (has) {
+        el.removeAttribute("data-tauri-drag-region");
+      }
     });
   }
 }

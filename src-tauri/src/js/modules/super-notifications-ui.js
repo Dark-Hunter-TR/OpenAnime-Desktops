@@ -50,7 +50,43 @@ function snIsEnabled() {
 // çalışmıyordu.
 let snLastSyncedEnabled = null;
 
+// ── Hydration öncesi "giriş yok" okumasına karşı koruma ───────
+//
+// SORUN: Bu modül sayfa açılır açılmaz çalışıyor, site (SvelteKit SPA) ise
+// hydration'ı bitirene kadar hesap öğelerini (avatar/profil linki) DOM'a
+// koymuyor. Yani her sayfa yüklemesinin ilk saniyesinde snReadAccount()
+// "giriş yok" diyor. Bunun iki görünür sonucu vardı:
+//   • Rust'a `sn_set_enabled(false)` gidiyordu → log: "[Süper Bildirim]
+//     kapatıldı", ardından hydration bitince "açıldı". Her yenilemede SSE
+//     dinleyicisi boşuna duraklatılıp yeniden kuruluyordu.
+//   • `sn_set_account(giriş=false)` relay'i loglanıyor, hemen ardından
+//     giriş=true geliyordu — kullanıcı bunu "oturum düşüp geri geldi"
+//     sanıyordu; gerçekte oturuma hiçbir şey olmuyor.
+// ÇÖZÜM: Bu oturumda (sekme ömrü) bir kez giriş görüldüyse, sonraki
+// "giriş yok" okumaları hydration gecikmesi kabul edilir ve YOK SAYILIR.
+// Gerçek çıkış ise ayrı ele alınır: aynı belge içinde önce true görüp
+// sonra false görmek gerçek logout'tur (bkz. snRelayAccount).
+const SN_SEEN_LOGIN_KEY = "_oa_sn_seen_login";
+let snSawLoginThisDoc = false;
+
+function snSeenLogin() {
+  try {
+    return sessionStorage.getItem(SN_SEEN_LOGIN_KEY) === "1";
+  } catch (e) {
+    return false;
+  }
+}
+
+function snSetSeenLogin(v) {
+  try {
+    if (v) sessionStorage.setItem(SN_SEEN_LOGIN_KEY, "1");
+    else sessionStorage.removeItem(SN_SEEN_LOGIN_KEY);
+  } catch (e) {}
+}
+
 function snSyncEnabledState(loggedIn) {
+  // Doğrulanmamış "giriş yok" okumasıyla dinleyiciyi KAPATMA.
+  if (!loggedIn && snSeenLogin() && !snSawLoginThisDoc) return;
   const target = !!loggedIn && snIsEnabled();
   if (target === snLastSyncedEnabled) return;
   snLastSyncedEnabled = target;
@@ -275,8 +311,25 @@ function snReadAccount() {
 
 function snRelayAccount() {
   const a = snReadAccount();
+
+  if (a.loggedIn) {
+    snSawLoginThisDoc = true;
+    snSetSeenLogin(true);
+  } else if (snSawLoginThisDoc) {
+    // Bu belgede önce girişli görülüp SONRA girişsiz görüldü → gerçek çıkış.
+    // (Hydration gecikmesi bunun tersi sırayla olur, o yüzden ayırt edilebilir.)
+    console.log("[SüperBildirim] Gerçek çıkış algılandı");
+    snSawLoginThisDoc = false;
+    snSetSeenLogin(false);
+  }
+
+  // Boş bir "giriş yok" tablosunu Rust'a göndermenin bir faydası yok:
+  // sn_set_account zaten sticky birleştirme yapıyor, yani None alanlar
+  // yok sayılıyor. Tek etkisi her sayfa yüklemesinde bir kez
+  // "[TepsiMenu] hesap relay · giriş=false" satırı basmaktı.
+  const isEmptyNegative = !a.loggedIn && !a.profileUrl && !a.username && !a.avatarUrl;
   const key = [a.loggedIn, a.profileUrl, a.username, a.avatarUrl].join('|');
-  if (key !== snLastAccountKey) {
+  if (key !== snLastAccountKey && !isEmptyNegative) {
     snLastAccountKey = key;
     snInvoke("sn_set_account", a).catch(() => {});
   }
@@ -452,14 +505,19 @@ function initSuperNotifications() {
   // Rust'taki ayar durumu bellekte tutuluyor (kalıcı değil). Uygulama her
   // açıldığında localStorage'daki kullanıcı tercihini Rust'a geri bildir,
   // yoksa ayar açık görünür ama dinleyici çalışmaz.
-  const isLogged = snReadAccount().loggedIn;
+  const isLogged = snReadAccount().loggedIn || snSeenLogin();
   if (snIsEnabled() && isLogged) {
     snInvoke("sn_set_enabled", { enabled: true })
       .then(() => console.log("[SüperBildirim] Arka plan dinleyicisi kuruldu"))
       .catch(() => {});
-  } else {
-    // Giriş yapılmadıysa veya ayar kapalıysa başlangıçta devre dışı bırak
+    snLastSyncedEnabled = true;
+  } else if (!snSeenLogin()) {
+    // Ayar kapalı veya bu oturumda hiç giriş görülmedi → devre dışı bırak.
+    // Bu oturumda giriş GÖRÜLDÜYSE hiçbir şey gönderilmez: buradaki okuma
+    // hydration'dan önce yapıldığı için "giriş yok" sonucu güvenilmezdir ve
+    // her yenilemede dinleyiciyi kapatıp açıyordu (bkz. snSyncEnabledState).
     snInvoke("sn_set_enabled", { enabled: false }).catch(() => {});
+    snLastSyncedEnabled = false;
   }
 }
 

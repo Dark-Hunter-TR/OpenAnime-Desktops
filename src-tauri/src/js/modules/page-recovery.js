@@ -5,6 +5,10 @@
   const WATCHDOG_TIMEOUT_MS = 1800; // 1.8 saniyede hızlı boş DOM tespiti
   const MAX_RETRIES = 3;
   const RETRY_STORAGE_KEY = "_oa_watchdog_retries";
+  const LAST_RELOAD_KEY = "_oa_watchdog_last_reload";
+  // Bu süre içinde yeniden yüklenmişsek "döngüdeyiz" say: içerik geldi diye
+  // sayaç sıfırlanmaz, yoksa MAX_RETRIES tavanı hiç dolmaz (bkz. maybeReset).
+  const LOOP_WINDOW_MS = 20000;
 
   let watchdogTimer = null;
   let observer = null;
@@ -27,6 +31,53 @@
     try {
       sessionStorage.removeItem(RETRY_STORAGE_KEY);
     } catch (e) {}
+  }
+
+  function markReloaded() {
+    try {
+      sessionStorage.setItem(LAST_RELOAD_KEY, String(Date.now()));
+    } catch (e) {}
+  }
+
+  function msSinceLastReload() {
+    try {
+      const t = parseInt(sessionStorage.getItem(LAST_RELOAD_KEY) || "0", 10);
+      return t > 0 ? Date.now() - t : Infinity;
+    } catch (e) {
+      return Infinity;
+    }
+  }
+
+  // İçerik geldiğinde sayacı sıfırla — AMA az önce watchdog yüzünden
+  // yenilenmişsek DEĞİL. Eski davranışta sayaç her açılışta sıfırlanıyordu:
+  // sayfa açılıyor → içerik geliyor → sayaç 0 → aynı hata yeniden fırlıyor →
+  // yeniden yükleme. MAX_RETRIES tavanı hiç dolmadığı için bu SONSUZ bir
+  // "kendiliğinden F5" döngüsüydü.
+  function maybeResetRetryCount() {
+    if (msSinceLastReload() < LOOP_WINDOW_MS) return;
+    resetRetryCount();
+  }
+
+  // Oynatıcı kaynaklı, sayfayı bozmayan hatalar. Yerel video oynatılırken
+  // bunlar NORMALDİR: kaynak (src) değiştiğinde bekleyen play() sözü
+  // AbortError ile reddedilir, kullanıcı etkileşimi olmadan başlatılan
+  // oynatma NotAllowedError verir. Bunlar için sayfa yenilenmemeli.
+  const BENIGN_PATTERNS = [
+    "AbortError",
+    "NotAllowedError",
+    "The play() request was interrupted",
+    "The fetching process for the media resource was aborted",
+    "media resource indicated by the src attribute",
+    "ResizeObserver loop",
+    "NotSupportedError",
+  ];
+
+  function isBenign(text) {
+    if (!text) return false;
+    for (let i = 0; i < BENIGN_PATTERNS.length; i++) {
+      if (text.indexOf(BENIGN_PATTERNS[i]) > -1) return true;
+    }
+    return false;
   }
 
   function getTargetContainer() {
@@ -149,12 +200,39 @@
 
     if (currentRetries < MAX_RETRIES) {
       setRetryCount(currentRetries + 1);
+      markReloaded();
       setTimeout(() => {
         try { window.location.reload(); } catch (e) {}
       }, 200);
     } else {
       renderRecoveryUI(reason, details);
     }
+  }
+
+  // Çalışma zamanı hatası geldiğinde ne yapılacağına karar verir.
+  //
+  // WATCHDOG'UN İŞİ BEYAZ EKRANI KURTARMAKTIR — her JS hatasını kurtarmak
+  // DEĞİL. Eski kod her yakalanmamış hatada/promise reddinde sayfayı
+  // yeniliyordu. Sayfa ÇALIŞIR durumdayken (DOM dolu) bu, hatayı üreten
+  // her akışı sonsuz yeniden yükleme döngüsüne sokuyordu — yerel video
+  // izlerken görülen "kendiliğinden F5" tam olarak buydu: yerel oynatıcı
+  // <video>.src'yi kendi HTTP stream'ine çevirip load() çağırınca sitenin
+  // bekleyen play() sözü AbortError ile reddediliyor, yakalayan olmadığı
+  // için buraya düşüyor ve sayfa yenileniyordu. Yenilenen sayfa aynı
+  // bölümü tekrar açıyor, aynı hata tekrar fırlıyordu.
+  //
+  // Yeni kural: DOM sağlıklıysa hata SADECE loglanır. Yenileme yalnızca
+  // ekran gerçekten boşsa (kurtarılacak bir şey varken) yapılır.
+  function handleRuntimeError(reason, details) {
+    if (isBenign(details)) {
+      console.debug("[Watchdog] Zararsız oynatıcı hatası yok sayıldı:", details);
+      return;
+    }
+    if (!isContainerEmpty(getTargetContainer())) {
+      console.warn(`[Watchdog] JS hatası (${reason}) — sayfa ayakta, yenileme YOK:`, details);
+      return;
+    }
+    handleWatchdogTrigger(reason, details);
   }
 
   function startWatchdog() {
@@ -167,7 +245,7 @@
     observer = new MutationObserver(() => {
       if (!isContainerEmpty(container)) {
         clearTimeout(watchdogTimer);
-        resetRetryCount();
+        maybeResetRetryCount();
         observer.disconnect();
       }
     });
@@ -181,22 +259,30 @@
       if (isContainerEmpty(container)) {
         handleWatchdogTrigger("Boş ekran (blank DOM)", "Container elementinde child node oluşturulamadı.");
       } else {
-        resetRetryCount();
+        maybeResetRetryCount();
       }
     }, WATCHDOG_TIMEOUT_MS);
   }
 
   // Fatal JS Hatalarını Yakala
   window.addEventListener("error", (event) => {
+    // Kaynak yükleme hatası (<video>, <img>, <script> …) — element hedefli
+    // error olayı; sayfanın kendisiyle ilgisi yok. Yerel video stream'inde
+    // bunlar olabilir, sayfayı yenilemek çözüm değil.
+    if (event?.target && event.target !== window && event.target.nodeType === 1) return;
     if (event?.message?.includes("Script error") || event?.filename?.includes("extension")) return;
     const msg = event?.message || "Uncaught JavaScript Exception";
     const src = event?.filename ? `${event.filename}:${event.lineno}` : "";
-    handleWatchdogTrigger("JS Çalışma Zamanı Hatası", `${msg} ${src}`);
+    handleRuntimeError("JS Çalışma Zamanı Hatası", `${msg} ${src}`);
   });
 
   window.addEventListener("unhandledrejection", (event) => {
+    // Başka bir modül bu reddi bilerek yuttuysa (bkz. local-player.js
+    // play() koruması) dokunma.
+    if (event?.defaultPrevented) return;
+    const name = event?.reason?.name ? event.reason.name + ": " : "";
     const reason = event?.reason?.message || String(event?.reason || "Unhandled Promise Rejection");
-    handleWatchdogTrigger("Unhandled Rejection", reason);
+    handleRuntimeError("Unhandled Rejection", name + reason);
   });
 
   // Sayfa başlangıcında ve SPA route değişimlerinde başlat

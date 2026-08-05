@@ -32,9 +32,13 @@ pub struct DpiStatus {
 }
 
 /// check_connection()'un detaylı sonucu
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ConnectionResult {
     Ok,
+    /// Sunucu yanıt verdi ama isteği REDDETTİ (401/403/429): Cloudflare
+    /// "Just a moment" sayfası ya da OpenAnime Vanguard "Unauthorized".
+    /// Bu bir AĞ sorunu DEĞİLDİR — TCP+TLS+HTTP baştan sona çalıştı.
+    Challenged,
     Timeout,
     Forbidden,
     DnsFailure,
@@ -43,13 +47,43 @@ pub enum ConnectionResult {
     NetworkUnreachable,
 }
 
+impl ConnectionResult {
+    /// Sunucuya FİİLEN ulaşıldı mı?
+    ///
+    /// NEDEN AYRI BİR KAVRAM: DPI engellemesi paket seviyesinde olur —
+    /// bağlantı düşer, TLS handshake bozulur, DNS boş döner. Karşı taraftan
+    /// bir HTTP yanıtı GELDİYSE yol açıktır; 401/403/5xx yalnızca sunucunun
+    /// o isteğe verdiği cevaptır. Bu ikisi karıştırıldığında (eski davranış:
+    /// 403 → `Forbidden` → "engellenmişiz") uygulama Cloudflare'in bot
+    /// sayfasını "internet yok" sanıp sırayla tüm DPI yöntemlerini deniyor,
+    /// hepsi aynı 403'ü alıp başarısız sayılıyor ve sonunda çevrimdışı moda
+    /// düşüyordu. Üstelik bu tarama WebView'in canlı trafiğinin aktığı
+    /// proxy'nin yöntemini saniyeler içinde defalarca değiştiriyor.
+    pub fn is_reachable(self) -> bool {
+        matches!(
+            self,
+            ConnectionResult::Ok
+                | ConnectionResult::Challenged
+                | ConnectionResult::Forbidden
+                | ConnectionResult::ServerError
+        )
+    }
+}
+
 /// DPI Proxy Yöneticisi — app başlatılırken oluşturulur
 pub struct DpiProxyManager {
     pub settings: Mutex<GoodbyeSettings>,
     pub proxy_running: Arc<Mutex<bool>>,
     pub current_method: Arc<Mutex<Option<DpiMethod>>>,
     pub connection_stage: Mutex<String>,
+    /// `request_bypass()` için son istek zamanı (bkz. BYPASS_COOLDOWN).
+    last_bypass_request: Mutex<Option<std::time::Instant>>,
 }
+
+/// JS'ten gelen bypass isteklerinin en fazla hangi sıklıkta işleneceği.
+/// Sayfa her yenilendiğinde init.js sayacı sıfırdan başlar; art arda gelen
+/// yenilemelerde aynı istek dakikada birkaç kez geliyordu.
+const BYPASS_COOLDOWN: Duration = Duration::from_secs(120);
 
 impl DpiProxyManager {
     pub fn new(app: &tauri::AppHandle) -> Self {
@@ -89,13 +123,45 @@ impl DpiProxyManager {
             proxy_running: Arc::new(Mutex::new(false)),
             current_method: Arc::new(Mutex::new(None)),
             connection_stage: Mutex::new("idle".to_string()),
+            last_bypass_request: Mutex::new(None),
         }
     }
 
     /// Proxy'yi başlat (arkaplan task'i)
     pub async fn start_proxy(&self, app: &tauri::AppHandle, method_id: u32) -> Result<(), String> {
+        // Harici bir bypass aracı (Zapret/GoodbyeDPI/ByeDPI) veya WARP aktifken
+        // tcp_forward zaten hiçbir manipülasyon uygulamıyor — yani 1..8 arası
+        // yöntemlerin HEPSİ fiilen Direct gibi davranıyor. Buna rağmen yöntem
+        // kimliğini değiştirip kaydetmek yalnızca gürültü üretiyordu: log'da
+        // "Host Case Change aktif" görünüyor, ayar dosyasına yazılıyor ve
+        // kullanıcı bir header manipülasyonunun uygulandığını sanıyor.
+        // Kararı TEK yerde veriyoruz: aktif yöntem Direct'e sabitlenir.
+        let behavior = bypass_detect::current_behavior();
+        let method_id = if !behavior.allows_fragmentation() && method_id != 0 {
+            dbg_log!(
+                "[DPI Proxy] Harici bypass aracı aktif ({:?}) — yöntem #{} yerine Direct (#0) uygulanıyor",
+                behavior,
+                method_id
+            );
+            0
+        } else {
+            method_id
+        };
+
         let method = methods::get_method_by_id(method_id)
             .ok_or_else(|| format!("Yöntem bulunamadı: {}", method_id))?;
+
+        // Aynı yöntem zaten aktifse ve dinleyici ayaktaysa hiçbir şey yapma.
+        // Eski davranışta her çağrı (sayfa yenilemesi başına en az bir tane)
+        // "Proxy yöntemi güncelleniyor" satırı basıp ayar dosyasını yeniden
+        // yazıyordu. `proxy_running` kontrolü şart: dinleyici düşmüşse
+        // (port meşgul, bind hatası) yeniden ayağa kaldırmamız gerekir.
+        let same_method =
+            self.current_method.lock().await.as_ref().map(|m| m.id) == Some(method_id);
+        if same_method && *self.proxy_running.lock().await {
+            dbg_log!("[DPI Proxy] Yöntem #{} zaten aktif, değişiklik yok.", method_id);
+            return Ok(());
+        }
 
         dbg_log!(
             "[DPI Proxy] Proxy yöntemi güncelleniyor: #{} ({})",
@@ -152,6 +218,20 @@ impl DpiProxyManager {
         &self,
         app: &tauri::AppHandle,
     ) -> Option<u32> {
+        // Harici araç/WARP aktifken tarama ANLAMSIZ: proxy hiçbir yönteme
+        // göre farklı davranmıyor (bkz. start_proxy). Sekiz yöntemi sırayla
+        // denemek yalnızca 8 kez ağ isteği atıp aynı sonucu alıyor.
+        let behavior = bypass_detect::current_behavior();
+        if !behavior.allows_fragmentation() {
+            dbg_log!(
+                "[DPI Proxy] Harici bypass aracı aktif ({:?}) — yöntem taraması atlandı, Direct kullanılıyor",
+                behavior
+            );
+            let _ = self.start_proxy(app, 0).await;
+            let result = self.check_connection_detailed(true).await;
+            return if result.is_reachable() { Some(0) } else { None };
+        }
+
         let method_order: Vec<u32> = {
             let settings = self.settings.lock().await;
 
@@ -195,25 +275,87 @@ impl DpiProxyManager {
             let result = self.check_connection_detailed(true).await;
             let mut settings = self.settings.lock().await;
 
-            match result {
-                ConnectionResult::Ok => {
-                    dbg_log!("[DPI Proxy] Yöntem #{} çalışıyor!", method_id);
-                    settings.mark_method_success(method_id);
-                    settings.save(app);
-                    return Some(method_id);
-                }
-                _ => {
-                    dbg_log!("[DPI Proxy] Yöntem #{} başarısız: {:?}", method_id, result);
-                    settings.mark_method_fail(method_id);
-                    settings.save(app);
-                }
+            // Ölçüt "HTTP 200 aldık mı" DEĞİL, "sunucuya ulaştık mı".
+            // Cloudflare/Vanguard'ın 401/403'ü yöntemin başarısız olduğunu
+            // göstermez — o yanıt zaten hedeften geliyor, yani paket yolu açık.
+            if result.is_reachable() {
+                dbg_log!(
+                    "[DPI Proxy] Yöntem #{} çalışıyor! (yanıt: {:?})",
+                    method_id,
+                    result
+                );
+                settings.mark_method_success(method_id);
+                settings.save(app);
+                return Some(method_id);
             }
+
+            dbg_log!("[DPI Proxy] Yöntem #{} başarısız: {:?}", method_id, result);
+            settings.mark_method_fail(method_id);
+            settings.save(app);
 
             self.stop_proxy(app).await;
         }
 
         dbg_log!("[DPI Proxy] Hiçbir yöntem çalışmadı.");
         None
+    }
+
+    /// JS'ten gelen "bağlantı kopuyor, bypass dene" isteğini karşılar
+    /// (Tauri komutu: `reopen_with_proxy`).
+    ///
+    /// ESKİ DAVRANIŞ VE NEDEN YANLIŞTI:
+    ///   Komut koşulsuz `start_proxy(app, 1)` çağırıyordu. Yani:
+    ///     • Açılışta bulunmuş ÇALIŞAN yöntemi eziyor ve #1'i ayar dosyasına
+    ///       kalıcı yazıyordu (sonraki açılış da #1 ile başlıyordu),
+    ///     • Bağlantının gerçekten kopup kopmadığına HİÇ bakmıyordu,
+    ///     • Sayfa her yenilendiğinde init.js sayacı sıfırdan başladığı için
+    ///       art arda tetikleniyordu.
+    ///   Log'daki tekrar eden "reopen_with_proxy çağrıldı → yöntem #1" dizisi
+    ///   buydu. (Komut WebView'e dokunmaz; sayfayı yenileyen watchdog'dur,
+    ///   bkz. js/modules/page-recovery.js.)
+    pub async fn request_bypass(&self, app: &tauri::AppHandle) -> Result<(), String> {
+        {
+            let mut last = self.last_bypass_request.lock().await;
+            if let Some(t) = *last {
+                if t.elapsed() < BYPASS_COOLDOWN {
+                    dbg_log!(
+                        "[DPI Proxy] Bypass isteği yok sayıldı (önceki istek {} sn önce, bekleme {} sn)",
+                        t.elapsed().as_secs(),
+                        BYPASS_COOLDOWN.as_secs()
+                    );
+                    return Ok(());
+                }
+            }
+            *last = Some(std::time::Instant::now());
+        }
+
+        let behavior = bypass_detect::current_behavior();
+        if !behavior.allows_fragmentation() {
+            dbg_log!(
+                "[DPI Proxy] Bypass isteği: harici araç aktif ({:?}) — yöntem değiştirilmiyor",
+                behavior
+            );
+            return Ok(());
+        }
+
+        // Önce GERÇEKTEN ulaşılamıyor mu diye bak. Anti-bot/yetki yanıtları
+        // (401/403) yöntem değiştirmeyi gerektirmez; yöntem değiştirmek o
+        // yanıtı zaten düzeltmez, sadece canlı bağlantıları tazeler.
+        let result = self.check_connection_detailed(true).await;
+        if result.is_reachable() {
+            dbg_log!(
+                "[DPI Proxy] Bypass isteği: sunucuya ulaşılıyor ({:?}) — yöntem DEĞİŞTİRİLMEDİ",
+                result
+            );
+            return Ok(());
+        }
+
+        dbg_log!("[DPI Proxy] Bypass isteği: bağlantı yok ({:?}), yöntem taraması başlıyor", result);
+        match self.test_all_methods(app).await {
+            Some(id) => dbg_log!("[DPI Proxy] Bypass isteği: çalışan yöntem #{}", id),
+            None => dbg_log!("[DPI Proxy] Bypass isteği: çalışan yöntem bulunamadı"),
+        }
+        Ok(())
     }
 
     /// Uzak proxy fallback adımını dener
@@ -284,16 +426,26 @@ pub async fn dpi_get_status(app: tauri::AppHandle) -> Result<DpiStatus, String> 
 async fn check_openanime_connection(use_proxy: bool) -> ConnectionResult {
     let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        // WebView'in gönderdiği User-Agent'ın AYNISI. Kısaltılmış/yapay bir UA
+        // Cloudflare'in bot yönetimini gereksiz yere tetikliyor ve kontrol
+        // isteği, tarayıcı sorunsuz gezinirken bile 403 alabiliyordu.
+        .user_agent(crate::platform_user_agent())
         .danger_accept_invalid_certs(false);
 
-    // Bypassing system DNS using Cloudflare DoH (DNS-over-HTTPS)
-    if let Some(ip) = remote_proxy::resolve_dns_doh("openani.me").await {
-        dbg_log!("[DPI Proxy] DNS Bypass (DoH): openani.me resolved to {}", ip);
-        let socket_addr = std::net::SocketAddr::new(ip, 443);
-        builder = builder.resolve("openani.me", socket_addr);
+    // DoH ile DNS ezmesi — WARP aktifken ATLANIR. (tcp_forward.rs bu kuralı
+    // zaten uyguluyordu; burada uygulanmıyordu, yani WARP'lı kullanıcıda
+    // kontrol isteği WARP'ın çözümleyicisini baypas edip tünel dışına
+    // çıkabiliyor ve tarayıcıdan FARKLI bir sonuç üretebiliyordu.)
+    if bypass_detect::current_behavior().allows_doh_override() {
+        if let Some(ip) = remote_proxy::resolve_dns_doh("openani.me").await {
+            dbg_log!("[DPI Proxy] DNS Bypass (DoH): openani.me resolved to {}", ip);
+            let socket_addr = std::net::SocketAddr::new(ip, 443);
+            builder = builder.resolve("openani.me", socket_addr);
+        } else {
+            dbg_log!("[DPI Proxy] Warning: Cloudflare DoH failed, falling back to system DNS");
+        }
     } else {
-        dbg_log!("[DPI Proxy] Warning: Cloudflare DoH failed, falling back to system DNS");
+        dbg_log!("[DPI Proxy] WARP aktif — bağlantı kontrolünde DoH DNS ezmesi atlandı");
     }
 
     if use_proxy {
@@ -341,15 +493,32 @@ async fn check_openanime_connection(use_proxy: bool) -> ConnectionResult {
     match req.send().await {
         Ok(resp) => {
             let status = resp.status();
-            if status.is_success() {
+            // Buraya gelindiyse DNS + TCP + TLS + HTTP baştan sona çalıştı.
+            // Statü kodu artık AĞIN değil, SUNUCUNUN kararıdır.
+            if status.is_success() || status.is_redirection() {
                 ConnectionResult::Ok
-            } else if status == reqwest::StatusCode::FORBIDDEN {
-                ConnectionResult::Forbidden
+            } else if matches!(status.as_u16(), 401 | 403 | 429) {
+                // Cloudflare "Just a moment" / OpenAnime Vanguard reddi.
+                // Yanıt başlığından hangisi olduğunu ayırt edip loglayalım —
+                // bu bilgi olmadan "403" görüp DPI engeli sanılıyordu.
+                let mitigated = resp.headers().contains_key("cf-mitigated")
+                    || resp
+                        .headers()
+                        .get("server")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.eq_ignore_ascii_case("cloudflare"))
+                        .unwrap_or(false);
+                dbg_log!(
+                    "[DPI Proxy] Sunucu isteği reddetti (HTTP {}, cloudflare={}) — AĞ SORUNU DEĞİL, \
+                     bot koruması/oturum katmanı. DPI yöntemi değiştirilmeyecek.",
+                    status.as_u16(),
+                    mitigated
+                );
+                ConnectionResult::Challenged
             } else if status.is_server_error() {
                 ConnectionResult::ServerError
-            } else if status.is_redirection() {
-                ConnectionResult::Ok
             } else {
+                dbg_log!("[DPI Proxy] Beklenmeyen statü: HTTP {}", status.as_u16());
                 ConnectionResult::Forbidden
             }
         }
@@ -362,6 +531,29 @@ async fn check_openanime_connection(use_proxy: bool) -> ConnectionResult {
                 ConnectionResult::NetworkUnreachable
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectionResult;
+
+    #[test]
+    fn http_yaniti_gelen_her_durum_ulasilabilir_sayilir() {
+        // Sunucudan cevap geldiyse ağ yolu açıktır — bunlar DPI engeli değil.
+        assert!(ConnectionResult::Ok.is_reachable());
+        assert!(ConnectionResult::Challenged.is_reachable());
+        assert!(ConnectionResult::Forbidden.is_reachable());
+        assert!(ConnectionResult::ServerError.is_reachable());
+    }
+
+    #[test]
+    fn tasima_katmani_hatalari_ulasilamaz_sayilir() {
+        // Gerçek engellemenin göründüğü yer: bağlantı hiç kurulamıyor.
+        assert!(!ConnectionResult::Timeout.is_reachable());
+        assert!(!ConnectionResult::DnsFailure.is_reachable());
+        assert!(!ConnectionResult::TlsError.is_reachable());
+        assert!(!ConnectionResult::NetworkUnreachable.is_reachable());
     }
 }
 

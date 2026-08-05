@@ -911,16 +911,18 @@ fn get_zoom_level(state: tauri::State<'_, ZoomState>) -> Result<f64, String> {
 
 #[tauri::command]
 async fn reopen_with_proxy(app: tauri::AppHandle) -> Result<(), String> {
-    dbg_log!("[Tauri] reopen_with_proxy çağrıldı.");
-    // Sadece proxy'yi başlat. Pencere açma/kapatma yapmıyoruz çünkü
-    // bu Tauri'yi çökertiyor. Proxy en baştan başlatılıp pencere
-    // direkt --proxy-server ile açılmalı.
+    // İSİM YANILTICI (geriye dönük uyumluluk için korundu — js/init.js,
+    // js/modules/page-recovery.js ve permissions/dpi_proxy.toml bu adı
+    // kullanıyor): pencereyi YENİDEN AÇMAZ, WebView'e hiç dokunmaz.
+    // Yalnızca yerel proxy'nin bypass yöntemini gözden geçirir.
+    //
+    // Kullanıcı "sürekli F5 atılıyor" derken gördüğü yenilenmenin kaynağı bu
+    // komut DEĞİL, boş ekran watchdog'unun `location.reload()` çağrısıdır
+    // (js/modules/page-recovery.js). Bu komut o yenilemenin ARDINDAN
+    // tetikleniyordu; sıralama yüzünden sebep gibi görünüyordu.
+    dbg_log!("[Tauri] reopen_with_proxy çağrıldı (yalnızca proxy yöntemi gözden geçirilir).");
     let dpi = app.state::<dpi_proxy::DpiProxyManager>();
-    if let Err(e) = dpi.start_proxy(&app, 1).await {
-        dbg_log!("[Tauri] Proxy #1 başlatılamadı: {}", e);
-    }
-    dbg_log!("[Tauri] Proxy başlatıldı. (not: WebView proxy kullanmıyor olabilir)");
-    Ok(())
+    dpi.request_bypass(&app).await
 }
 
 #[tauri::command]
@@ -1013,8 +1015,12 @@ async fn check_connection() -> bool {
             .header("Pragma", "no-cache");
 
         if let Ok(resp) = req.send().await {
-            let status = resp.status();
-            status.is_success() || status.is_redirection() || status == reqwest::StatusCode::FORBIDDEN
+            // HERHANGİ bir HTTP yanıtı geldiyse bağlantı vardır. 401/403
+            // (Cloudflare bot sayfası, Vanguard reddi) veya 5xx sunucunun
+            // cevabıdır — "internet yok" demek değildir.
+            // (Aynı ayrım: dpi_proxy::ConnectionResult::is_reachable.)
+            dbg_log!("[Tauri] check_connection: HTTP {}", resp.status().as_u16());
+            true
         } else {
             false
         }
@@ -1541,14 +1547,28 @@ pub fn run() {
                 dpi.check_connection_detailed(true)
             ).await;
 
-            match direct_check {
-                Ok(dpi_proxy::ConnectionResult::Ok) => {
-                    log!("[Bağlantı] İnternet bağlantısı kuruldu");
-                    let mut stage = dpi.connection_stage.lock().await;
-                    *stage = "success".to_string();
-                    let _ = dpi.start_proxy(&app_handle_for_check, 0).await;
+            // ÖLÇÜT: "sunucuya ulaşabildik mi", "HTTP 200 aldık mı" DEĞİL.
+            // Cloudflare'in bot sayfası (403) ya da Vanguard'ın 401'i buraya
+            // düşünce eski kod bunu DPI engeli sanıp sırayla 8 yöntemi
+            // deniyordu. Tarama, WebView'in canlı trafiğinin aktığı proxy'nin
+            // yöntemini saniyeler içinde defalarca değiştirdiğinden sayfa
+            // yüklemeleri yarıda kalıyor, boş ekran watchdog'u devreye girip
+            // sayfayı yeniliyordu ("sürekli F5"). Sonunda da hiçbir yöntem
+            // "başarılı" sayılamadığı için çevrimdışı moda düşülüyordu.
+            let direct_reachable = matches!(&direct_check, Ok(r) if r.is_reachable());
+
+            if direct_reachable {
+                if let Ok(result) = &direct_check {
+                    if *result == dpi_proxy::ConnectionResult::Challenged {
+                        log!("[Bağlantı] Sunucuya ulaşıldı (site bot koruması yanıt verdi) — bypass gerekmiyor");
+                    } else {
+                        log!("[Bağlantı] İnternet bağlantısı kuruldu");
+                    }
                 }
-                _ => {
+                let mut stage = dpi.connection_stage.lock().await;
+                *stage = "success".to_string();
+            } else {
+                    dbg_log!("[Setup Background] Doğrudan bağlantı sonucu: {:?}", direct_check);
                     log!("[Bağlantı] Erişim kısıtlı — engel aşma deneniyor…");
                     {
                         let mut stage = dpi.connection_stage.lock().await;
@@ -1564,7 +1584,7 @@ pub fn run() {
                     ).await;
 
                     let mut is_working = false;
-                    if let Ok(dpi_proxy::ConnectionResult::Ok) = proxy_check {
+                    if matches!(&proxy_check, Ok(r) if r.is_reachable()) {
                         dbg_log!("[Setup Background] Kayıtlı DPI yöntemi (#{}) çalışıyor!", test_id);
                         is_working = true;
                     }
@@ -1594,7 +1614,6 @@ pub fn run() {
                             }
                         }
                     }
-                }
             }
         });
 

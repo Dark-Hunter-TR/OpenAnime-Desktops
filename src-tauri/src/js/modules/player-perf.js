@@ -9,6 +9,11 @@
 
 {
   let lastReported = null;
+  let falseTimer = null;
+  // Geçici duraksamaları (kaynak değişimi, tampon boşalması) yutacak kadar
+  // uzun, gerçek bir duraklamada modun geç değişmesini fark ettirmeyecek
+  // kadar kısa.
+  const FALSE_DEBOUNCE_MS = 1500;
 
   function report(playing) {
     // Aynı durumu tekrar bildirme — Rust tarafı da eliyor ama IPC'yi
@@ -42,15 +47,41 @@
   // dolduracak kod da çalışamaz). `paused=false` "kullanıcı oynatmak istiyor"
   // demektir — donarken bakılması gereken doğru soru budur. Tamponlama zaten
   // kaynak ister, o sırada tam performansta kalmak da isabetli.
+
+  // Olaylardan tanıdığımız video elemanları. `document.querySelectorAll`
+  // shadow DOM'un içini GÖREMEZ; yerel oynatıcı (openanime-vanilla-player)
+  // gibi özel elemanlar video'yu shadow root'ta tutabilir. Medya olayları
+  // yakalama (capture) evresinde document'ten geçtiği için elemanı oradan
+  // öğrenip burada saklıyoruz — böylece yoklama da onu görebiliyor.
+  const tracked = new Set();
+
+  function isPlayingEl(v) {
+    try {
+      return !v.paused && !v.ended;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Sayfada GERÇEKTEN oynayan bir video var mı? (ölçüt için yukarıdaki nota bak)
   function anyVideoPlaying() {
     try {
       const vids = document.querySelectorAll("video");
       for (let i = 0; i < vids.length; i++) {
-        const v = vids[i];
-        if (!v.paused && !v.ended) return true;
+        if (isPlayingEl(vids[i])) return true;
       }
     } catch (e) {}
-    return false;
+    // DOM'da bulunamayanlar (shadow DOM / DOM'dan koparılmış ama hâlâ ses
+    // veren elemanlar) — Chromium DOM'dan çıkarılan bir <video>'yu duraklatmaz.
+    let playing = false;
+    tracked.forEach(function (v) {
+      if (isPlayingEl(v)) {
+        playing = true;
+      } else if (!v.isConnected) {
+        tracked.delete(v); // hem kopuk hem duraklamış → bir daha lazım olmaz
+      }
+    });
+    return playing;
   }
 
   function evaluate() {
@@ -67,15 +98,50 @@
     // Tam performansa geçilmemesi zaten ayrı bir koşulla garanti: refresh_perf_mode
     // NORMAL bellek/EcoQoS-kapalı için `playing && focused` arar; tepsideyken
     // `focused` false olduğundan verimlilik modu korunur.
-    report(anyVideoPlaying());
+    //
+    // "OYNUYOR" ANINDA, "OYNAMIYOR" GECİKMELİ bildirilir.
+    // Sebep: kaynak değişimi (yerel oynatıcı <video>.src'yi kendi HTTP
+    // stream'ine çevirip load() çağırır) `emptied` üretir, tampon boşalması
+    // `waiting` üretir. Bu anlarda `paused` bir an için true olur. Gecikme
+    // olmadan her biri Rust'a false → true gidip gelmesine, yani EcoQoS ve
+    // bellek hedefinin (ve arka planda Media↔DeepSleep kararının) boşuna
+    // çalkalanmasına yol açıyordu — loglardaki "Video oynuyor = true/false"
+    // salınımı buydu. Gerçek bir duraklama/bitiş zaten gecikme sonunda da
+    // duruyor olacağı için doğruluk kaybı yok.
+    const playing = anyVideoPlaying();
+
+    if (playing) {
+      if (falseTimer) {
+        clearTimeout(falseTimer);
+        falseTimer = null;
+      }
+      report(true);
+      return;
+    }
+
+    if (lastReported !== true) {
+      report(false); // zaten oynamıyorduk — bekletmeye gerek yok
+      return;
+    }
+    if (falseTimer) return; // gecikme zaten işliyor
+    falseTimer = setTimeout(function () {
+      falseTimer = null;
+      if (!anyVideoPlaying()) report(false);
+    }, FALSE_DEBOUNCE_MS);
+  }
+
+  function onMediaEvent(e) {
+    const t = e && e.target;
+    if (t && t.tagName === "VIDEO") tracked.add(t);
+    evaluate();
   }
 
   // Video event'lerini yakala. Yeni video elementleri sonradan eklendiği için
   // capture:true ile document seviyesinde dinliyoruz — her video'ya tek tek
   // listener eklemeye gerek kalmaz (ve sızıntı riski olmaz).
-  const EVENTS = ["play", "playing", "pause", "ended", "emptied", "waiting"];
+  const EVENTS = ["play", "playing", "pause", "ended", "emptied", "waiting", "loadeddata"];
   EVENTS.forEach(function (ev) {
-    document.addEventListener(ev, evaluate, { capture: true, passive: true });
+    document.addEventListener(ev, onMediaEvent, { capture: true, passive: true });
   });
 
   document.addEventListener("visibilitychange", evaluate, { passive: true });

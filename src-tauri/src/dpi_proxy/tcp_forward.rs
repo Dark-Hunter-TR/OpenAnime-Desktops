@@ -73,6 +73,22 @@ pub async fn start_proxy_internal(
     dbg_log!("[DPI Proxy] Proxy sonlandı.");
 }
 
+/// Hedef bizim kendi altyapımız mı (openani.me ve alt alan adları)?
+///
+/// NEDEN ÖNEMLİ: HTTP header oyunları (Host: → hoSt:, mixed case, boşluk
+/// kaydırma) ARADAKİ DPI kutusunu şaşırtmak içindir; hedef sunucunun kendisi
+/// bunları görür ve normalden sapmış bir istek olarak değerlendirir.
+/// openani.me önünde Cloudflare bot yönetimi + OpenAnime Vanguard var; kendi
+/// isteklerimizi bu katmanlara "acayip" göstermenin hiçbir faydası, gözden
+/// düşme riski ise var. Paket seviyesindeki fragmentasyon ise sunucuya
+/// TAMAMEN görünmezdir (TCP tekrar birleştirilir) — o yüzden fragmentasyon
+/// kendi alan adlarımızda da uygulanmaya devam eder, yalnızca header
+/// manipülasyonu kapatılır.
+fn is_own_domain(host: &str) -> bool {
+    let h = host.split(':').next().unwrap_or(host);
+    h.eq_ignore_ascii_case("openani.me") || h.to_ascii_lowercase().ends_with(".openani.me")
+}
+
 /// DNS engellemelerini aşmak için hedef adresi Cloudflare DoH ile çözer
 async fn resolve_target_doh(target: &str) -> String {
     // Cloudflare WARP aktifken DNS'i EZMİYORUZ: WARP kendi çözümleyicisini ve
@@ -263,8 +279,15 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    // Header manipülasyonu
-    if method.http_host_removespace || method.http_host_mixedcase || method.http_host_case {
+    // Header manipülasyonu — kendi alan adlarımızda ASLA (bkz. is_own_domain).
+    if is_own_domain(host) {
+        if method.http_host_removespace || method.http_host_mixedcase || method.http_host_case {
+            dbg_log!(
+                "[DPI Proxy]   {} bizim alan adımız — HTTP header manipülasyonu atlandı (fragmentasyon sürüyor)",
+                host
+            );
+        }
+    } else if method.http_host_removespace || method.http_host_mixedcase || method.http_host_case {
         let mut manipulations: Vec<&str> = Vec::new();
         if method.http_host_removespace {
             let _ = super::http_mod::remove_host_space(&mut data);
@@ -400,37 +423,120 @@ async fn handle_tls_tunnel(
     Ok(())
 }
 
-/// Asenkron veri kopyalama işlemi sırasında inaktivite (veri akışı olmaması) durumunu izler
-async fn copy_with_timeout(
+/// Tünel boyunca kullanılan kopyalama tamponu.
+///
+/// 8 KiB, kapak görselleri/video segmentleri gibi büyük gövdelerde bayt başına
+/// gereksiz syscall üretiyordu. 64 KiB tipik TCP pencere boyutuyla uyumlu.
+const COPY_BUF_SIZE: usize = 64 * 1024;
+
+/// Tünelin İKİ YÖNÜ birden bu süre boyunca sessiz kalırsa bağlantı kapatılır.
+///
+/// ÖNCEDEN 30 sn'ydi ve YÖN BAŞINA uygulanıyordu — bu, sağlıklı bir keep-alive
+/// bağlantısını öldürüyordu: tarayıcı isteğini gönderip yanıtı aldıktan sonra
+/// her iki yön de doğal olarak susar, 30 sn sonra tünel koparılırdı. Kullanıcı
+/// biraz bekleyip kaydırdığında Chromium'un yeniden bağlanması gerekiyordu —
+/// yani TCP + CONNECT + TLS el sıkışması + fragmentasyon gecikmesi baştan.
+/// Kapak görsellerinin geç gelmesinin başlıca sebebi buydu.
+const TUNNEL_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Watchdog'un boşta kalma kontrolünü ne sıklıkla yaptığı.
+const IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Tek yönü kopyalar. Zaman aşımı YOK — boşta kalma denetimi çağıran taraftaki
+/// ortak watchdog'a aittir (bkz. `bidirectional_copy`).
+///
+/// EOF'ta karşı tarafın YAZMA yarısını kapatır (half-close). Bağlantının
+/// tamamını düşürmek yerine yarı kapatmak, TCP tünelinin doğru davranışıdır:
+/// bir yön bittiğinde diğer yön akmaya devam edebilir.
+async fn copy_half(
     mut reader: impl tokio::io::AsyncRead + Unpin,
     mut writer: impl tokio::io::AsyncWrite + Unpin,
-    timeout_dur: Duration,
+    last_activity_ms: &std::sync::atomic::AtomicU64,
+    started: std::time::Instant,
 ) -> Result<(), std::io::Error> {
-    let mut buf = vec![0u8; 8192];
+    use std::sync::atomic::Ordering;
+
+    let mut buf = vec![0u8; COPY_BUF_SIZE];
     loop {
-        let n = match tokio::time::timeout(timeout_dur, reader.read(&mut buf)).await {
-            Ok(Ok(n)) => n,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "inactivity timeout")),
-        };
+        let n = reader.read(&mut buf).await?;
+        // Her iki yön de aynı sayacı günceller; watchdog yalnızca İKİSİ birden
+        // sustuğunda devreye girer.
+        last_activity_ms.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
         if n == 0 {
             break;
         }
         writer.write_all(&buf[..n]).await?;
+        last_activity_ms.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
     }
-    writer.flush().await?;
+    // Yarı kapatma — karşı yön akmaya devam etsin.
+    let _ = writer.shutdown().await;
     Ok(())
 }
 
-/// Çift yönlü TCP kopyalama - inaktivite zaman aşımı ile
+/// Çift yönlü TCP kopyalama.
+///
+/// `select!` YERİNE `join!`: eskiden hangi yön önce biterse tünelin TAMAMI
+/// düşürülüyordu (her iki TcpStream de fonksiyondan çıkarken drop ediliyordu).
+/// HTTP/2'de tek bağlantı üzerinde çoklanan tüm görsel istekleri bu yüzden
+/// birlikte iptal oluyordu. Artık iki yön de kendi doğal sonuna kadar çalışır;
+/// tünel yalnızca ikisi de bittiğinde veya ortak watchdog tetiklendiğinde kapanır.
 async fn bidirectional_copy(mut client: TcpStream, mut server: TcpStream) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let started = std::time::Instant::now();
+    let last_activity_ms = AtomicU64::new(0);
+
     let (mut cr, mut cw) = client.split();
     let (mut sr, mut sw) = server.split();
 
-    let timeout_dur = Duration::from_secs(30);
+    let pump = async {
+        let _ = tokio::join!(
+            copy_half(&mut cr, &mut sw, &last_activity_ms, started),
+            copy_half(&mut sr, &mut cw, &last_activity_ms, started),
+        );
+    };
+
+    let watchdog = async {
+        loop {
+            tokio::time::sleep(IDLE_CHECK_INTERVAL).await;
+            let idle_ms = started
+                .elapsed()
+                .as_millis()
+                .saturating_sub(last_activity_ms.load(Ordering::Relaxed) as u128);
+            if idle_ms >= TUNNEL_IDLE_TIMEOUT.as_millis() {
+                dbg_log!(
+                    "[DPI Proxy]   Tünel {} sn boyunca çift yönlü sessiz kaldı — kapatılıyor",
+                    TUNNEL_IDLE_TIMEOUT.as_secs()
+                );
+                break;
+            }
+        }
+    };
 
     tokio::select! {
-        _ = copy_with_timeout(&mut cr, &mut sw, timeout_dur) => {},
-        _ = copy_with_timeout(&mut sr, &mut cw, timeout_dur) => {},
+        _ = pump => {},
+        _ = watchdog => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_own_domain;
+
+    #[test]
+    fn own_domain_matches_site_and_subdomains() {
+        assert!(is_own_domain("openani.me"));
+        assert!(is_own_domain("openani.me:443"));
+        assert!(is_own_domain("api.openani.me"));
+        assert!(is_own_domain("API.OpenAni.me:443"));
+        assert!(is_own_domain("canvas.openani.me"));
+    }
+
+    #[test]
+    fn own_domain_rejects_lookalikes() {
+        // Sonek kontrolü nokta İLE yapılmalı: "notopenani.me" bizim değil.
+        assert!(!is_own_domain("notopenani.me"));
+        assert!(!is_own_domain("openani.me.evil.com"));
+        assert!(!is_own_domain("example.com:80"));
     }
 }

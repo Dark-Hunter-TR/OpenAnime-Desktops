@@ -113,6 +113,30 @@
     } catch (e) {}
   }
 
+  // WebView'a EN SON gönderilen zoom değeri.
+  // applyZoom, init.js'teki MutationObserver'dan HER DOM mutation batch'inde
+  // çağrılıyor. setZoom bir Tauri IPC invoke'u (plugin:webview|set_webview_zoom)
+  // olduğundan, korumasız hâlde sayfa her değiştiğinde Rust'a bir IPC gidiyordu —
+  // liste render'ı/route geçişi sırasında saniyede onlarca çağrı. Zoom yalnızca
+  // kullanıcı eylemiyle değiştiği için, değer aynıysa IPC'yi tamamen atlıyoruz.
+  var _lastSentZoom = null;
+
+  // getCurrentWebview() her çağrıda yeni bir nesne kuruyor; tek örneği sakla.
+  var _cachedWebview = null;
+  function getWebviewHandle() {
+    if (_cachedWebview !== null) return _cachedWebview;
+    try {
+      if (window.__TAURI__ && window.__TAURI__.webview) {
+        var w = window.__TAURI__.webview.getCurrentWebview();
+        if (w && typeof w.setZoom === "function") {
+          _cachedWebview = w;
+          return w;
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
   // requestAnimationFrame ile zoom uygula — gereksiz body stillerini temizleme yok
   function applyZoom(zoom, triggerIndicator) {
     // Kontrolleri göster/gizle (sadece fullscreen geçişlerinde)
@@ -127,17 +151,26 @@
     }
 
     // Tauri native zoom'u ayarla
-    if (window.__TAURI__ && window.__TAURI__.webview) {
-      var wv = window.__TAURI__.webview.getCurrentWebview();
-      if (wv && typeof wv.setZoom === "function") {
+    {
+      var wv = getWebviewHandle();
+      if (wv) {
+        // Değer değişmediyse IPC'ye hiç girme. triggerIndicator=true olan yol
+        // kullanıcının kasıtlı zoom eylemidir; orada göstergeyi çizmek için
+        // her zaman devam ediyoruz.
+        if (!triggerIndicator && zoom === _lastSentZoom) {
+          return;
+        }
+        _lastSentZoom = zoom;
         if (triggerIndicator) {
           wv.setZoom(zoom).then(function() {
             requestAnimationFrame(function() { showZoomIndicator(zoom); });
           }).catch(function() {
+            // Uygulanamadı — guard'ı sıfırla ki sonraki çağrı yeniden denesin.
+            _lastSentZoom = null;
             showZoomIndicator(zoom);
           });
         } else {
-          wv.setZoom(zoom).catch(function() {});
+          wv.setZoom(zoom).catch(function() { _lastSentZoom = null; });
         }
         return;
       }

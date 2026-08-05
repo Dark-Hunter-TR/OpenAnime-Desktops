@@ -21,6 +21,14 @@
   var PLACEHOLDER_EPISODE = 0;
   var PLACEHOLDER_SEASON = 0;
 
+  // Kapak görselleri. Boyutlar önemli, karıştırılmamalı:
+  //   5.png → 1080x1080 (kare)      → avatar / kart görseli
+  //   3.png → 1920x1080 (yatay)     → banner / diyalog arka planı
+  // (Eskiden template'te ters yazılıydı: kartlarda 16:9 banner 2:3 yuvaya
+  //  sıkışıyordu.)
+  var LOCAL_AVATAR_URL = "https://static.openani.me/placeholder/5.png";
+  var LOCAL_BANNER_URL = "https://static.openani.me/placeholder/3.png";
+
   // ════════════════════════════════════════════════════════
   // 1. ANIME TEMPLATE
   // ════════════════════════════════════════════════════════
@@ -34,8 +42,8 @@
     id: LOCAL_ANIME_ID,
     season: { number: 1 },
     pictures: {
-      avatar: "https://static.openani.me/placeholder/3.png",
-      banner: "https://static.openani.me/placeholder/5.png"
+      avatar: LOCAL_AVATAR_URL,
+      banner: LOCAL_BANNER_URL
     }
   };
 
@@ -97,6 +105,11 @@
         hasNextEpisode: false,
         hasPrevEpisode: false,
         name: fileName,
+        // DİKKAT: summary = tam dosya yolu, sadece görsel bir alan DEĞİL.
+        // local-player.js bunu videoId → dosya yolu çözümlemesi için SENKRON
+        // okuyor (blob metadata'sını ayrıştırmak asenkron ve sitenin
+        // URL.createObjectURL çağrısına yetişemiyor). Buradan kaldırılırsa
+        // yerel oynatma yavaş yedek yola düşer ve autoplay tekrar bozulur.
         summary: filePath,
         avatar: null,
         airDate: new Date().toLocaleDateString("tr-TR"),
@@ -175,6 +188,15 @@
   // 4. SAĞLIK KONTROLÜ (her yüklemede)
   // ════════════════════════════════════════════════════════
 
+  // Kapak alanları TAM olarak beklenen URL'ler mi?
+  // Eskiden yalnızca "static.openani.me içeriyor mu" diye bakılıyordu; bu,
+  // avatar ve banner'ın TERS yazıldığı eski kayıtları sağlıklı sayıp
+  // onarmıyordu (kartlarda 16:9 banner 2:3 yuvaya sıkışıyordu).
+  function picturesOk(anime) {
+    var p = anime && anime.pictures;
+    return !!(p && p.avatar === LOCAL_AVATAR_URL && p.banner === LOCAL_BANNER_URL);
+  }
+
   function healthCheck() {
     console.log("[LocalLib] 🏥 Sağlık kontrolü başladı...");
     try {
@@ -189,7 +211,7 @@
         // ── Placeholder özel düzeltmeleri ──
         if (e.videoFileName === PLACEHOLDER_VIDEO_ID) {
           // anime referansı — pictures boşsa veya id/english uyuşmazsa güncelle
-          var picsOk = e.anime && e.anime.pictures && e.anime.pictures.avatar && e.anime.pictures.avatar.indexOf("static.openani.me") > -1;
+          var picsOk = picturesOk(e.anime);
           if (!e.anime || e.anime.id !== LOCAL_ANIME_ID || e.anime.english !== LOCAL_ANIME_TEMPLATE.english || !picsOk) {
             e.anime = JSON.parse(JSON.stringify(LOCAL_ANIME_TEMPLATE));
             changed = true;
@@ -214,7 +236,7 @@
         validLocalIds.push(e.videoFileName);
 
         // anime referansı — pictures boşsa veya 📁 kalıntısı varsa güncelle
-        var picsOk = e.anime && e.anime.pictures && e.anime.pictures.avatar && e.anime.pictures.avatar.indexOf("static.openani.me") > -1;
+        var picsOk = picturesOk(e.anime);
         if (!e.anime || e.anime.id !== LOCAL_ANIME_ID || (e.anime.english && e.anime.english.indexOf("📁") > -1) || !picsOk) {
           e.anime = JSON.parse(JSON.stringify(LOCAL_ANIME_TEMPLATE));
           changed = true;
@@ -392,6 +414,102 @@
     });
   }
 
+  // ════════════════════════════════════════════════════════
+  // 6B. KAPAK GÖRSELİ TOHUMLAMA (asıl düzeltme)
+  // ════════════════════════════════════════════════════════
+  // Kütüphane/İndirilenler sayfası girdinin kapağını `anime.pictures`'tan
+  // OKUMUYOR — o sayfanın bundle'ında "pictures" kelimesi hiç geçmiyor.
+  // Kapak yalnızca IndexedDB görsel önbelleğinden, ANIME SLUG'ı ile geliyor:
+  //
+  //   {#await db.getImage(group.anime.slug, "avatar")}
+  //     ... src = blob ? URL.createObjectURL(blob) : undefined
+  //   → undefined ise kart bileşeni "/card_default.png"e düşüyor
+  //
+  //   // diyalog:
+  //   src = K.get(slug)                                   // avatar
+  //   style.backgroundImage = "url(" + (re.get(slug) ?? "") + ")"   // banner
+  //   // K/re haritalarını dolduran:
+  //   const ae = async (blob, group) => {
+  //     blob && K.set(group.anime.slug, URL.createObjectURL(blob));
+  //     const b = await db.getImage(group.anime.slug, "banner");
+  //     b && re.set(group.anime.slug, URL.createObjectURL(b));
+  //   };
+  //
+  // Site bu önbelleği YALNIZCA kendi bölüm indirme akışında dolduruyor. Bizim
+  // girdilerimiz doğrudan episodeStorage'a yazıldığı için "yerel-kutuphane"
+  // slug'ına ait hiç görsel kaydedilmiyor → kapak hep boş geliyordu ve biz
+  // bunu render SONRASI DOM yamasıyla (applyLocalImages) telafi ediyorduk.
+  //
+  // Bölüm silmek kapağı işte bu yüzden bozuyordu: silme işleyicisi
+  //     A(videoFileName); const R = v(h.anime.slug); l(4, h = R);
+  // ile grubu YENİDEN ATIYOR; `h` kirlenince Svelte'in update bloğu hem
+  // avatar `src`'sini hem banner'ın `background-image`'ını boş harita
+  // değerleriyle yeniden yazıyor ve DOM yamamızı eziyor. Kapak ile bölüm
+  // listesi aynı `h` nesnesinde ({anime, episodes}) taşındığı için bölüm
+  // silmek kapağı da yeniden render ediyor.
+  //
+  // Kalıcı çözüm: önbelleği bir kez tohumla. Sonrasında site kendi olağan
+  // yolundan gerçek bir blob alıyor; her yeniden render'da (bölüm silinse de,
+  // bölüm sayısı sıfıra düşse de) kapak doğru çiziliyor. DOM yamasına gerek
+  // kalmıyor — o artık yalnızca ilk tohumlama tamamlanana kadar yedek.
+
+  var IMAGE_STORE = "new-infra-images";
+
+  function idbGetImage(db, key) {
+    return new Promise(function(resolve) {
+      try {
+        var req = db.transaction(IMAGE_STORE, "readonly").objectStore(IMAGE_STORE).get(key);
+        req.onsuccess = function() {
+          var r = req.result;
+          resolve(r && r.imageBlob ? r.imageBlob : null);
+        };
+        req.onerror = function() { resolve(null); };
+      } catch(e) { resolve(null); }
+    });
+  }
+
+  function idbPutImage(db, key, blob) {
+    return new Promise(function(resolve) {
+      try {
+        var tx = db.transaction(IMAGE_STORE, "readwrite");
+        // Site'in addImage'i ile AYNI şema: { imageId, imageBlob }
+        tx.objectStore(IMAGE_STORE).put({ imageId: key, imageBlob: blob });
+        tx.oncomplete = function() { resolve(true); };
+        tx.onerror = function() { resolve(false); };
+      } catch(e) { resolve(false); }
+    });
+  }
+
+  async function seedOneImage(db, type, url) {
+    var key = LOCAL_ANIME_SLUG + "-" + type;
+    var existing = await idbGetImage(db, key);
+    if (existing && existing.size > 0) return false; // zaten var, ağa çıkma
+    var res = await fetch(url, { cache: "force-cache" });
+    if (!res.ok) throw new Error(url + " -> HTTP " + res.status);
+    var blob = await res.blob();
+    if (!blob || !blob.size) throw new Error(url + " -> bos blob");
+    await idbPutImage(db, key, blob);
+    console.log("[LocalLib] Kapak gorseli onbellege alindi:", key, blob.size + " bayt");
+    return true;
+  }
+
+  async function seedLibraryImages() {
+    try {
+      var db = await openDB();
+      if (!db.objectStoreNames.contains(IMAGE_STORE)) {
+        // Site DB'yi henüz v2'ye yükseltmemiş (görsel store'u yok). Kendimiz
+        // yükseltme tetiklemiyoruz — şemayı site yönetsin; sonraki açılışta
+        // hazır olacak.
+        console.log("[LocalLib] Gorsel onbellegi henuz yok, tohumlama ertelendi");
+        return;
+      }
+      await seedOneImage(db, "avatar", LOCAL_AVATAR_URL);
+      await seedOneImage(db, "banner", LOCAL_BANNER_URL);
+    } catch(e) {
+      console.log("[LocalLib] Kapak gorseli tohumlanamadi:", e.message);
+    }
+  }
+
   async function detectResolution(filePath) {
     try {
       // 1. Dosya adından çözünürlük tahmini (MKV/MP4 fark etmez)
@@ -476,9 +594,9 @@
   //   B) Sidebar kartındaki card_default.png yerine placeholder/3.png göster
   //   C) Placeholder (Sezon 0 - Bölüm 0) butonundaki icon'ları kaldır + click handler
 
-  // NOT: placeholder/5.png dikey (avatar) için, placeholder/3.png yatay (banner) için
-  var LOCAL_AVATAR_URL = "https://static.openani.me/placeholder/5.png";
-  var LOCAL_BANNER_URL = "https://static.openani.me/placeholder/3.png";
+  // NOT: LOCAL_AVATAR_URL / LOCAL_BANNER_URL dosyanın başında tanımlı.
+  // Buradaki DOM yaması artık YEDEK: asıl kapak, seedLibraryImages() ile
+  // IndexedDB görsel önbelleğine yazılıyor ve site kendi yolundan çiziyor.
 
   function applyPlaceholderPatch() {
     var items = document.querySelectorAll(".episode-item");
@@ -581,28 +699,29 @@
 
     // ── MutationObserver ──
     // Svelte re-render sonrası DOM değişirse tekrar uygula
+    function touchesEpisodeItem(list) {
+      for (var i = 0; i < list.length; i++) {
+        var node = list[i];
+        if (!node || node.nodeType !== 1) continue;
+        if (node.classList && node.classList.contains('episode-item')) return true;
+        if (node.querySelectorAll && node.querySelectorAll('.episode-item').length > 0) return true;
+      }
+      return false;
+    }
+
     var _obs = new MutationObserver(function(mutations) {
       for (var m = 0; m < mutations.length; m++) {
-        // Sadece addedNodes'e bak — placeholder yeniden oluşmuş olabilir
-        var added = mutations[m].addedNodes;
-        for (var i = 0; i < added.length; i++) {
-          var node = added[i];
-          if (node.nodeType !== 1) continue;
-          // Direkt episode-item eklendiyse
-          if (node.classList && node.classList.contains('episode-item')) {
-            applyPlaceholderPatch();
-            applyLocalImages();
-            break;
-          }
-          // İçinde episode-item varsa
-          var items = node.querySelectorAll ? node.querySelectorAll('.episode-item') : [];
-          if (items.length > 0) {
-            applyPlaceholderPatch();
-            applyLocalImages();
-            break;
-          }
+        // Eklenen VE ÇIKARILAN düğümlere bak.
+        // Bölüm silmek yalnızca düğüm ÇIKARIR; eskiden sadece addedNodes'e
+        // bakıldığı için silme sonrası yeniden render'da yama hiç yenilenmiyor,
+        // kapak görseli boş kalıyordu.
+        if (touchesEpisodeItem(mutations[m].addedNodes) ||
+            touchesEpisodeItem(mutations[m].removedNodes)) {
+          applyPlaceholderPatch();
+          applyLocalImages();
+          break;
         }
-        // style değişimi (display:none/block — dialog açılınca)
+        // style değişimi (display:none/block — dialog açılınca, banner sıfırlanınca)
         if (mutations[m].type === "attributes" && mutations[m].attributeName === "style") {
           applyPlaceholderPatch();
           applyLocalImages();
@@ -665,6 +784,11 @@
     
     // Sağlık kontrolü + sıralama
     healthCheck();
+
+    // Kapak görselini site'in KENDİ veri yoluna (IndexedDB görsel önbelleği)
+    // yerleştir. Bu, kapağı bölüm ekleme/silmeden tamamen bağımsız kılan asıl
+    // düzeltme; aşağıdaki DOM yaması yalnızca yedek.
+    seedLibraryImages();
 
     // Buton dönüştürme — hemen uygula, MutationObserver DOM değişimlerinde tekrar çalışır
     patchPlaceholderButton();
