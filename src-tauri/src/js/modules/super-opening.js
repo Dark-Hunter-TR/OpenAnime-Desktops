@@ -323,9 +323,11 @@
       const img = document.createElement("img");
       video = img; // freezeSite() erken referans aldığı için isim korunuyor
       img.style.cssText = `
-        width: 100vw !important;
-        height: 100vh !important;
-        object-fit: cover !important;
+        max-width: 60vw !important;
+        max-height: 60vh !important;
+        width: auto !important;
+        height: auto !important;
+        object-fit: contain !important;
         pointer-events: none !important;
       `;
 
