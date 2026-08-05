@@ -5,13 +5,21 @@
 /// GoodbyeDPI'nin `-r` flag'inin Rust portu
 pub fn replace_host_with_host(data: &mut [u8]) -> bool {
     if let Some(pos) = find_host_header(data) {
-        // "Host: " (6 byte) → "hoSt: " (6 byte)
-        // İlk 2 harfi değiştir: "Ho" → "ho", üçüncü "s" → "S"
-        if pos + 6 <= data.len() {
-            data[pos] = b'h';     // H → h
-            data[pos + 1] = b'o';  // o → o (aynı)
-            data[pos + 2] = b'S';  // s → S
-            data[pos + 3] = b't';  // t → t (aynı)
+        // DİKKAT: find_host_header, "\r\nHost: " deseninin BAŞLANGICINI döndürür
+        // — yani `\r`'nin indeksini, "H"nin değil. Header'ın kendisi 2 byte
+        // sonra başlar. Bu +2 eksikti ve fonksiyon CRLF'i EZİYORDU:
+        //   "GET / HTTP/1.1\r\nHost: example.com"
+        //     → "GET / HTTP/1.1hoStst: example.com"
+        // İstek satırı ile Host header'ı tek satıra birleşiyor, yani ortaya
+        // tamamen bozuk bir HTTP isteği çıkıyordu. Bu yöntem 1 (Host Case),
+        // 7 (Mixed Case + Fragment) ve 8 (Full) için sessiz bozulma demekti.
+        let h = pos + 2; // "\r\n" atla → "Host: " başlangıcı
+        // "Host: " (6 byte) → "hoSt: " (6 byte); yalnızca harf kutusu değişir.
+        if h + 6 <= data.len() {
+            data[h] = b'h';     // H → h
+            data[h + 1] = b'o'; // o → o (aynı)
+            data[h + 2] = b'S'; // s → S
+            data[h + 3] = b't'; // t → t (aynı)
             // ": " aynı kalır
             return true;
         }

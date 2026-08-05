@@ -41,8 +41,19 @@
     // Gövde veya app container içinde anlamlı HTML düğümü var mı?
     const meaningfulChildren = Array.from(container.children).filter(el => {
       const tag = el.tagName.toUpperCase();
+      // NOT: el.id KULLANMA — <form> elemanlarında id/name="id" olan bir alt
+      // kontrol varsa (ör. /settings sayfasındaki bir form alanı), DOM'un
+      // "named element access" davranışı form.id'yi STRING DEĞİL o kontrol
+      // elemanına (veya RadioNodeList'e) gölgeler; .includes() olmadığından
+      // "el.id?.includes is not a function" fırlatır. Bu uncaught hata,
+      // aşağıdaki window "error" dinleyicisini tetikleyip sayfayı art arda
+      // reload ediyordu (kullanıcı "sürekli F5" gibi algılıyordu) ve /settings
+      // her reload'da yarıda kesildiğinden Süper Bildirimler'in `sn_set_enabled`
+      // IPC çağrısı Rust tarafına hiç ulaşmadan sayfa tazeleniyordu.
+      // getAttribute() bu gölgelemeden etkilenmez, her zaman gerçek string'i verir.
+      const idAttr = el.getAttribute("id") || "";
       return !["SCRIPT", "STYLE", "LINK", "META", "NOSCRIPT", "TEMPLATE"].includes(tag) &&
-             !el.id?.includes("openanime-api-status");
+             !idAttr.includes("openanime-api-status");
     });
     return meaningfulChildren.length === 0;
   }

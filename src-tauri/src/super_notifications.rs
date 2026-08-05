@@ -120,9 +120,14 @@ impl SuperNotifState {
         let state = Self::default();
         if let Ok(v) = std::fs::read_to_string(super_notif_flag_path()) {
             state.enabled.store(v.trim() != "0", Ordering::SeqCst);
-        } else {
-            state.enabled.store(true, Ordering::SeqCst);
         }
+        // Bayrak dosyası yoksa (ilk kurulum / silinmiş) GÜVENLİ varsayılan:
+        // KAPALI. Eskiden burada `true` yazılıyordu — kullanıcı ayarı daha
+        // önce elle kapatmış olsa bile (localStorage'daki gerçek tercih
+        // sayfa yüklenip JS `sn_set_enabled` çağırana kadar birkaç yüz ms
+        // gecikmeli öğrenilir), process her başlangıçta kısa süreliğine
+        // "açık" görünüyordu. `Default` zaten `AtomicBool::default() == false`
+        // olduğundan burada ayrıca yazmaya gerek yok.
         state
     }
 }
@@ -758,17 +763,50 @@ fn tray_action_path() -> std::path::PathBuf {
     std::env::temp_dir().join(crate::native_tray_menu::TRAY_ACTION_FILE)
 }
 
+/// Son işlenen sinyal içeriği, dosya başına (silme başarısız olsa bile aynı
+/// eylemi tekrar tekrar işlemeyi önler — bkz. `consume_signal` notu).
+static LAST_CONSUMED_SIGNAL: Mutex<Option<(std::path::PathBuf, String)>> = Mutex::new(None);
+
 /// Sinyal dosyasını okuyup siler; BOM/boşluk temizler. Boşsa None.
 /// (PowerShell `Set-Content -Encoding UTF8` başa BOM `\u{feff}` ekler.)
+///
+/// ÖNEMLİ: `remove_file` başarısız olabilir (ör. AV taraması dosyayı anlık
+/// kilitliyorsa) — bu durumda dosya diskte kalır ve 350ms'lik izleyici döngüsü
+/// AYNI içeriği bir SONRAKİ turda tekrar okuyup Some döndürürdü, bu da
+/// `navigate_to`'nun (tam sayfa `window.location.href` ataması, yani fiilen
+/// F5) sürekli tekrar tetiklenmesine — kullanıcının "sayfa kendiliğinden
+/// sürekli yenileniyor" olarak gördüğü davranışa — yol açardı. Silme
+/// başarısız olsa da AYNI içeriği iki kez işlememek için son işlenen değeri
+/// dosya başına saklayıp karşılaştırıyoruz.
 fn consume_signal(path: &std::path::Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
-    let _ = std::fs::remove_file(path);
     let s = content.trim_start_matches('\u{feff}').trim().to_string();
     if s.is_empty() {
-        None
-    } else {
-        Some(s)
+        return None;
     }
+
+    let removed = std::fs::remove_file(path).is_ok();
+    if !removed {
+        // Silme başarısız oldu: bu tam olarak daha önce işlediğimiz içerikse
+        // (dosya hâlâ eski haliyle diskte duruyorsa) tekrar işleme, atla.
+        let mut guard = LAST_CONSUMED_SIGNAL.lock().ok()?;
+        if let Some((last_path, last_content)) = guard.as_ref() {
+            if last_path == path && last_content == &s {
+                return None;
+            }
+        }
+        *guard = Some((path.to_path_buf(), s.clone()));
+    } else {
+        // Silme başarılıysa iz sürmeye gerek yok — bir sonraki yazım zaten
+        // yeni bir dosya oluşturacak.
+        if let Ok(mut guard) = LAST_CONSUMED_SIGNAL.lock() {
+            if guard.as_ref().map(|(p, _)| p.as_path()) == Some(path) {
+                *guard = None;
+            }
+        }
+    }
+
+    Some(s)
 }
 
 /// Özel tepsi menüsünden gelen eylemi uygular: "show" | "quit" | "nav:<url>".
@@ -796,6 +834,12 @@ pub fn restore_and_focus_window(win: &tauri::WebviewWindow) {
     }
     let _ = win.show();
     let _ = win.set_focus();
+
+    // Askıdan çıkarmayı `Focused(true)` olayına BIRAKMA: show() odak olayı
+    // üretmez, set_focus() de pencere zaten odak sahibiyse olayı yaymayabilir.
+    // O durumda webview askıda (SetIsVisible(false) + TrySuspend) kalır ve
+    // kullanıcı boş/donuk pencere görür. Bu yüzden koşulsuz geri döndürüyoruz.
+    crate::resume_webview(win);
 }
 
 /// Ana pencereyi öne getirip verilen URL'ye gider (SSE toast tıklaması + komut
@@ -938,8 +982,19 @@ pub fn ensure_tray(app: &AppHandle) -> Result<(), String> {
                                 }
                             }
                             MouseButton::Right => {
-                                crate::log!("[Tepsi] Sağ tık → open_tray_menu rect=({},{},{},{})", icon_x, icon_y, icon_w, icon_h);
-                                open_tray_menu(&app, (icon_x, icon_y, icon_w, icon_h));
+                                // Left koluyla aynı sebep: bu event Down VE Up için
+                                // ayrı ayrı geliyor. Up filtresi olmadan tek fiziksel
+                                // sağ tık `open_tray_menu`'yu İKİ KEZ tetikliyordu —
+                                // native_tray_menu::show() bir öncekini `kill()`
+                                // ettiğinden, Down'da başlatılan PowerShell/WPF süreci
+                                // (Add-Type derlemesi 500ms-1sn sürebiliyor, bkz.
+                                // native_tray_menu.rs) genelde henüz pencereyi
+                                // göstermeden Up'ta öldürülüyor; art arda tıklamalarda
+                                // veya yavaş sistemlerde menü hiç görünmeden kalabiliyordu.
+                                if button_state == MouseButtonState::Up {
+                                    crate::log!("[Tepsi] Sağ tık → open_tray_menu rect=({},{},{},{})", icon_x, icon_y, icon_w, icon_h);
+                                    open_tray_menu(&app, (icon_x, icon_y, icon_w, icon_h));
+                                }
                             }
                             _ => {}
                         }
@@ -1324,11 +1379,10 @@ pub async fn sn_open_notification(app: AppHandle, url: Option<String>) -> Result
     match url {
         Some(u) => navigate_to(&app, &u),
         None => {
-            // URL yok: yalnızca pencereyi öne getir.
+            // URL yok: yalnızca pencereyi öne getir. (restore_and_focus_window
+            // kullanılır — askıya alınmış webview'ı geri döndürmeyi de o yapar.)
             if let Some(main) = app.get_webview_window("main") {
-                let _ = main.show();
-                let _ = main.unminimize();
-                let _ = main.set_focus();
+                restore_and_focus_window(&main);
             }
         }
     }

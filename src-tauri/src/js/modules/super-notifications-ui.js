@@ -28,8 +28,35 @@ function snInvoke(cmd, args) {
 }
 
 function snIsEnabled() {
-  // Opt-in: varsayılan KAPALI.
-  return localStorage.getItem(SN_ENABLED_KEY) === "true";
+  const stored = localStorage.getItem(SN_ENABLED_KEY);
+  if (stored === null) {
+    // Kullanıcı henüz bir tercih belirlemedi: girişliyse varsayılan AÇIK
+    // (bir kere hesaplanıp kalıcı tercih olarak yazılır — sonraki
+    // logout/login döngülerinde kullanıcının kendi seçimini ezmez).
+    const loggedIn = snReadAccount().loggedIn;
+    if (loggedIn) localStorage.setItem(SN_ENABLED_KEY, "true");
+    return loggedIn;
+  }
+  return stored === "true";
+}
+
+// Rust tarafındaki gerçek dinleyici durumunu (bellekte tutulur, kalıcı
+// değil) istemci tercihi + oturum durumuyla senkron TUTAR. Yalnızca
+// başlangıçta değil, `snRelayAccount`'un periyodik kontrollerinde de
+// çağrılır — aksi halde: sayfa daha hydrate OLMADAN ilk kontrol "girişli
+// değil" sonucu verip dinleyiciyi kapatıyor, sonra giriş algılansa bile
+// (yalnızca UI toggle'ı güncelleniyordu) Rust'a bir daha HİÇ haber
+// verilmiyordu — ayarlarda "Etkin" görünürken arka planda dinleyici hiç
+// çalışmıyordu.
+let snLastSyncedEnabled = null;
+
+function snSyncEnabledState(loggedIn) {
+  const target = !!loggedIn && snIsEnabled();
+  if (target === snLastSyncedEnabled) return;
+  snLastSyncedEnabled = target;
+  snInvoke("sn_set_enabled", { enabled: target })
+    .then(() => console.log("[SüperBildirim] Dinleyici senkronize edildi:", target))
+    .catch(() => {});
 }
 
 // ── Gateway-Token köprüsü ─────────────────────────────────────
@@ -254,6 +281,14 @@ function snRelayAccount() {
     snInvoke("sn_set_account", a).catch(() => {});
   }
 
+  // Rust tarafındaki dinleyici bayrağını gerçek tercihle (localStorage +
+  // giriş durumu) periyodik olarak hizala — bkz. snSyncEnabledState yorumu.
+  // Bu çağrı olmadan fonksiyon tanımlıydı ama HİÇ tetiklenmiyordu; Rust'ın
+  // `enabled` durumu (ör. bir IPC çağrısı kaçırılırsa veya süreç başlangıç
+  // varsayılanı yanlışsa) gerçek tercihten sapıp bir daha KENDİLİĞİNDEN
+  // düzelmiyordu — yalnızca bir sonraki elle toggle tıklaması düzeltirdi.
+  snSyncEnabledState(a.loggedIn);
+
   // Ayarlar sayfası açıksa, giriş durumuna göre dinamik olarak açma/kapama durumunu güncelle
   const card = document.getElementById("tauri-super-notifications-setting");
   if (card) {
@@ -403,14 +438,16 @@ function initSuperNotifications() {
   snRelayGatewayToken();
   // Token oturum içinde yenilenebiliyor — periyodik tazele (fetch/XHR aynası
   // yakalayamazsa sessionStorage'dan gelen yedek yol).
-  setInterval(snRelayGatewayToken, SN_TOKEN_RELAY_MS);
+  // oaBgInterval: tepsideyken durur. Token'ı Rust zaten almış durumda ve SSE
+  // dinleyicisi Rust tarafında çalışıyor — sayfa gizliyken tazelemeye gerek yok.
+  oaBgInterval(snRelayGatewayToken, SN_TOKEN_RELAY_MS);
 
   // Hesap bilgisini özel tepsi menüsü için yansıt. Hydration sonrası oturum
   // öğeleri geç belirebildiğinden birkaç kez erken dene, sonra seyrek tazele.
   snRelayAccount();
   setTimeout(snRelayAccount, 2000);
   setTimeout(snRelayAccount, 5000);
-  setInterval(snRelayAccount, 10000);
+  oaBgInterval(snRelayAccount, 10000);
 
   // Rust'taki ayar durumu bellekte tutuluyor (kalıcı değil). Uygulama her
   // açıldığında localStorage'daki kullanıcı tercihini Rust'a geri bildir,

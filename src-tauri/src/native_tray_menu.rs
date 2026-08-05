@@ -167,7 +167,7 @@ Add-Type -AssemblyName System.Drawing
 # Derlenmiş DLL'i %TEMP%'e BİR KEZ yazıp sonraki her açılışta -Path ile
 # (derlemesiz, neredeyse anında) yüklüyoruz.
 if (-not ('OaMouseHook' -as [type])) {
-    $hookDllPath = Join-Path $env:TEMP "OpenAnime_TrayHook_v1.dll"
+    $hookDllPath = Join-Path $env:TEMP "OpenAnime_TrayHook_v2.dll"
     if (Test-Path $hookDllPath) {
         try { Add-Type -Path $hookDllPath -ErrorAction SilentlyContinue } catch {}
     }
@@ -229,14 +229,42 @@ public class OaMouseHook {
     private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+    // DPI farkındalığı. Ayrı bir Add-Type ile eklemek her menü açılışına
+    // 500ms+ C# derleme maliyeti bindirirdi; önbelleklenen bu DLL'e koyunca
+    // maliyet yalnızca ilk çalıştırmada oluşur.
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDPIAware();
 }
 "@
     try {
         Add-Type -TypeDefinition $oaMouseHookSrc -OutputAssembly $hookDllPath -ErrorAction SilentlyContinue
+        # ÖNEMLİ: `-OutputAssembly` yalnızca DLL'i DİSKE YAZAR — tipi geçerli
+        # oturuma YÜKLEMEZ. Bu yüzden DLL'i ilk kez üreten çalıştırmada
+        # 'OaMouseHook' hâlâ tanımsız kalıyordu ve aşağıdaki
+        # `if ('OaMouseHook' -as [type])` guard'ı yüzünden fare kancası SESSİZCE
+        # kurulmuyordu (yani "dışarı tıklayınca kapan" ilk açılışta hiç
+        # çalışmıyordu; ancak ikinci çalıştırmada üstteki `Add-Type -Path`
+        # devreye girdiğinde çalışıyordu). Yazdıktan hemen sonra yükle.
+        if (-not ('OaMouseHook' -as [type])) {
+            try { Add-Type -Path $hookDllPath -ErrorAction SilentlyContinue } catch {}
+        }
     } catch {
         try { Add-Type -TypeDefinition $oaMouseHookSrc -ErrorAction SilentlyContinue } catch {}
     }
 }
+
+# ── DPI FARKINDALIĞI — İLK PENCEREDEN ÖNCE ÇAĞRILMALI ────────────────
+# Rust bize tepsi ikonunun dikdörtgenini GERÇEK FİZİKSEL piksel olarak veriyor
+# (ör. 1575,947). Süreç DPI-UNAWARE olduğunda ise System.Windows.Forms.Screen
+# SANALLAŞTIRILMIŞ koordinat döndürüyor: %125 ölçekli 1920x1080 bir ekran
+# 1536x864 olarak görünüyor. İki farklı koordinat uzayı karşılaştırılınca
+# ikon merkezi (1600) çalışma alanının sağ kenarından (1536) büyük çıkıp
+# "görev çubuğu SAĞDA" sanılıyordu → menü yanlış kenara yaslanıyordu.
+# DPI-aware olunca Forms da fiziksel piksel döndürür (1920x1020), ikon
+# rect'iyle AYNI uzaya gelir; WPF'in TransformFromDevice'ı da fiziksel→DIP
+# dönüşümünü doğru yapar. Ekran boyutu/ölçek ne olursa olsun tutarlı çalışır.
+if ('OaMouseHook' -as [type]) { try { [OaMouseHook]::SetProcessDPIAware() | Out-Null } catch {} }
 
 $signalFile = __SIGNALFILE_PS__
 
@@ -252,7 +280,7 @@ $iconHeightPx = __ICON_HEIGHT__
         Title="TrayMenu" SizeToContent="WidthAndHeight"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" WindowStartupLocation="Manual"
-        ShowActivated="True" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        ShowActivated="False" UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
         RenderOptions.ClearTypeHint="Enabled">
     <Window.Resources>
@@ -304,6 +332,9 @@ if ($items) {
 }
 
 $script:hookInstalled = $false
+# Pencerenin gerçekten yerleşip gösterildiği an. `Deactivated` guard'ı bunu
+# kullanır (bkz. Add_Deactivated).
+$script:shownAt = $null
 
 $window.Add_Loaded({
     # Konumlandırma: tepsi İKONUNUN kendi dikdörtgenine göre (imlece göre
@@ -348,23 +379,82 @@ $window.Add_Loaded({
         $bh = $bp2.Y
     }
 
-    # Menüyü ikonun sağ üst köşesine göre, yukarı-sola açılacak şekilde
-    # konumlandır (tepsi sağ altta olduğunda Windows'un kendi menülerinin
-    # davrandığı gibi).
-    $left = $ix + $iw - $w
-    $top = $iy - $h
+    # ── Konumlandırma (native Windows tepsi menüsü davranışı) ─────────────
+    #
+    # 1) GÖLGE TELAFİSİ: XAML'deki dış `<Border Padding="10">` yalnızca drop
+    #    shadow için var ve ActualWidth/ActualHeight'a DAHİL. Hizalamayı ham
+    #    pencere ölçüsüyle yapmak, GÖRÜNÜR menüyü ikondan/görev çubuğundan
+    #    10px kaydırıyordu. Artık hizalama görünür dikdörtgen üzerinden.
+    #
+    # 2) DİKEY ÇAPA: Eskiden `$top = $iy - $h` ile menü İKONUN ÜST KENARINA
+    #    yaslanıyordu. Ama ikon görev çubuğunun İÇİNDE ve dikey konumu görev
+    #    çubuğu yüksekliğine/DPI'a/ikonun taşma panelinde olup olmamasına göre
+    #    değişiyor → menü her açılışta biraz farklı yerde çıkıyordu (kullanıcının
+    #    "stabil değil" dediği davranış). Native menüler (TrackPopupMenu +
+    #    TPM_BOTTOMALIGN) menüyü ÇALIŞMA ALANI kenarına yaslar; çalışma alanı
+    #    kenarı sabit bir referans olduğu için menü her seferinde AYNI yerde
+    #    açılır. Artık öyle yapıyoruz.
+    #
+    # 3) Dört görev çubuğu kenarı da (alt/üst/sol/sağ) destekleniyor.
+    $shadow = 10.0
+    $vw = $w - 2 * $shadow   # görünür menü genişliği
+    $vh = $h - 2 * $shadow   # görünür menü yüksekliği
+    $gap = 2.0               # görev çubuğu ile menü arasındaki nefes payı
 
-    # Kelepçeleme kuralları
-    if ($left -lt $bx) { $left = $bx }
-    if ($top -lt $by) { $top = $iy + $ih }
-    if (($left + $w) -gt ($bx + $bw)) { $left = ($bx + $bw) - $w - 4 }
-    if (($top + $h) -gt ($by + $bh)) { $top = ($by + $bh) - $h - 4 }
+    $iconCx = $ix + $iw / 2
+    $iconCy = $iy + $ih / 2
 
-    $window.Left = $left
-    $window.Top = $top
+    # Görev çubuğu hangi kenarda? İkon, çalışma alanının DIŞINDA kalan
+    # kenardadır (çalışma alanı görev çubuğunu zaten dışlar).
+    $tbTop   = $iconCy -le $by
+    $tbLeft  = $iconCx -le $bx
+    $tbRight = $iconCx -ge ($bx + $bw)
 
-    $window.Activate()
-    $window.Focus() | Out-Null
+    if ($tbLeft -or $tbRight) {
+        # Dikey görev çubuğu: menü ikonun yanında, dikeyde ikonla ortalanır.
+        $vy = $iconCy - $vh / 2
+        if ($tbLeft) { $vx = $bx + $gap } else { $vx = ($bx + $bw) - $vw - $gap }
+    } else {
+        # Yatay görev çubuğu (en yaygın): menünün SAĞ kenarı ikonun sağ
+        # kenarıyla hizalı.
+        $vx = $ix + $iw - $vw
+        if ($tbTop) {
+            # Görev çubuğu ÜSTTE: ikonun ALT kenarı ile çalışma alanının ÜST
+            # kenarından hangisi daha AŞAĞIDAYSA ona yaslan.
+            $vy = [Math]::Max(($iy + $ih), $by) + $gap
+        } else {
+            # Görev çubuğu ALTTA. Menünün alt kenarı; ikonun ÜST kenarı ile
+            # çalışma alanının ALT kenarından hangisi daha YUKARIDAYSA ona yaslanır:
+            #   • İkon doğrudan görev çubuğundaysa -> ikonun üstü görev çubuğunun
+            #     içinde kalır, çalışma alanı kenarı seçilir. Sabit referans →
+            #     menü her açılışta AYNI yerde (native/TranslucentTB davranışı).
+            #   • İkon "gizli simgeler" panelindeyse -> o panel görev çubuğunun
+            #     ÜSTÜNDE yüzdüğü için ikonun üst kenarı seçilir; menü ikonun
+            #     hemen üstünde açılır, panelin üzerine binmez.
+            # Ölçüm: çalışma alanı alt kenarı 1020, panel içindeki ikon üstü 947.
+            $vy = [Math]::Min($iy, ($by + $bh)) - $vh - $gap
+        }
+    }
+
+    # Çalışma alanına kelepçele — GÖRÜNÜR dikdörtgen üzerinden, böylece menü
+    # hiçbir kenardan taşmaz (çoklu monitörde de doğru: bounds ikonun bulunduğu
+    # monitörden geliyor).
+    if ($vx -lt $bx) { $vx = $bx }
+    if (($vx + $vw) -gt ($bx + $bw)) { $vx = ($bx + $bw) - $vw }
+    if ($vy -lt $by) { $vy = $by }
+    if (($vy + $vh) -gt ($by + $bh)) { $vy = ($by + $bh) - $vh }
+
+    # Görünür dikdörtgen -> pencere konumu (gölge dolgusunu geri ekle).
+    $window.Left = $vx - $shadow
+    $window.Top  = $vy - $shadow
+
+    # ODAK ÇALMIYORUZ (bilinçli). Eskiden burada Activate()+Focus() vardı ve
+    # Windows 11'in "gizli simgeleri göster" taşma paneli LIGHT-DISMISS bir
+    # yüzey olduğu için odağı kaybettiği anda KAPANIYORDU — kullanıcı menüyü
+    # açar açmaz tepsi paneli kapanıyordu. Pencere ShowActivated="False" ile
+    # gösterildiğinden ve artık aktivasyon istemediğimizden panel açık kalır.
+    # Dismiss zaten odağa DEĞİL, global fare kancasına (konum bazlı) dayanıyor;
+    # bu yüzden odak almamak dismiss davranışını bozmaz.
 
     # Fare kancasını pencere yerleşip konumlandıktan SONRA kur — açılışı
     # tetikleyen tıklamanın kendisi "dışarı tıklama" sayılıp menüyü anında
@@ -391,17 +481,63 @@ $window.Add_Loaded({
             [OaMouseHook]::add_OnClick([Action[int,int]]$outsideClickAction)
         }
     } catch {}
+
+    # Artık gösterildik — `Deactivated` bu andan itibaren geçerli sayılır.
+    $script:shownAt = [DateTime]::UtcNow
 })
 
 $window.Add_Closed({
     if ($script:hookInstalled) { try { [OaMouseHook]::Uninstall() } catch {} }
 })
 
+# DISMISS MANTIĞI — iki mekanizma, net iş bölümü:
+#
+#   BİRİNCİL: global fare kancası (WH_MOUSE_LL). Menüyü YALNIZCA gerçek bir
+#   dışarı TIKLAMASINDA kapatır. Doğru davranışın kaynağı bu:
+#     • Menü İÇİNDE hover/scroll/gezinme → hiçbir tıklama yok → KAPANMAZ.
+#       (Kanca yalnızca WM_LBUTTONDOWN/WM_RBUTTONDOWN dinler; hover ve
+#       tekerlek olayları hiç gelmez.)
+#     • Menü içine tıklama → nokta pencere dikdörtgeninin içinde → KAPANMAZ
+#       (öğe kendi MouseLeftButtonUp'ında zaten kapatıyor).
+#     • Görev çubuğu, "gizli simgeleri göster" paneli, masaüstü, başka bir
+#       pencere → nokta dışarıda → KAPANIR.
+#
+#   YEDEK: `Deactivated`. SADECE kanca kurulamadıysa devreye girer.
+#
+# NEDEN KOŞULA BAĞLANDI: `Deactivated` yalnızca "odak kaybı"nı bilir, farenin
+# NEREDE olduğunu bilmez. Menü, tepsi ikonundan tetiklenen ARKA PLAN bir
+# PowerShell sürecinde açılıyor ve Windows'un foreground kilidi böyle süreçlere
+# SetForegroundWindow'u sık sık reddediyor (bkz. dosya başındaki not). Bu yüzden
+# kullanıcı menünün İÇİNDE gezinirken bile odak kabuğa/görev çubuğuna kayabiliyor
+# ve Deactivated tetiklenip menüyü kullanıcının burnunun dibinde kapatıyordu —
+# istenen "menü içindeyken KESİNLİKLE kapanmasın" kuralının doğrudan ihlali.
+# Kanca zaten daha isabetli (konum bazlı) karar verdiğinden, kanca varken
+# Deactivated'a hiç güvenmiyoruz.
 $window.Add_Deactivated({
+    # Kanca çalışıyorsa dismiss kararı ONUN — odak kaybına göre kapatma.
+    if ($script:hookInstalled) { return }
+    # Kancasız yedek yol: açılıştaki yerleşme anında gelen (pencere daha
+    # görünmeden foreground reddedilmesinden kaynaklanan) Deactivated'ı yut.
+    if ($null -eq $script:shownAt) { return }
+    if (([DateTime]::UtcNow - $script:shownAt).TotalMilliseconds -lt 700) { return }
     try { $window.Close() } catch {}
 })
 
 $window.Add_KeyDown({ if ($_.Key -eq 'Escape') { try { $window.Close() } catch {} } })
 
-$window.ShowDialog() | Out-Null
+# DEJENERE DURUM KORUMASI: Fare kancası kurulamıyorsa (tip hiç yüklenemedi)
+# geriye dismiss için TEK yol olarak odak kaybı kalır. O senaryoda pencereyi
+# istisnai olarak aktive edilebilir yaparız — aksi halde menü ne tıklamayla ne
+# odakla kapanabilir, ekranda ASILI KALIRDI. Kanca varsa aktivasyonu bilerek
+# İSTEMİYORUZ (tepsi taşma paneli açık kalsın).
+# Bu kontrol Show'dan ÖNCE yapılmalı; kanca tipinin varlığı burada zaten belli.
+if (-not ('OaMouseHook' -as [type])) { $window.ShowActivated = $true }
+
+# ShowDialog() KULLANILMIYOR: modal gösterim pencereyi her hâlükârda aktive
+# eder ve ShowActivated="False" ayarını yok sayar — bu da tepsi taşma panelini
+# yine kapatırdı. Application.Run, Show() semantiğiyle çalışıp ShowActivated'a
+# saygı duyar; pencere kapandığında mesaj döngüsü biter ve süreç çıkar.
+$app = New-Object System.Windows.Application
+$app.ShutdownMode = [System.Windows.ShutdownMode]::OnLastWindowClose
+$app.Run($window) | Out-Null
 "###;

@@ -90,49 +90,124 @@ pub(crate) fn ps_literal(s: Option<&str>) -> String {
     }
 }
 
-/// Bağımlılıksız UTF-16LE → Base64 (PowerShell -EncodedCommand için).
-fn encode_base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = Vec::with_capacity((bytes.len() + 2) / 3 * 4);
-    let mut i = 0;
-    while i < bytes.len() {
-        let b0 = bytes[i] as u32;
-        let b1 = if i + 1 < bytes.len() { bytes[i + 1] as u32 } else { 0 };
-        let b2 = if i + 2 < bytes.len() { bytes[i + 2] as u32 } else { 0 };
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[((n >> 18) & 0x3F) as usize]);
-        out.push(TABLE[((n >> 12) & 0x3F) as usize]);
-        out.push(if i + 1 < bytes.len() { TABLE[((n >> 6) & 0x3F) as usize] } else { b'=' });
-        out.push(if i + 2 < bytes.len() { TABLE[(n & 0x3F) as usize] } else { b'=' });
-        i += 3;
+/// Geçici PowerShell script dosyalarının ön eki (bkz. run_ps_script).
+const PS_SCRIPT_PREFIX: &str = "openanime_ps_";
+
+/// %TEMP%'te kalmış eski geçici script dosyalarını (5 dk+) siler.
+/// Script'ler ateşle-unut çalıştığından süreç bitince kendiliğinden
+/// silinemiyor; biriktirmemek için her çağrıda süpürüyoruz.
+fn cleanup_stale_ps_scripts() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(PS_SCRIPT_PREFIX) || !name.ends_with(".ps1") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .map(|age| age.as_secs() > 300)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
-    String::from_utf8(out).unwrap()
 }
 
-/// PowerShell script'ini gizli pencerede (-EncodedCommand UTF-16LE→Base64) çalıştırır.
+/// PowerShell script'ini gizli pencerede çalıştırır (geçici .ps1 + `-File`).
 /// Ateşle-unut. Toast ve tepsi menüsü ortak kullanır. Çağıran, dönen `Child`'ı
 /// isterse tutup daha sonra `kill()` edebilir (bkz. native_tray_menu — üst üste
 /// açılan menü pencerelerini önlemek için kullanılıyor).
+///
+/// NEDEN `-EncodedCommand` DEĞİL (kritik):
+/// Script UTF-16LE'ye çevrilip base64'lendiğinde boyutu ~2.67 KAT artıyor ve
+/// tamamı `CreateProcess`'in 32.767 karakterlik KOMUT SATIRI sınırına sığmak
+/// zorunda. Tepsi menüsü script'i (gömülü C# fare kancası + XAML) bu sınırı
+/// aşıyordu: ~12.8 KB'lik script → ~34.2 KB komut satırı. Sonuç: `spawn()`
+/// os error 206 (ERROR_FILENAME_EXCED_RANGE) ile başarısız oluyor, PowerShell
+/// HİÇ BAŞLAMIYOR ve menü hiç görünmüyordu. `.spawn().ok()` bu hatayı da
+/// yuttuğu için uzun süre teşhis edilemedi.
+/// Script'i diske yazıp `-File` ile vermek bu sınırı tamamen ortadan kaldırır.
+///
+/// TEŞHİS NOTU: stderr arka planda okunup loglanıyor (execution policy, AMSI/AV
+/// blokajı, XAML/Add-Type çalışma zamanı hataları görünür olsun diye); spawn'ın
+/// kendisi başarısız olursa da ayrıca loglanıyor.
 pub(crate) fn run_ps_script(script: &str) -> Option<std::process::Child> {
+    use std::io::Read;
     use std::os::windows::process::CommandExt;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    let utf16: Vec<u16> = script.encode_utf16().collect();
-    let bytes: Vec<u8> = utf16.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let b64 = encode_base64(&bytes);
+    cleanup_stale_ps_scripts();
 
-    Command::new("powershell.exe")
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let script_path = std::env::temp_dir().join(format!("{}{}.ps1", PS_SCRIPT_PREFIX, stamp));
+
+    // UTF-8 + BOM: PowerShell 5.1, BOM'SUZ bir .ps1'i sistem ANSI kod sayfasıyla
+    // okur — Türkçe karakterler ve XAML içeriği bozulurdu. BOM ile UTF-8 olarak
+    // doğru çözümlenir.
+    let mut bytes = Vec::with_capacity(script.len() + 3);
+    bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    bytes.extend_from_slice(script.as_bytes());
+    if let Err(e) = std::fs::write(&script_path, &bytes) {
+        crate::log!("[PowerShell] Geçici script yazılamadı: {}", e);
+        return None;
+    }
+
+    let mut child = match Command::new("powershell.exe")
         .args([
             "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
             "-WindowStyle",
             "Hidden",
-            "-EncodedCommand",
-            &b64,
+            "-File",
         ])
+        .arg(&script_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .ok()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            crate::log!("[PowerShell] Süreç başlatılamadı: {}", e);
+            let _ = std::fs::remove_file(&script_path);
+            return None;
+        }
+    };
+
+    // stderr'i arka planda oku+logla (execution policy / AMSI / XAML hatalarını
+    // görünür kılar). stdout'u da boşaltıyoruz — okunmazsa pipe dolup PowerShell
+    // sessizce bloke olabilir.
+    if let Some(mut stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            if stderr.read_to_string(&mut buf).is_ok() {
+                let trimmed = buf.trim();
+                if !trimmed.is_empty() {
+                    crate::log!("[PowerShell] stderr: {}", trimmed);
+                }
+            }
+        });
+    }
+    if let Some(mut stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = stdout.read_to_string(&mut buf);
+        });
+    }
+
+    Some(child)
 }
 
 /// Gömülü ikonu %TEMP%'e (bir kez) yazar, mutlak path'i döner.

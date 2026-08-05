@@ -3,6 +3,7 @@
 
 use crate::dbg_log;
 
+pub mod bypass_detect;
 mod http_mod;
 pub mod methods;
 pub mod remote_proxy;
@@ -53,17 +54,35 @@ pub struct DpiProxyManager {
 impl DpiProxyManager {
     pub fn new(app: &tauri::AppHandle) -> Self {
         let settings = GoodbyeSettings::load(app);
-        let system_running = is_system_goodbye_running();
 
-        dbg_log!(
-            "[DPI Proxy] Sistemde harici GoodbyeDPI: {}",
-            if system_running { "EVET" } else { "HAYIR" }
-        );
+        // Harici DPI bypass araçlarını tara ve fragmentasyon davranışını buna
+        // göre ayarla (bkz. bypass_detect). Açılış özeti her zaman loglanır.
+        let behavior = bypass_detect::refresh_and_log(true);
 
-        // system_goodbye_running alanını güncelle
+        // Geriye dönük alan: UI "sistemde harici araç var mı" bilgisini bundan
+        // okuyor. Artık yalnızca GoodbyeDPI değil, tespit edilen HERHANGİ bir
+        // aracı (Zapret/ByeDPI/WARP/WinDivert) kapsıyor.
+        let system_running = behavior != bypass_detect::ProxyBehavior::Fragment;
+
         let mut settings = settings;
         settings.system_goodbye_running = system_running;
         settings.save(app);
+
+        // Periyodik yeniden tarama: kullanıcı uygulama açıkken GoodbyeDPI'ı
+        // başlatabilir/kapatabilir ya da WARP'ı açıp kapatabilir. Yalnızca
+        // başlangıçta bakmak bu durumları kaçırırdı. Log yalnızca durum
+        // DEĞİŞTİĞİNDE basılır (force_log=false), böylece log kirlenmez.
+        tauri::async_runtime::spawn(async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                // Tespit senkron komutlar çalıştırır (tasklist/sc/netsh);
+                // async çalıştırıcıyı bloklamamak için ayrı thread'e alınır.
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    bypass_detect::refresh_and_log(false)
+                })
+                .await;
+            }
+        });
 
         Self {
             settings: Mutex::new(settings),
@@ -346,29 +365,10 @@ async fn check_openanime_connection(use_proxy: bool) -> ConnectionResult {
     }
 }
 
-/// Sistem genelinde GoodbyeDPI çalışıyor mu kontrol et
-fn is_system_goodbye_running() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let mut cmd = std::process::Command::new("tasklist");
-        cmd.args(&["/FI", "IMAGENAME eq goodbyedpi.exe", "/NH"]);
-        // Konsol penceresi açılmasını engelle
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        let output = cmd.output();
-        match output {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                stdout.contains("goodbyedpi.exe")
-            }
-            Err(_) => false,
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
-}
+// NOT: Eski `is_system_goodbye_running()` kaldırıldı. Yalnızca
+// `goodbyedpi.exe` process adına bakıyordu ve sonucu HİÇBİR davranışa
+// bağlanmıyordu (sadece settings'e yazılıp UI'a raporlanıyordu) — yani
+// tespit edilse bile fragmentasyon yine de uygulanıyor, araçlar çakışıyordu.
+// Yerini bypass_detect modülü aldı: Zapret/GoodbyeDPI/ByeDPI/WARP process
+// ve servis taraması + WinDivert sürücüsü + WARP ağ arayüzü kontrolü, ve
+// sonucun tcp_forward'daki fragmentasyon/DoH kararına fiilen bağlanması.

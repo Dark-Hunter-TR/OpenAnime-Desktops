@@ -21,7 +21,8 @@
     "createUpdaterArtifacts": true,
     "targets": ["nsis", "dmg"],
     "resources": {
-      "../static/superlogo.mp4": "superlogo.mp4"
+      "../static/superlogo.mp4": "superlogo.mp4",
+      "../static/Muptezel-anime.gif": "Muptezel-anime.gif"
     },
     "icon": [
       "icons/icon.png",

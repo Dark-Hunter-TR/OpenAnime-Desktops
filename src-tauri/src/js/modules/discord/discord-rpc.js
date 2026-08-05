@@ -498,6 +498,9 @@ if (document.body) {
 // Oynuyorken timer senkronizasyonu için günceller
 // Pause'da sadece state metni güncellenir (forceUpdate olmadan timer gönderilmez)
 // Özel olaylar (play/pause/seek/sayfa değişimi) forceUpdate ile ayrıca tetiklenir
-setInterval(() => {
+// oaBgInterval(..., keepInMedia=true): "hidden" modunda (tepside, video yok)
+// durur; "media" modunda (tepside ama video oynuyor) ÇALIŞMAYA DEVAM EDER —
+// kullanıcı fiilen izlediği için Discord'daki bölüm/ilerleme bilgisi canlı kalmalı.
+oaBgInterval(() => {
   updatePresenceFromDOM();
-}, 5000);
+}, 5000, true);

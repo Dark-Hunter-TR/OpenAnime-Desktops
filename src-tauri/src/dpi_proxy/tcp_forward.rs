@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::bypass_detect;
 use super::methods::DpiMethod;
 use super::tls_detect;
 use crate::{dbg_log, log};
@@ -74,6 +75,14 @@ pub async fn start_proxy_internal(
 
 /// DNS engellemelerini aşmak için hedef adresi Cloudflare DoH ile çözer
 async fn resolve_target_doh(target: &str) -> String {
+    // Cloudflare WARP aktifken DNS'i EZMİYORUZ: WARP kendi çözümleyicisini ve
+    // yönlendirmesini kuruyor; üstüne DoH ile bulduğumuz IP'yi dayatmak WARP'ın
+    // tüneliyle çakışıp bağlantıyı bozabiliyor (bkz. bypass_detect).
+    if !bypass_detect::current_behavior().allows_doh_override() {
+        dbg_log!("[DPI Proxy] WARP aktif — DoH DNS ezmesi atlandı: {}", target);
+        return target.to_string();
+    }
+
     let host = target.split(':').next().unwrap_or(target);
     if host == "openani.me" || host.ends_with(".openani.me") {
         if let Some(ip) = super::remote_proxy::resolve_dns_doh(host).await {
@@ -240,6 +249,20 @@ async fn handle_http_request(
     let mut data = first_data.to_vec();
     dbg_log!("[DPI Proxy]   HTTP veri boyutu: {} bayt, fragment: {}", data.len(), method.http_fragment_size);
 
+    // Harici araç aktifse hiçbir manipülasyon yapma — düz ilet (bkz. bypass_detect).
+    // Header case/space oyunları da DPI manipülasyonudur; harici araç zaten
+    // paket seviyesinde müdahale ediyorsa üst üste binmemeleri gerekir.
+    let behavior = bypass_detect::current_behavior();
+    if !behavior.allows_fragmentation() {
+        dbg_log!(
+            "[DPI Proxy]   Harici bypass aracı aktif ({:?}) — HTTP manipülasyonu/fragmentasyonu atlandı",
+            behavior
+        );
+        server.write_all(&data).await.map_err(|e| e.to_string())?;
+        bidirectional_copy(client, server).await;
+        return Ok(());
+    }
+
     // Header manipülasyonu
     if method.http_host_removespace || method.http_host_mixedcase || method.http_host_case {
         let mut manipulations: Vec<&str> = Vec::new();
@@ -309,6 +332,20 @@ async fn handle_tls_tunnel(
 
     if n == 0 {
         dbg_log!("[DPI Proxy]   TLS ClientHello boş (bağlantı kapandı)");
+        return Ok(());
+    }
+
+    // Harici bir DPI bypass aracı (GoodbyeDPI/Zapret/ByeDPI) veya WARP aktifse
+    // ClientHello'ya DOKUNMA. İki katman üst üste parçalarsa handshake bozulup
+    // bağlantı düşebiliyor — bu durumda tek yaptığımız düz tünelleme olmalı.
+    let behavior = bypass_detect::current_behavior();
+    if !behavior.allows_fragmentation() {
+        dbg_log!(
+            "[DPI Proxy]   Harici bypass aracı aktif ({:?}) — TLS fragmentasyonu atlandı, {} bayt düz iletiliyor",
+            behavior,
+            n
+        );
+        let _ = server.write_all(&buf[..n]).await;
         return Ok(());
     }
 

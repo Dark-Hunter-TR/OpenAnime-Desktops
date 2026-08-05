@@ -62,7 +62,9 @@
   console.log("[DPI-Init] 🔵 Fetch interceptor aktif. Eşik:", DPI_FAIL_THRESHOLD, "hata");
 
   // Periodik kontrol (her 15 sn'de bir)
-  setInterval(function() {
+  // oaBgInterval: tepsiye gizlenince durur — kullanıcı görmezken 15 sn'de bir
+  // ağ isteği atmanın anlamı yok (bkz. modules/background-mode.js).
+  oaBgInterval(function() {
     if (dpiTriggered) return;
     fetch("https://openani.me/?health=1", { method: "HEAD", mode: "cors", cache: "no-store" })
       .then(function(r) {
@@ -101,7 +103,15 @@
     for (var i = 0; i < mutations.length; i++) {
       var target = mutations[i].target;
       while (target) {
-        if (target.id && target.id.indexOf("tauri-") === 0) return true;
+        // NOT: target.id KULLANMA — <form> içinde id/name="id" olan bir alt
+        // kontrol varsa DOM'un "named element access" davranışı form.id'yi
+        // string yerine o kontrole gölgeler, .indexOf() olmadığından
+        // TypeError fırlatır (bkz. page-recovery.js'teki aynı gölgeleme notu).
+        // Bu fonksiyon HER mutation batch'inde çalıştığından, o hata sürekli
+        // tekrar tetiklenip window "error" event'i üzerinden art arda sayfa
+        // reload'una yol açabiliyordu. getAttribute() gölgelemeden etkilenmez.
+        var targetId = (target.nodeType === 1 && target.getAttribute) ? target.getAttribute("id") : null;
+        if (targetId && targetId.indexOf("tauri-") === 0) return true;
         target = target.parentElement;
       }
     }
@@ -144,14 +154,17 @@
   }
 
   var initAttempts = 0;
-  const interval = setInterval(() => {
+  // 100 ms'lik kurulum döngüsü: normalde setupTauriWindow() başarınca kendini
+  // kapatır, ama başarısız kalırsa ömür boyu 10 Hz çalışırdı — tepsideyken bile.
+  // oaBgInterval ile arka planda duraklar.
+  const interval = oaBgInterval(() => {
     initAttempts++;
     applyZoom(getActiveZoom());
     if (document.body) {
       startObserver();
       if (setupTauriWindow()) {
         setupDragRegion();
-        clearInterval(interval);
+        interval.stop();
         console.log("[OpenAnime Init] ✅ Tauri window setup tamamlandı (deneme #" + initAttempts + ")");
         try {
           if (window.parent && typeof window.parent.postMessage === "function") {

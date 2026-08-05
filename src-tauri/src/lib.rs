@@ -44,8 +44,11 @@ pub struct PerfState {
     pub player_playing: Mutex<HashMap<String, bool>>,
     /// Herhangi bir pencere odakta mı
     pub focused: Mutex<bool>,
-    /// Pencere etiketi -> WebView2 şu an askıya alınmış mı
-    pub suspended: Mutex<HashMap<String, bool>>,
+    /// Pencere etiketi -> WebView2'ye en son uygulanan arka plan durumu.
+    /// (Eskiden `bool` idi; video oynarken kullanılan ara durum için 3 durumlu
+    /// `BgMode`'a çevrildi — bkz. set_background_suspend.)
+    #[cfg(target_os = "windows")]
+    pub suspended: Mutex<HashMap<String, BgMode>>,
 }
 
 #[allow(non_snake_case)]
@@ -254,18 +257,39 @@ fn refresh_perf_mode(app: &tauri::AppHandle) {
     }
 }
 
-/// WebView2'yi arka planda askıya alır / geri döndürür.
+/// Bir pencerenin arka plan durumu — ÜÇ durumlu.
 ///
-/// suspend=true  → controller görünmez yapılır + ICoreWebView2_3::TrySuspend
-///                 (tüm renderer'lar dondurulur) + working set trim.
-/// suspend=false → Resume + controller yeniden görünür.
+/// Eskiden tek bir `suspend: bool` vardı ve "video oynuyorsa hiçbir şey yapma"
+/// deniyordu. Sonuç: tepsiye küçültülüp video izlenirken sayfa ÖN PLANDAKİ gibi
+/// tam hızda render etmeye devam ediyordu (kimse görmediği hâlde). Ara durum
+/// eklendi.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BgMode {
+    /// Pencere görünür — motor tam çalışır.
+    Foreground,
+    /// Tepside/minimize AMA video oynuyor. Yalnızca `SetIsVisible(false)`:
+    /// render/compositing/rAF durur, GPU yüzeyleri bırakılır, sayfa "hidden"
+    /// sayılır (Chromium arka plan kısıtlaması devreye girer) — ama MEDYA
+    /// OYNATIMI DEVAM EDER. Chromium gizli sayfalarda medyayı çalmayı sürdürür;
+    /// WebView2'nin `ICoreWebView2_8`'de `IsDocumentPlayingAudio`/`IsMuted`
+    /// sunmasının sebebi de budur.
+    ///
+    /// TrySuspend BİLEREK çağrılmaz: motoru dondurur, yani videoyu da durdurur.
+    /// (Zaten aktif medya varken TrySuspend reddedilir.) `trim_working_sets` de
+    /// çağrılmaz: aktif decode sürerken sayfaları RAM'den atmak sadece anında
+    /// geri-sayfalama (page-in) maliyeti üretir.
+    Media,
+    /// Tepside/minimize ve hiçbir şey oynamıyor → tam donma.
+    /// `SetIsVisible(false)` + `TrySuspend` + `EmptyWorkingSet`.
+    DeepSleep,
+}
+
+/// WebView2'yi verilen arka plan durumuna geçirir.
 ///
 /// TrySuspend YALNIZCA WebView görünmezken çalışır; bu yüzden önce SetIsVisible(false).
-/// TrySuspend ayrıca aktif medya/indirme varken başarısız olur — çağrı öncesi
-/// zaten `player_playing` ile korunuyoruz (bkz. update_background_mode), yani
-/// arka planda ses/video sürerken askıya ALINMAZ.
 ///
-/// Son uygulanan askıya-alma durumu PENCERE BAŞINA tutulur (PerfState.suspended).
+/// Son uygulanan durum PENCERE BAŞINA tutulur (PerfState.suspended).
 /// YALNIZCA gerçek geçişte iş yapılır: aksi halde her focus/resized olayında
 /// Resume+SetIsVisible(true) yeniden çağrılır, SetIsVisible odak olayını
 /// yeniden tetikler ve `focused` sonsuza dek flap eder (EcoQoS AÇIK/KAPALI
@@ -274,17 +298,21 @@ fn refresh_perf_mode(app: &tauri::AppHandle) {
 /// suspend/resume çağrısı diğerininkini "durum zaten böyle" sanıp sessizce
 /// atlatıyordu. Pencere etiketine göre ayrı tutulması bu çakışmayı giderir.
 #[cfg(target_os = "windows")]
-fn set_background_suspend(window: &tauri::WebviewWindow, suspend: bool) {
+fn set_background_suspend(window: &tauri::WebviewWindow, mode: BgMode) {
     let label = window.label().to_string();
-    {
+    let previous = {
         let st = window.app_handle().state::<PerfState>();
         let mut map = st.suspended.lock().unwrap();
+        let prev = map.get(&label).copied().unwrap_or(BgMode::Foreground);
         // Durum değişmediyse HİÇBİR ŞEY yapma — geri besleme döngüsünü kırar.
-        if map.get(&label).copied().unwrap_or(false) == suspend {
+        if prev == mode {
             return;
         }
-        map.insert(label, suspend);
-    }
+        map.insert(label.clone(), mode);
+        prev
+    };
+
+    dbg_log!("[PerfMode] Arka plan modu ({}): {:?} → {:?}", label, previous, mode);
 
     let _ = window.with_webview(move |webview| unsafe {
         use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_3;
@@ -304,36 +332,105 @@ fn set_background_suspend(window: &tauri::WebviewWindow, suspend: bool) {
             Err(_) => return, // Runtime çok eski — sessiz geç
         };
 
-        if suspend {
-            let _ = controller.SetIsVisible(false);
+        match mode {
+            BgMode::Foreground => {
+                let _ = wv3.Resume();
+                let _ = controller.SetIsVisible(true);
+            }
 
-            // TrySuspend tamamlanınca (motor gerçekten dondurulunca) working set'i
-            // boşalt — böylece RAM'den atılan sayfalar hemen geri yüklenmez.
-            let core_for_handler = core.clone();
-            let handler = TrySuspendCompletedHandler::create(Box::new(
-                move |_errorcode, is_successful| {
-                    if is_successful {
-                        let mut pid: u32 = 0;
-                        if core_for_handler.BrowserProcessId(&mut pid).is_ok() && pid != 0 {
-                            perf_mode::trim_working_sets(pid);
+            BgMode::Media => {
+                // DeepSleep'ten geliyorsak motor DONMUŞ durumda: önce Resume,
+                // yoksa video hiç oynamaz. (Ör. tepside dururken bildirimden
+                // gelen bir gezinme oynatmayı başlatırsa.)
+                if previous == BgMode::DeepSleep {
+                    let _ = wv3.Resume();
+                }
+                // Görünmez yap — render durur, oynatma sürer. TrySuspend YOK.
+                let _ = controller.SetIsVisible(false);
+            }
+
+            BgMode::DeepSleep => {
+                let _ = controller.SetIsVisible(false);
+
+                // TrySuspend tamamlanınca (motor gerçekten dondurulunca) working set'i
+                // boşalt — böylece RAM'den atılan sayfalar hemen geri yüklenmez.
+                let core_for_handler = core.clone();
+                let handler = TrySuspendCompletedHandler::create(Box::new(
+                    move |_errorcode, is_successful| {
+                        if is_successful {
+                            let mut pid: u32 = 0;
+                            if core_for_handler.BrowserProcessId(&mut pid).is_ok() && pid != 0 {
+                                perf_mode::trim_working_sets(pid);
+                            }
+                        } else {
+                            // TrySuspend aktif medya/indirme varken ya da çok eski
+                            // runtime'da reddedilir. SetIsVisible(false) yine de
+                            // geçerlidir (render durur), ama bellek beklendiği kadar
+                            // düşmez — tepsi RAM'i ölçülürken ilk bakılacak yer burası.
+                            dbg_log!("[PerfMode] TrySuspend REDDEDİLDİ — motor donmadı, bellek yüksek kalabilir");
                         }
-                    }
-                    Ok(())
-                },
-            ));
-            let _ = wv3.TrySuspend(&handler);
-        } else {
-            let _ = wv3.Resume();
-            let _ = controller.SetIsVisible(true);
+                        Ok(())
+                    },
+                ));
+                let _ = wv3.TrySuspend(&handler);
+            }
         }
     });
 }
 
-/// Pencerenin görünürlük durumuna göre arka plan askıya alma kararını verir.
+/// Webview'a arka plan (tepsi/minimize) durumunu bildirir.
 ///
-/// Askıya al = (minimize VEYA gizli) VE video oynamıyor. Oynatma sürerken
-/// (arka planda dinleme/izleme) motor dondurulmaz; o durumda mevcut LOW bellek +
-/// EcoQoS zaten devrede (bkz. refresh_perf_mode).
+/// JS tarafı (js/modules/background-mode.js) bunu alınca Page Visibility
+/// API'sini geçersiz kılar ve kendi periyodik timer'larını duraklatır. Bu,
+/// `SetIsVisible(false)`'a EK bir kattır: askıya alma başarısız olursa
+/// (eski WebView2 runtime'ı, TrySuspend'i reddeden medya durumu vb.) sayfa
+/// yine de arka planda olduğunu bilir ve iş üretmeyi keser.
+/// NEDEN `emit_to` DEĞİL de `eval`: Tauri olay hedefleme (target) eşleşmesi
+/// burada sessizce başarısız oluyordu. JS tarafındaki `event.listen(...)`
+/// seçenek verilmediğinde kendini `{kind:"Any"}` hedefiyle kaydeder; Rust'taki
+/// `emit_to(label, …)` ise `AnyLabel{label}` hedefiyle yayar ve Tauri'nin
+/// `filter_target` eşlemesi `AnyLabel` → yalnızca `Window|Webview|
+/// WebviewWindow|AnyLabel` adaylarını kabul eder — `Any` bu listede YOKTUR.
+/// Yani olay hiçbir zaman teslim edilmezdi. `app.emit()` (global) teslim
+/// ederdi ama bu kez sinyal İLGİSİZ pencerelere de giderdi: ön plandaki bir
+/// pencere kendini gizli sanıp animasyonlarını keserdi.
+///
+/// `eval` tam olarak istenen webview'da çalışır, hedef eşleşmesi gerektirmez.
+/// (Aynı yöntem super_notifications.rs > navigate_to içinde de kullanılıyor.)
+/// `mode`: "foreground" | "media" | "hidden" — JS tarafındaki karşılığı için
+/// bkz. js/modules/background-mode.js.
+/// (Windows'a özel: tüm çağıranlar arka plan modu mantığının içinde ve o mantık
+/// WebView2'ye özgü. cfg olmadan macOS derlemesinde dead_code uyarısı verirdi.)
+#[cfg(target_os = "windows")]
+fn emit_background_state(app: &tauri::AppHandle, label: &str, mode: &str) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let _ = window.eval(&format!(
+        "try{{window.__oaBackground&&window.__oaBackground.apply(\"{}\");}}catch(e){{}}",
+        mode
+    ));
+}
+
+#[cfg(target_os = "windows")]
+fn js_mode_name(mode: BgMode) -> &'static str {
+    match mode {
+        BgMode::Foreground => "foreground",
+        BgMode::Media => "media",
+        BgMode::DeepSleep => "hidden",
+    }
+}
+
+/// Pencerenin görünürlük + oynatma durumuna göre arka plan modunu belirler.
+///
+///   görünür                        → Foreground
+///   (minimize|gizli) + video var   → Media      (render durur, oynatma sürer)
+///   (minimize|gizli) + video yok   → DeepSleep  (tam donma)
+///
+/// `playing` bilgisi JS'ten gelir (player-perf.js → oa_set_player_playing) ve
+/// pencere başına tutulur. Video tepsideyken BİTERSE JS `ended` olayında
+/// `playing=false` bildirir; bu fonksiyon yeniden çalışır ve pencere kendiliğinden
+/// Media'dan DeepSleep'e düşer — bölüm bitince RAM'in geri verilmesi bu sayede olur.
 #[cfg(target_os = "windows")]
 fn update_background_mode(app: &tauri::AppHandle, label: &str) {
     let Some(window) = app.get_webview_window(label) else {
@@ -350,8 +447,82 @@ fn update_background_mode(app: &tauri::AppHandle, label: &str) {
     let minimized = window.is_minimized().unwrap_or(false);
     let visible = window.is_visible().unwrap_or(true);
 
-    let suspend = (minimized || !visible) && !playing;
-    set_background_suspend(&window, suspend);
+    let mode = if !(minimized || !visible) {
+        BgMode::Foreground
+    } else if playing {
+        BgMode::Media
+    } else {
+        BgMode::DeepSleep
+    };
+
+    // JS'e ÖNCE haber ver: DeepSleep'te motor donduğu için sinyal sonradan
+    // gönderilseydi sayfaya hiç ulaşmazdı.
+    emit_background_state(app, label, js_mode_name(mode));
+    set_background_suspend(&window, mode);
+}
+
+/// Pencere tepsiye gizlendiğinde çağrılır (bkz. WindowEvent::CloseRequested).
+///
+/// NEDEN AYRI BİR YOL: `window.hide()` Windows'ta yalnızca `ShowWindow(SW_HIDE)`
+/// yapar — WM_SIZE üretmez, dolayısıyla tao `Resized` olayı YAYMAZ ve
+/// `update_background_mode` hiç çağrılmazdı. Sonuç: TrySuspend + working-set
+/// trim makinesi yazılı olduğu hâlde tepsi yolunda ölü koddu; WebView2 tam
+/// bellekle ayakta kalıyordu. (Doğrulama: tao 0.35 `Resized`ı SADECE WM_SIZE'dan
+/// üretir; tauri-runtime-wry `WindowMessage::Hide`ı tao'ya yönlendirir ve
+/// wry'nin `controller.SetIsVisible` çağrısına dokunmaz.)
+///
+/// Askıya alma 250 ms geciktirilir: JS'in `background-mode` olayını işleyip
+/// animasyon/timer'larını durdurması için bir pencere bırakır. Gecikme ayrı bir
+/// thread'de beklenir — ana thread'i (dolayısıyla gizleme animasyonunu) bloke etmez.
+#[cfg(target_os = "windows")]
+fn enter_tray_background(app: &tauri::AppHandle, label: &str) {
+    let playing = app
+        .state::<PerfState>()
+        .player_playing
+        .lock()
+        .unwrap()
+        .get(label)
+        .copied()
+        .unwrap_or(false);
+
+    // Gizlenme ANINDAKİ oynatma durumu kararı belirler: video oynuyorsa sayfa
+    // "media" moduna (timer'ların çoğu durur, Discord RPC + oynatıcı bildirimi
+    // sürer), oynamıyorsa "hidden" moduna (her şey durur) geçer.
+    emit_background_state(
+        app,
+        label,
+        if playing { "media" } else { "hidden" },
+    );
+
+    let app_c = app.clone();
+    let label_c = label.to_string();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        // Ayrı thread'den çağrılır: is_visible()/with_webview kendi içlerinde
+        // ana thread'e dispatch eder. (Ana thread'in İÇİNDEN yeniden dispatch
+        // etmek kilitlenme yaratıyordu — bkz. refresh_perf_mode'daki not.)
+        update_background_mode(&app_c, &label_c);
+    });
+}
+
+/// Pencereyi askıdan KOŞULSUZ çıkarır (tepsi tıklaması, toast tıklaması,
+/// ikinci kopya başlatma vb. tüm geri-yükleme yollarında çağrılır).
+///
+/// NEDEN: askıdan çıkma normalde `WindowEvent::Focused(true)` ile tetikleniyor.
+/// Ama `show()` tek başına odak olayı üretmez ve `set_focus()` de pencere zaten
+/// odak sahibi görünüyorsa olayı yeniden yaymayabilir. O durumda webview askıda
+/// (SetIsVisible(false) + TrySuspend) kalır ve kullanıcı SİYAH/DONUK bir pencere
+/// görürdü. Bu yüzden geri-yükleme yolları olaya güvenmez, doğrudan bunu çağırır.
+pub(crate) fn resume_webview(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        set_background_suspend(window, BgMode::Foreground);
+        emit_background_state(&window.app_handle(), window.label(), "foreground");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+    }
 }
 
 /// JS bildirir: oynatıcıda video oynuyor mu? `window` parametresi Tauri
@@ -393,6 +564,17 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // BLOK 1: TAURI BRIDGE (UPDATED MOCKS)
     // ──────────────────────────────────────────────
     include_str!("js/modules/tauri-bridge.js"),
+    "\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 1B: ARKA PLAN (TEPSİ) MODU
+    // Page Visibility API'sini geçersiz kılar ve `oaBgInterval` ile kurulan
+    // timer'ları duraklatır. Rust bunu `window.__oaBackground.apply(bool)`
+    // ile DOĞRUDAN tetikler (bkz. emit_background_state).
+    // DİĞER MODÜLLERDEN ÖNCE gelmeli: sonraki bloklar (init.js, discord-rpc,
+    // super-notifications-ui, player-perf) `window.oaBgInterval`i kullanıyor.
+    // ──────────────────────────────────────────────
+    include_str!("js/modules/background-mode.js"),
     "\n",
 
     // ──────────────────────────────────────────────
@@ -1023,28 +1205,54 @@ fn get_local_video_port(state: tauri::State<'_, Arc<local_video_server::LocalVid
     Ok(*port)
 }
 
-/// Süper Açılış videosunu (superlogo.mp4) diskte arar.
+/// "super_logo" varyantının olası dosya adları — SADECE MP4.
+const SUPER_LOGO_MEDIA_NAMES: &[(&str, &str)] = &[
+    ("superlogo.mp4", "video/mp4"),
+    ("super_logo.mp4", "video/mp4"),
+];
+
+/// "muptezel_anime" varyantının olası dosya adları — SADECE GIF. Ayrı,
+/// bağımsız bir açılış seçeneği; super_logo'nun yedeği DEĞİL.
+const MUPTEZEL_ANIME_MEDIA_NAMES: &[(&str, &str)] = &[
+    ("Muptezel-anime.gif", "image/gif"),
+    ("muptezel-anime.gif", "image/gif"),
+    ("muptezel_anime.gif", "image/gif"),
+];
+
+fn media_names_for_variant(variant: &str) -> &'static [(&'static str, &'static str)] {
+    match variant {
+        "muptezel_anime" => MUPTEZEL_ANIME_MEDIA_NAMES,
+        _ => SUPER_LOGO_MEDIA_NAMES,
+    }
+}
+
+/// Verilen dosya adı/MIME listesindeki ilk mevcut dosyayı diskte arar.
 /// Sıra: (1) Tauri resource dizini (paketlenmiş NSIS kurulumunda asıl yer —
 /// bkz. tauri.conf.json > bundle.resources), (2) cwd/exe göreli tahminler
 /// (dev ortamı / portable kullanım için yedek).
-fn resolve_super_opening_video_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    let mut candidates = Vec::new();
+fn resolve_super_opening_video_path(
+    app: &tauri::AppHandle,
+    media_names: &'static [(&'static str, &'static str)],
+) -> Option<(std::path::PathBuf, &'static str)> {
+    let mut candidates: Vec<(std::path::PathBuf, &'static str)> = Vec::new();
 
-    if let Ok(resource_path) = app.path().resolve("superlogo.mp4", tauri::path::BaseDirectory::Resource) {
-        candidates.push(resource_path);
+    for (name, mime) in media_names {
+        if let Ok(resource_path) = app.path().resolve(*name, tauri::path::BaseDirectory::Resource) {
+            candidates.push((resource_path, mime));
+        }
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("static").join("superlogo.mp4"));
-        candidates.push(cwd.join("static").join("super_logo.mp4"));
-        candidates.push(cwd.join("static").join("openings").join("superlogo.mp4"));
-        candidates.push(cwd.join("static").join("openings").join("super_logo.mp4"));
+        for (name, mime) in media_names {
+            candidates.push((cwd.join("static").join(name), mime));
+            candidates.push((cwd.join("static").join("openings").join(name), mime));
+        }
 
         if let Some(parent) = cwd.parent() {
-            candidates.push(parent.join("static").join("superlogo.mp4"));
-            candidates.push(parent.join("static").join("super_logo.mp4"));
-            candidates.push(parent.join("static").join("openings").join("superlogo.mp4"));
-            candidates.push(parent.join("static").join("openings").join("super_logo.mp4"));
+            for (name, mime) in media_names {
+                candidates.push((parent.join("static").join(name), mime));
+                candidates.push((parent.join("static").join("openings").join(name), mime));
+            }
         }
     }
 
@@ -1052,10 +1260,10 @@ fn resolve_super_opening_video_path(app: &tauri::AppHandle) -> Option<std::path:
         let mut cur = exe_path.parent();
         for _ in 0..4 {
             if let Some(dir) = cur {
-                candidates.push(dir.join("static").join("superlogo.mp4"));
-                candidates.push(dir.join("static").join("super_logo.mp4"));
-                candidates.push(dir.join("superlogo.mp4"));
-                candidates.push(dir.join("super_logo.mp4"));
+                for (name, mime) in media_names {
+                    candidates.push((dir.join("static").join(name), mime));
+                    candidates.push((dir.join(name), mime));
+                }
                 cur = dir.parent();
             } else {
                 break;
@@ -1063,7 +1271,7 @@ fn resolve_super_opening_video_path(app: &tauri::AppHandle) -> Option<std::path:
         }
     }
 
-    candidates.into_iter().find(|p| p.exists())
+    candidates.into_iter().find(|(p, _)| p.exists())
 }
 
 /// ARTIK KULLANILMIYOR (bkz. get_super_opening_video_data): `openani.me`
@@ -1081,23 +1289,30 @@ fn get_super_opening_video_url(
         return Err("Local video server port not ready".to_string());
     }
 
-    let path = resolve_super_opening_video_path(&app)
+    let (path, _mime) = resolve_super_opening_video_path(&app, SUPER_LOGO_MEDIA_NAMES)
         .ok_or_else(|| "No super opening video file found on disk".to_string())?;
     let path_str = path.to_string_lossy().to_string();
     let encoded = percent_encoding::utf8_percent_encode(&path_str, percent_encoding::NON_ALPHANUMERIC).to_string();
     Ok(format!("http://127.0.0.1:{}/local-video?path={}", port, encoded))
 }
 
-/// Süper Açılış videosunu doğrudan Tauri IPC üzerinden (ağ isteği YOK) JS'e
-/// base64 olarak taşır. `get_super_opening_video_url`'in aksine bu bir HTTP
-/// isteği değil — bu yüzden Private Network Access / mixed-content gibi
-/// tarayıcı korumalarına hiç takılmaz. JS tarafı base64'ü Blob'a çevirip
-/// `URL.createObjectURL` ile video.src'e verir.
+#[derive(serde::Serialize)]
+struct SuperOpeningMedia {
+    data: String,
+    mime: String,
+}
+
+/// Süper Açılış medyasını (`variant`'a göre MP4 video veya GIF) doğrudan
+/// Tauri IPC üzerinden (ağ isteği YOK) JS'e base64 olarak taşır.
+/// `get_super_opening_video_url`'in aksine bu bir HTTP isteği değil — bu
+/// yüzden Private Network Access / mixed-content gibi tarayıcı
+/// korumalarına hiç takılmaz. JS tarafı base64'ü dönen `mime` tipine göre
+/// Blob'a çevirip `<video>` veya `<img>` öğesine verir.
 #[tauri::command]
-fn get_super_opening_video_data(app: tauri::AppHandle) -> Result<String, String> {
+fn get_super_opening_video_data(app: tauri::AppHandle, variant: String) -> Result<SuperOpeningMedia, String> {
     use base64::Engine;
 
-    let path = resolve_super_opening_video_path(&app)
+    let (path, mime) = resolve_super_opening_video_path(&app, media_names_for_variant(&variant))
         .ok_or_else(|| "No super opening video file found on disk".to_string())?;
 
     let bytes = std::fs::read(&path).map_err(|e| {
@@ -1105,12 +1320,16 @@ fn get_super_opening_video_data(app: tauri::AppHandle) -> Result<String, String>
     })?;
 
     dbg_log!(
-        "[Süper Açılış] Video IPC ile taşınıyor: {} ({} bayt)",
+        "[Süper Açılış] Medya IPC ile taşınıyor: {} ({} bayt, {})",
         path.to_string_lossy(),
-        bytes.len()
+        bytes.len(),
+        mime
     );
 
-    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+    Ok(SuperOpeningMedia {
+        data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        mime: mime.to_string(),
+    })
 }
 
 /// ────────────────────────────────────────────────────────────
@@ -1245,6 +1464,9 @@ pub fn run() {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
+                // Tepsideyken webview askıya alınmış olabilir — geri döndür,
+                // yoksa öne gelen pencere boş görünür.
+                resume_webview(&window);
             }
         }))
         .plugin(tauri_plugin_opener::init())
@@ -1465,6 +1687,14 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.hide();
                         log!("[Tauri] Pencere tepsiye gizlendi: {}", label);
+
+                        // hide() SADECE HWND'yi gizler; WebView2 controller
+                        // "görünür" kalır ve motor tam bellekle çalışmaya devam
+                        // eder. Ayrıca hide() WM_SIZE üretmediği için `Resized`
+                        // yolundaki askıya alma da tetiklenmez. Bu yüzden arka
+                        // plan modunu BURADAN açıkça başlatıyoruz.
+                        #[cfg(target_os = "windows")]
+                        enter_tray_background(&app_handle, &label);
                     }
                 }
                 tauri::WindowEvent::Focused(true) => {
@@ -1477,14 +1707,15 @@ pub fn run() {
                         }
                     });
                 }
-                // X butonuna basıldığında pencere ARTIK tepsiye gizlenmiyor —
-                // GERÇEKTEN kapanır (video/DOM/decode pipeline dahil tüm
-                // WebView2 kaynağı serbest kalır). Kullanıcı kapattıysa
-                // oynatma da durur; "arkaplanda çalmaya devam et" davranışı
-                // burada yok. Tepsi ikonunun canlı kalması ayrı bir mekanizma:
-                // son pencere kapandığında (RunEvent::ExitRequested) Süper
-                // Bildirimler açıksa hafif, görünmez bir /settings oturumu
-                // otomatik açılır (bkz. maybe_spawn_tray_session).
+                // X butonu pencereyi KAPATMAZ, tepsiye gizler (bkz. yukarıdaki
+                // CloseRequested kolu). Gizlenen pencere WebView2'siyle birlikte
+                // ayakta kalır — bu yüzden gizleme anında `enter_tray_background`
+                // ile açıkça askıya alınır, yoksa arka planda tam bellek tüketir.
+                //
+                // (Vaktiyle X'in gerçekten kapatması denenmiş ve bu yorum ondan
+                // kalmıştı; kod hide()'a geri dönmüş ama yorum güncellenmemişti.
+                // maybe_spawn_tray_session yolu hâlâ geçerli, sadece X ile değil
+                // gerçek pencere kapanışlarıyla tetikleniyor.)
                 tauri::WindowEvent::Destroyed => {
                     #[cfg(target_os = "windows")]
                     {

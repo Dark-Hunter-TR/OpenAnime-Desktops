@@ -1,7 +1,7 @@
 // ============================================================================
 // 📁 MODULE: Süper Açılış (Super Opening) Manager & Self-Contained UI
-// ─── Description: Sitenin üzerine bağımsız tam ekran MP4 video overlay serer.
-//                  Video bitene kadar siteyi arkada kilitler.
+// ─── Description: Sitenin üzerine bağımsız tam ekran MP4 video / GIF overlay
+//                  serer. Medya bitene kadar siteyi arkada kilitler.
 //                  Ayar değiştirildiğinde uygulamayı otomatik yeniler.
 //                  Sitenin Svelte/Fluent ayarlar kartını tam uyumlu olarak enjekte eder.
 // ============================================================================
@@ -12,12 +12,22 @@
   const VARIANTS = {
     DEFAULT: "default",
     SUPER_LOGO: "super_logo",
+    MUPTEZEL_ANIME: "muptezel_anime",
   };
 
   const VARIANT_NAMES = {
     [VARIANTS.SUPER_LOGO]: "Süper Logo (MP4 Video)",
+    [VARIANTS.MUPTEZEL_ANIME]: "Muptezel Anime (GIF)",
     [VARIANTS.DEFAULT]: "Varsayılan (Site Yükleme Ekranı)",
   };
+
+  // GIF tabanlı varyantların gösterim süresi (ms). Video tabanlı varyantlar
+  // (ör. SUPER_LOGO) bu tabloyu kullanmaz — onlar videonun kendi doğal
+  // uzunluğu kadar (video 'ended' eventi) oynar.
+  const VARIANT_GIF_DURATIONS_MS = {
+    [VARIANTS.MUPTEZEL_ANIME]: 1500,
+  };
+  const DEFAULT_GIF_DURATION_MS = 2000;
 
   function getActiveVariant() {
     const val = localStorage.getItem(SUPER_OPENING_KEY);
@@ -42,10 +52,35 @@
 
   let overlayCreated = false;
 
+  // Süper Açılış SADECE uygulamanın gerçek ilk açılışında gösterilir.
+  // Uygulama içinde F5/Ctrl+R gibi bir sayfa yenilemesinde artık site'nin
+  // KENDİ normal yükleme ekranı görünür. Bunu ayırt etmek için
+  // sessionStorage kullanılır: sessionStorage sayfa yenilemelerinde
+  // KORUNUR, ama uygulama tamamen kapatılıp yeniden açıldığında (yeni
+  // webview oturumu) otomatik olarak temizlenir — yani "bu oturumda daha
+  // önce gösterildi mi" sorusuna tam ihtiyacımız olan cevabı verir.
+  const SESSION_SHOWN_FLAG_KEY = "tauri-super-opening-shown-session";
+
+  function wasAlreadyShownThisSession() {
+    try {
+      return sessionStorage.getItem(SESSION_SHOWN_FLAG_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function markShownThisSession() {
+    try {
+      sessionStorage.setItem(SESSION_SHOWN_FLAG_KEY, "1");
+    } catch (e) {}
+  }
+
   async function initSuperOpeningOverlay() {
     const variant = getActiveVariant();
     if (variant === VARIANTS.DEFAULT || overlayCreated) return;
+    if (wasAlreadyShownThisSession()) return;
     overlayCreated = true;
+    markShownThisSession();
 
     // En üst katmanda tam ekran overlay oluştur (Max Z-Index)
     const overlay = document.createElement("div");
@@ -205,109 +240,151 @@
 
     freezeSite();
 
-    // Video baytlarını Rust'tan DOĞRUDAN Tauri IPC ile al — 127.0.0.1'e HTTP
+    // Medya baytlarını Rust'tan DOĞRUDAN Tauri IPC ile al — 127.0.0.1'e HTTP
     // isteği YOK. `openani.me` PUBLIC bir https sayfası olduğundan,
     // WebView2/Chromium'un Private Network Access koruması ona giden
     // 127.0.0.1 <video src> isteklerini SESSİZCE engelliyordu (video hiç
     // görünmüyordu — hata bile fırlatmıyordu). IPC bir ağ isteği olmadığı
-    // için bu korumaya hiç takılmaz. Çözülen base64 payload aynı uygulama
-    // oturumu boyunca sessionStorage'da CACHE'lenir (tekrar dosya
-    // okuma+encode+IPC round-trip'i gerekmez); uygulama tamamen kapanıp
-    // yeniden açıldığında sessionStorage zaten temizlenmiş olur.
-    const VIDEO_DATA_CACHE_KEY = "tauri-super-opening-video-b64-cache";
+    // için bu korumaya hiç takılmaz. Rust tarafı dosyayı MIME tipiyle
+    // (video/mp4 veya image/gif) birlikte döner, JS buna göre <video> ya da
+    // <img> öğesi seçer. Çözülen payload aynı uygulama oturumu boyunca
+    // sessionStorage'da CACHE'lenir (tekrar dosya okuma+encode+IPC
+    // round-trip'i gerekmez); uygulama tamamen kapanıp yeniden açıldığında
+    // sessionStorage zaten temizlenmiş olur.
+    // Varyant bazlı cache key: "super_logo" ve "muptezel_anime" ayrı dosyalara
+    // bağlı olduğundan aynı sessionStorage girdisini paylaşmamalı — aksi
+    // halde varyant değiştirilip sayfa yenilendiğinde önceki varyantın
+    // (yanlış) medyası cache'ten dönebilir.
+    const VIDEO_DATA_CACHE_KEY = `tauri-super-opening-media-cache-${variant}`;
 
-    function base64ToObjectUrl(base64) {
+    function base64ToObjectUrl(base64, mime) {
       const binary = atob(base64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      return URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
+      return URL.createObjectURL(new Blob([bytes], { type: mime }));
     }
 
-    async function requestVideoObjectUrl() {
-      let base64 = null;
+    async function requestMedia() {
+      let cached = null;
       try {
-        base64 = sessionStorage.getItem(VIDEO_DATA_CACHE_KEY);
+        const raw = sessionStorage.getItem(VIDEO_DATA_CACHE_KEY);
+        if (raw) cached = JSON.parse(raw);
       } catch (e) {}
 
-      if (!base64) {
+      let media = cached;
+      if (!media) {
         if (!(window.__TAURI__ && window.__TAURI__.core)) return null;
         try {
-          base64 = await window.__TAURI__.core.invoke("get_super_opening_video_data");
+          media = await window.__TAURI__.core.invoke("get_super_opening_video_data", { variant });
         } catch (e) {
-          console.warn("[Süper Açılış] Video verisi alınamadı:", e);
+          console.warn("[Süper Açılış] Medya verisi alınamadı:", e);
           return null;
         }
-        if (base64) {
-          try { sessionStorage.setItem(VIDEO_DATA_CACHE_KEY, base64); } catch (e) {}
+        if (media && media.data && media.mime) {
+          try { sessionStorage.setItem(VIDEO_DATA_CACHE_KEY, JSON.stringify(media)); } catch (e) {}
         }
       }
 
-      if (!base64) return null;
+      if (!media || !media.data || !media.mime) return null;
       try {
-        return base64ToObjectUrl(base64);
+        const url = base64ToObjectUrl(media.data, media.mime);
+        return { url, mime: media.mime };
       } catch (e) {
-        console.warn("[Süper Açılış] Video verisi çözümlenemedi:", e);
+        console.warn("[Süper Açılış] Medya verisi çözümlenemedi:", e);
         try { sessionStorage.removeItem(VIDEO_DATA_CACHE_KEY); } catch (e2) {}
         return null;
       }
     }
 
-    let videoObjectUrl = await requestVideoObjectUrl();
-    if (!videoObjectUrl) {
+    let media = await requestMedia();
+    if (!media) {
       await new Promise((resolve) => setTimeout(resolve, 400));
-      videoObjectUrl = await requestVideoObjectUrl();
+      media = await requestMedia();
     }
 
-    if (!videoObjectUrl) {
-      console.warn("[Süper Açılış] MP4 video dosyası bulunamadı, açılış geçiliyor.");
+    if (!media) {
+      console.warn("[Süper Açılış] Açılış medyası (mp4/gif) bulunamadı, açılış geçiliyor.");
       finishOpening();
       return;
     }
 
-    // Video elementini ekle ve oynat
-    video = document.createElement("video");
-    video.autoplay = true;
-    video.loop = false; // Video döngüsüz — tek sefer baştan sona oynar
-    video.muted = true;
-    video.defaultMuted = true;
-    video.playsInline = true;
-    video.style.cssText = `
-      width: 100vw !important;
-      height: 100vh !important;
-      object-fit: cover !important;
-      pointer-events: none !important;
-    `;
-
     const cleanupObjectUrl = () => {
-      try { URL.revokeObjectURL(videoObjectUrl); } catch (e) {}
+      try { URL.revokeObjectURL(media.url); } catch (e) {}
     };
 
-    video.addEventListener("ended", () => {
-      cleanupObjectUrl();
-      finishOpening();
-    });
-    video.addEventListener("error", (err) => {
-      console.warn("[Süper Açılış] Video oynatılırken hata:", err, video.error);
-      // Cache'lenmiş payload bozuk/geçersiz olabilir — sonraki denemenin
-      // taze veri istemesi için sil.
-      try { sessionStorage.removeItem(VIDEO_DATA_CACHE_KEY); } catch (e) {}
-      cleanupObjectUrl();
-      finishOpening();
-    });
+    const isGif = media.mime === "image/gif";
 
-    overlay.appendChild(video);
-    video.src = videoObjectUrl;
-    const playAttempt = video.play();
-    if (playAttempt && typeof playAttempt.catch === "function") {
-      playAttempt.catch((err) => {
-        console.warn("[Süper Açılış] video.play() reddedildi:", err);
+    if (isGif) {
+      // GIF'in <video>'daki gibi doğal bir "ended" eventi yok, ve GIF
+      // byte'larından frame gecikmesi hesaplamak güvenilmez çıktı — bunun
+      // yerine her varyant için sabit bir gösterim süresi kullanılıyor.
+      const gifDurationMs = VARIANT_GIF_DURATIONS_MS[variant] || DEFAULT_GIF_DURATION_MS;
+
+      const img = document.createElement("img");
+      video = img; // freezeSite() erken referans aldığı için isim korunuyor
+      img.style.cssText = `
+        width: 100vw !important;
+        height: 100vh !important;
+        object-fit: cover !important;
+        pointer-events: none !important;
+      `;
+
+      img.addEventListener("error", (err) => {
+        console.warn("[Süper Açılış] GIF oynatılırken hata:", err);
+        try { sessionStorage.removeItem(VIDEO_DATA_CACHE_KEY); } catch (e) {}
+        cleanupObjectUrl();
+        finishOpening();
       });
-    }
 
-    // Güvenlik zaman aşımı: Video beklenmeyen bir nedenle takılırsa max 15sn sonra kapat
-    setTimeout(() => {
-      if (!videoFinished) finishOpening();
-    }, 15000);
+      overlay.appendChild(img);
+      img.src = media.url;
+
+      setTimeout(() => {
+        cleanupObjectUrl();
+        finishOpening();
+      }, gifDurationMs);
+    } else {
+      // Video elementini ekle ve oynat
+      video = document.createElement("video");
+      video.autoplay = true;
+      video.loop = false; // Video döngüsüz — tek sefer baştan sona oynar
+      video.muted = true;
+      video.defaultMuted = true;
+      video.playsInline = true;
+      video.style.cssText = `
+        width: 100vw !important;
+        height: 100vh !important;
+        object-fit: cover !important;
+        pointer-events: none !important;
+      `;
+
+      video.addEventListener("ended", () => {
+        cleanupObjectUrl();
+        finishOpening();
+      });
+      video.addEventListener("error", (err) => {
+        console.warn("[Süper Açılış] Video oynatılırken hata:", err, video.error);
+        // Cache'lenmiş payload bozuk/geçersiz olabilir — sonraki denemenin
+        // taze veri istemesi için sil.
+        try { sessionStorage.removeItem(VIDEO_DATA_CACHE_KEY); } catch (e) {}
+        cleanupObjectUrl();
+        finishOpening();
+      });
+
+      overlay.appendChild(video);
+      video.src = media.url;
+      const playAttempt = video.play();
+      if (playAttempt && typeof playAttempt.catch === "function") {
+        playAttempt.catch((err) => {
+          console.warn("[Süper Açılış] video.play() reddedildi:", err);
+        });
+      }
+
+      // Güvenlik zaman aşımı: Video beklenmeyen bir nedenle takılırsa max 15sn sonra kapat
+      setTimeout(() => {
+        if (!videoFinished) finishOpening();
+      }, 15000);
+    }
   }
 
   // Mümkün olan en erken anda overlay'i başlat
@@ -430,7 +507,7 @@
             <div class="item ${itemHeaderHash}" style="overflow:visible;align-items:flex-start;gap:12px;">
               <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
                 <span class="text-block type-body ${textBlockHash}">Açılış Ekranı Varyantı</span>
-                <span class="text-block type-caption text-secondary ${textBlockHash}">Varsayılan site yükleme ekranı veya Süper Logo (MP4) seçeneği.</span>
+                <span class="text-block type-caption text-secondary ${textBlockHash}">Varsayılan site yükleme ekranı, Süper Logo (MP4) veya Muptezel Anime (GIF) seçeneği.</span>
               </div>
               <div class="combo-box ${dropdownHashes.comboBoxHash}" id="tauri-super-opening-dropdown-wrapper" style="position:relative !important;flex-shrink:0;">
                 <button class="button style-standard combo-box-button ${dropdownHashes.buttonHash}" tabindex="0" type="button" id="tauri-super-opening-dropdown-btn" style="pointer-events:auto;width:230px !important;min-width:230px !important;white-space:nowrap !important;" aria-haspopup="listbox">
@@ -647,6 +724,10 @@
             dropdownMenu.style.setProperty("display", "none", "important");
 
             if (previousVal !== val) {
+              // Kullanıcı bilinçli olarak varyant değiştiriyor — bu, önizleme
+              // görebilmesi için "bu oturumda zaten gösterildi" bayrağını
+              // bilerek sıfırlıyoruz (normal F5/Ctrl+R'de bu bayrak korunur).
+              try { sessionStorage.removeItem(SESSION_SHOWN_FLAG_KEY); } catch (e) {}
               setTimeout(() => {
                 window.location.reload();
               }, 200);
