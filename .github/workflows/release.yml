@@ -111,13 +111,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS: universal binary (Intel + Apple Silicon tek .app/.dmg içinde).
+          # tauri-cli, aarch64 ve x86_64 hedeflerini AYRI AYRI derleyip `lipo` ile
+          # birleştirir — bu yüzden iki rustup target'ı da kurulu olmak zorunda
+          # (aşağıdaki `rust-targets`). Debug derlemesi bilerek universal DEĞİL:
+          # yalnızca test amaçlı olduğu için CI süresini iki katına çıkarmaya değmez.
           - platform: macos-latest
-            args: ''
-            target: aarch64-apple-darwin
-            label: macOS-ARM64
+            args: '--target universal-apple-darwin'
+            debug_args: ''
+            target: universal-apple-darwin
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+            label: macOS-Universal
           - platform: windows-latest
             args: ''
+            debug_args: ''
             target: x86_64-pc-windows-msvc
+            rust-targets: ''
             label: Windows-x64
 
     runs-on: ${{ matrix.platform }}
@@ -138,6 +147,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -203,6 +214,12 @@ jobs:
       # Stable: İMZALI derleme. tauri-action createUpdaterArtifacts=true olduğu
       # için latest.json + .sig üretir. İmzalama secret'ları ZORUNLU; yoksa
       # updater manifesti üretilmez ve aşağıdaki merge job'ı BİLEREK patlar.
+      #
+      # macOS universal notu: tauri-action, universal bir .app.tar.gz gördüğünde
+      # latest.json'a HEM darwin-aarch64 HEM darwin-x86_64 anahtarlarını (aynı
+      # dosyayı işaret ederek) yazar. Updater istemcisi çalışma anında yalnızca
+      # `darwin-{arch}` arar, `darwin-universal` diye bir geri düşüş YOKTUR —
+      # yani tek universal paket her iki mimarideki kullanıcıya da ulaşır.
       - name: Build & Publish (Stable, imzalı)
         uses: tauri-apps/tauri-action@v1
         env:
@@ -228,7 +245,7 @@ jobs:
           releaseName: ${{ needs.prepare.outputs.tag }}
           releaseDraft: true
           prerelease: ${{ needs.prepare.outputs.prerelease }}
-          args: --debug --config src-tauri/tauri.debug.conf.json ${{ matrix.args }} --verbose
+          args: --debug --config src-tauri/tauri.debug.conf.json ${{ matrix.debug_args }} --verbose
 
   # ────────────────────────────────────────────────────
   # 3) latest.json'u DOGRULA

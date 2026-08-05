@@ -19,7 +19,7 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["nsis", "dmg"],
+    "targets": ["nsis", "dmg", "app"],
     "resources": {
       "../static/superlogo.mp4": "superlogo.mp4",
       "../static/Muptezel-anime.gif": "Muptezel-anime.gif"

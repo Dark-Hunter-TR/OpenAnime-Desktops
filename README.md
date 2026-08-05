@@ -195,10 +195,10 @@ OpenAnime topluluğunun geliştirdiği siteye özel temaları uygulama içinden 
 
 | Yöntem | Boyut | Açıklama |
 |--------|-------|----------|
-| **[DMG Kurulum](https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest)** | ~15 MB | `.dmg` indir, uygulamayı `Applications` klasörüne sürükle |
+| **[DMG Kurulum](https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest)** | ~15 MB | `OpenAnime_<sürüm>_universal.dmg` indir, uygulamayı `Applications` klasörüne sürükle |
 | **[Homebrew](https://brew.sh)** *(yakında)* | — | `brew install openanime-desktop` |
 
-> Apple Silicon (M serisi) ve Intel Mac'lerde aynı DMG içinde evrensel binary çalışır.
+> Apple Silicon (M serisi) ve Intel Mac'lerde aynı DMG içinde evrensel binary çalışır — ayrı indirme dosyası yoktur.
 
 ---
 
@@ -263,6 +263,16 @@ bun run tauri:build   # veya: npm run tauri:build
 | --- | --- | --- |
 | Windows | — | `.exe` (NSIS) |
 | macOS | Xcode Command Line Tools yüklü bir Mac | `.dmg` |
+
+macOS'ta yayınlanan paketlerle birebir aynı **evrensel (Intel + Apple Silicon)** çıktıyı almak için önce iki Rust hedefini kurun, sonra hedefi belirterek derleyin:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+bun run tauri build --target universal-apple-darwin
+# npm ile: npm run tauri -- build --target universal-apple-darwin
+```
+
+Çıktı: `src-tauri/target/universal-apple-darwin/release/bundle/dmg/OpenAnime_<sürüm>_universal.dmg`
 
 ---
 
