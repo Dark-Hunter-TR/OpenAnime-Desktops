@@ -28,6 +28,30 @@
 // `Authorization: <token>` — "Bearer" ÖN EKİ YOK. Token, `token` adlı çerezde.
 // Çerez WebView2 deposundan okunur, böylece sayfa açık olmasa da çalışır.
 //
+// AKIŞ ÖLÇÜMÜ — 20 SANİYE KURALI (canlı testle KESİNLEŞTİ):
+// Sunucu "initial" bloğunu gönderdikten sonra hiçbir şey göndermiyor ve akışı
+// yanıt başlıklarından TAM ~20,0 sn sonra (±100 ms, 224+ örnek, birden çok gün,
+// istisnasız) temiz olmayan biçimde kapatıyor. Akış düzgün bitseydi `Ok(())`
+// dönerdi; her seferinde gövde çözme hatası geliyor.
+//
+// BUNLAR DENENDİ VE ELENDİ — tekrar denemeyin:
+//   • Ayrıştırma/tamponlama hatası DEĞİL: chunk'lar JSON'un ortasından
+//     bölünüyor, birleştirilip sorunsuz parse ediliyor.
+//   • reqwest kaynaklı DEĞİL: 0.12 varsayılanları doğrulandı
+//     (http2_keep_alive_interval=None, pool_idle_timeout=90 sn).
+//   • Yerel DPI proxy'si kaynaklı DEĞİL: akış oradan geçmiyor (günlüklerde
+//     eşleşen CONNECT yok).
+//   • BOŞTA-ZAMAN AŞIMI DEĞİL: `use_rustls_tls()` ile ALPN açılıp bağlantı
+//     fiilen HTTP/2.0'a çıkarıldı ve HTTP/2 PING keep-alive (10 sn) devreye
+//     alındı — akış YİNE 19,93 sn'de kesildi. Protokolden ve PING'den bağımsız.
+//
+// SONUÇ: 20 sn sunucunun bu uç noktaya koyduğu SABİT AKIŞ ÖMRÜ. İstemci bunu
+// engelleyemez; sitenin kendi EventSource'u da sürekli yeniden bağlanıyor
+// (tarayıcı bunu sessizce yaptığı için kullanıcı fark etmiyor). Doğru yaklaşım
+// kopmayı önlemeye çalışmak değil, yeniden bağlanmayı UCUZ, SESSİZ ve VERİ
+// KAYIPSIZ yapmaktır — kaçan bildirim bir sonraki "initial" listesinde
+// yakalanır (tazelik + `seen` süzgeçleri tekrarı eler).
+//
 // DEADLOCK UYARISI:
 // cookies_for_url() Windows'ta SENKRON komut/event handler içinde çağrılırsa
 // KİLİTLENİR (wry#583). Bu yüzden yalnızca spawn_blocking içinde, ana thread
@@ -48,6 +72,37 @@ const SITE_ORIGIN: &str = "https://openani.me";
 
 const RECONNECT_MIN_MS: u64 = 1_000;
 const RECONNECT_MAX_MS: u64 = 30_000;
+
+/// Bir akışın "sağlıklı" sayılması için yaşaması gereken en kısa süre.
+///
+/// 15 sn SEÇİLDİ ÇÜNKÜ sunucu her akışı ~20 sn'de kapatıyor (canlı testle
+/// doğrulandı; protokolden bağımsız, bkz. AKIŞ ÖLÇÜMÜ notu). Yani 20 sn'lik
+/// akış BAŞARISIZLIK DEĞİL, sunucunun normal çevrimidir — sitenin kendi
+/// EventSource'u da aynı şekilde sürekli yeniden bağlanır. Bu yüzden eşik
+/// 20'nin altında: normal çevrim bekleyişi sıfırlar ve hemen yeniden bağlanırız
+/// (bildirim gecikmesi düşük kalır). Yalnızca 15 sn'yi bile doldurmadan ölen
+/// akışlar (gerçek ağ/kimlik sorunu) bekleyişi kademeli olarak 30 sn'ye açar.
+const HEALTHY_STREAM_MS: u64 = 15_000;
+
+/// Gateway-Token bu yaştan sonra BAYAT sayılır ve kullanılmadan önce
+/// tazelenmeye çalışılır.
+///
+/// ÖLÇÜM (oturum günlüklerinden, 6 ayrı oturum): pencere tepsiye gizlendikten
+/// (→ sayfa donduruldu → token yansıtma durdu) sonra ilk HTTP 400
+/// "…çerezleri temizleyin." hatası, token'ın son yansıtılmasından 52–74 sn
+/// sonra geliyor. 45 sn bu aralığın güvenli tarafında kalır.
+const GATEWAY_TOKEN_MAX_AGE_MS: u64 = 45_000;
+
+/// İki tazeleme denemesi arasındaki en kısa süre (sayfayı boş yere uyandırma).
+const TOKEN_REFRESH_COOLDOWN_MS: u64 = 20_000;
+
+/// Uyandırılan sayfanın taze token üretmesi için tanınan süre.
+const TOKEN_REFRESH_WAIT_MS: u64 = 4_000;
+
+/// Bu süreden uzun arka planda kalan sayfanın oturumu BAYAT sayılır ve pencere
+/// geri getirilirken bir kez yeniden yüklenir (bkz. restore_and_focus_window).
+/// Gateway-Token ~60 sn yaşadığı için eşik onun biraz altında tutuldu.
+const STALE_SESSION_MS: u64 = 60_000;
 
 /// "Görüldü" listesi sınırsız büyümesin.
 const MAX_SEEN: usize = 400;
@@ -93,6 +148,13 @@ pub struct SuperNotifState {
     sse_authed: AtomicBool,
     /// Sayfadan gelen Gateway-Token (varsa isteğe eklenir).
     gateway_token: Mutex<Option<String>>,
+    /// Gateway-Token'ın sayfadan en son yansıtıldığı an. Token KISA ÖMÜRLÜ
+    /// (ölçüm: ~60 sn) olduğundan yaşı bilinmeden kullanılamaz — bkz.
+    /// GATEWAY_TOKEN_MAX_AGE_MS ve refresh_gateway_token.
+    gateway_token_at: Mutex<Option<std::time::Instant>>,
+    /// Sayfaya en son ne zaman "token'ı tazele" dendiği — uyandırma
+    /// isteklerinin birbirini kovalamasını önler.
+    last_token_refresh: Mutex<Option<std::time::Instant>>,
     /// Sitenin KENDİ api.openani.me isteklerinden yansıtılan canlı
     /// `Authorization` token'ı. SPA erişim token'ını bellekte tutup her istek
     /// öncesi yeniler; WebView2 çerez deposundaki `token` kopyası bayatlayıp
@@ -464,9 +526,35 @@ fn process_notifications(app: &AppHandle, items: Vec<Notification>) {
     }
 }
 
+/// Akışın başarısızlık nedeni.
+struct StreamFailure {
+    msg: String,
+    /// Vanguard kimlik reddi (HTTP 400/401). Bu hata KENDİ KENDİNE geçmez:
+    /// aynı bayat Gateway-Token'la tekrar denemek hep aynı sonucu verir, o
+    /// yüzden çağıran token'ı tazelemek zorundadır (bkz. start_listener).
+    gateway_rejected: bool,
+}
+
+/// `?` ile mevcut `Result<_, String>` dönüşlerini olduğu gibi kullanabilmek için.
+impl From<String> for StreamFailure {
+    fn from(msg: String) -> Self {
+        Self {
+            msg,
+            gateway_rejected: false,
+        }
+    }
+}
+
 /// Akışa bağlanır ve kopana kadar olayları işler.
 /// Ok(()) → akış düzgün sonlandı (yeniden bağlanılmalı).
-async fn run_stream(app: &AppHandle, connected: &mut bool) -> Result<(), String> {
+///
+/// `connected`: bağlantı 200 ile kurulduğu AN. None kalırsa hiç bağlanılamamış
+/// demektir. Çağıran, akışın ne kadar yaşadığını buradan hesaplar ve yeniden
+/// bağlanma bekleyişini buna göre ayarlar (bkz. start_listener).
+async fn run_stream(
+    app: &AppHandle,
+    connected: &mut Option<std::time::Instant>,
+) -> Result<(), StreamFailure> {
     // Öncelik sırası:
     //   1) Sitenin canlı isteklerinden yansıtılan Authorization token'ı
     //      (JS köprüsü — settings-ui). Çerezdeki kopya bayat olabildiğinden
@@ -490,6 +578,20 @@ async fn run_stream(app: &AppHandle, connected: &mut bool) -> Result<(), String>
         }
     };
 
+    // Gateway-Token BAYAT mı? Vanguard token'ı ~60 sn'de bir geçersizleşiyor;
+    // bayat token'la bağlanmak garanti HTTP 400 demek. Önce tazelemeyi dene
+    // (bkz. refresh_gateway_token). Tazelenemezse yine de deneriz — belki
+    // ölçtüğümüzden uzun yaşar; hata gelirse aşağıdaki 400 kolu devreye girer.
+    match gateway_token_age(app) {
+        Some(age) if age >= Duration::from_millis(GATEWAY_TOKEN_MAX_AGE_MS) => {
+            refresh_gateway_token(app, &format!("bayat: {:?}", age)).await;
+        }
+        None => {
+            refresh_gateway_token(app, "token yok").await;
+        }
+        _ => {}
+    }
+
     let gateway = app
         .state::<SuperNotifState>()
         .gateway_token
@@ -498,6 +600,15 @@ async fn run_stream(app: &AppHandle, connected: &mut bool) -> Result<(), String>
         .and_then(|g| g.clone());
 
     // Akış süresiz açık kalır — genel timeout YOK, yalnızca bağlanma timeout'u.
+    //
+    // KEEP-ALIVE DENENDİ, İŞE YARAMADI — tekrar denemeyin (canlı test edildi):
+    // 20 sn'lik kesilme bir BOŞTA-ZAMAN AŞIMI DEĞİL, sunucunun bu uç noktaya
+    // koyduğu sabit akış ömrü. Kanıt: `use_rustls_tls()` + HTTP/2 PING
+    // (interval 10 sn) ile bağlantı fiilen HTTP/2.0'a çıkarıldı ve akış YİNE
+    // 19,93 sn'de kesildi — protokolden ve PING'den tamamen bağımsız.
+    // Bu yüzden ne h2 keep-alive ne de rustls zorlaması burada duruyor:
+    // fayda sağlamıyorlar, rustls ayrıca Windows sertifika deposu yerine
+    // paketlenmiş kök setini kullandığı için kurumsal/MITM ağlarda risk.
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .user_agent(crate::platform_user_agent())
@@ -532,14 +643,23 @@ async fn run_stream(app: &AppHandle, connected: &mut bool) -> Result<(), String>
         // Gövdeyi de al: sunucu neden reddettiğini burada söylüyor
         // (ör. Vanguard gateway mi, token mı).
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "HTTP {} — {}",
-            status.as_u16(),
-            body.chars().take(200).collect::<String>()
-        ));
+        // 400/401 = Vanguard kimlik reddi. 400 gövdesi "Hata NNNNNN çerezleri
+        // temizleyin." (kod her seferinde değişir), 401 ise "…denied by
+        // OpenAnime Vanguard". İkisi de bayat/eksik Gateway-Token demek —
+        // AYNI token'la tekrar denemenin faydası yok, tazelenmeli.
+        let gateway_rejected = matches!(status.as_u16(), 400 | 401);
+        return Err(StreamFailure {
+            msg: format!(
+                "HTTP {} — {}",
+                status.as_u16(),
+                body.chars().take(200).collect::<String>()
+            ),
+            gateway_rejected,
+        });
     }
 
-    *connected = true;
+    let started = std::time::Instant::now();
+    *connected = Some(started);
     // 200 ile bağlanıldı → kullanıcı kesin giriş yapmış (tepsi menüsü için).
     app.state::<SuperNotifState>()
         .sse_authed
@@ -550,33 +670,51 @@ async fn run_stream(app: &AppHandle, connected: &mut bool) -> Result<(), String>
         .and_then(|v| v.to_str().ok())
         .unwrap_or("(yok)")
         .to_string();
+    // HTTP sürümü TEŞHİS İÇİN kritik: HTTP/2 ise yukarıdaki PING keep-alive'ı
+    // fiilen çalışır; HTTP/1.1'e düşülmüşse PING diye bir şey YOKTUR ve akışı
+    // canlı tutmanın protokol düzeyinde bir yolu kalmaz (yalnızca TCP keepalive).
+    // Akış erken kopmaya devam ederse bakılacak İLK satır budur.
+    let http_version = format!("{:?}", resp.version());
     crate::dbg_log!(
-        "[SüperBildirim] Bildirim akışına bağlanıldı · HTTP {} · content-type: {}",
+        "[SüperBildirim] Bildirim akışına bağlanıldı · HTTP {} · {} · content-type: {}",
         status.as_u16(),
+        http_version,
         content_type
     );
 
     let mut stream = resp.bytes_stream();
-    let mut buf = String::new();
+    // BAYT tamponu (String DEĞİL). NEDEN: bir chunk sınırı çok baytlı bir UTF-8
+    // karakterinin ORTASINA düşebilir — loglar chunk'ların JSON'un tam ortasından
+    // bölündüğünü gösteriyor. Eski kod her chunk'ı tek tek `from_utf8_lossy`'den
+    // geçirdiği için, sınıra denk gelen bir Türkçe karakter (ş/ğ/İ…) sessizce
+    // U+FFFD'ye dönüşüp bildirim başlığını/metnini bozuyordu. Artık dönüşüm
+    // yalnızca TAM olay bloklarında yapılır; blok sınırı daima bir '\n' (ASCII)
+    // sonrasıdır, dolayısıyla hiçbir karakter ikiye bölünemez.
+    let mut buf: Vec<u8> = Vec::new();
     let mut chunk_no: u64 = 0;
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("akış: {}", e))?;
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                // Akış koptu. Süreyi de bildir: "sessiz kalıp tam 20 sn'de
+                // koparıldı" ile "gerçek ağ hatası" ancak böyle ayırt edilir.
+                return Err(format!("akış ({:?} sonra): {}", started.elapsed(), e).into());
+            }
+        };
         chunk_no += 1;
-        let text = String::from_utf8_lossy(&chunk).replace("\r\n", "\n");
-        // TEŞHİS: her ham chunk'ın boyutu + önizlemesi (dbg). Sunucu olayları
-        // "\n\n" ile ayırmıyorsa veya farklı format gönderiyorsa burada belli olur.
         crate::dbg_log!(
             "[SüperBildirim] chunk #{} · {} bayt · {}",
             chunk_no,
             chunk.len(),
-            preview(&text, 400)
+            preview(&String::from_utf8_lossy(&chunk), 400)
         );
-        buf.push_str(&text);
+        buf.extend_from_slice(&chunk);
 
-        // Olaylar boş satırla ayrılır.
-        while let Some(pos) = buf.find("\n\n") {
-            let block: String = buf.drain(..pos + 2).collect();
+        // Olaylar boş satırla ayrılır ("\n\n", "\r\n\r\n" ya da "\r\r").
+        while let Some((pos, sep_len)) = find_event_end(&buf) {
+            let block_bytes: Vec<u8> = buf.drain(..pos + sep_len).collect();
+            let block = String::from_utf8_lossy(&block_bytes).replace("\r\n", "\n");
             handle_sse_block(app, &block);
         }
 
@@ -587,8 +725,26 @@ async fn run_stream(app: &AppHandle, connected: &mut bool) -> Result<(), String>
         }
     }
 
-    crate::dbg_log!("[SüperBildirim] akış chunk döngüsü bitti ({} chunk işlendi)", chunk_no);
+    crate::dbg_log!(
+        "[SüperBildirim] akış chunk döngüsü bitti ({} chunk, {:?} sürdü)",
+        chunk_no,
+        started.elapsed()
+    );
     Ok(())
+}
+
+/// Tampondaki ilk SSE olay ayracını bulur → (ayracın başladığı indeks, uzunluğu).
+/// SSE olayları boş bir satırla biter; satır sonu "\n", "\r\n" veya "\r" olabilir.
+fn find_event_end(buf: &[u8]) -> Option<(usize, usize)> {
+    for i in 0..buf.len() {
+        if buf[i..].starts_with(b"\r\n\r\n") {
+            return Some((i, 4));
+        }
+        if buf[i..].starts_with(b"\n\n") || buf[i..].starts_with(b"\r\r") {
+            return Some((i, 2));
+        }
+    }
+    None
 }
 
 pub fn start_listener(app: &AppHandle) {
@@ -601,6 +757,9 @@ pub fn start_listener(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         crate::dbg_log!("[SüperBildirim] Dinleyici başladı (SSE)");
         let mut backoff = RECONNECT_MIN_MS;
+        /// Art arda kaç Vanguard reddinden sonra sayfa yeniden yüklenir.
+        const GATEWAY_RELOAD_AFTER: u32 = 3;
+        let mut gateway_rejections: u32 = 0;
 
         loop {
             if !app
@@ -612,15 +771,58 @@ pub fn start_listener(app: &AppHandle) {
                 continue;
             }
 
-            let mut connected = false;
-            match run_stream(&app, &mut connected).await {
-                Ok(()) => crate::dbg_log!("[SüperBildirim] Akış kapandı, yeniden bağlanılacak"),
-                Err(e) => crate::dbg_log!("[SüperBildirim] Akış hatası: {}", e),
+            let mut connected: Option<std::time::Instant> = None;
+            let outcome = run_stream(&app, &mut connected).await;
+            let lived = connected.map(|t| t.elapsed());
+
+            match (&outcome, lived) {
+                (Ok(()), _) => crate::dbg_log!("[SüperBildirim] Akış kapandı, yeniden bağlanılacak"),
+                // Bağlanıp veri aldıktan sonra sessizce koparılmak bu sunucuda
+                // OLAĞAN (bkz. AKIŞ ÖLÇÜMÜ notu): keep-alive gönderilmiyor ve
+                // sessiz bağlantı yol üzerinde kesiliyor. Bunu "hata" diye
+                // bağırmak günlüğü doldurup gerçek hataları gizliyordu.
+                (Err(e), Some(d)) => crate::dbg_log!(
+                    "[SüperBildirim] Akış {:?} sonra kesildi, yeniden bağlanılıyor · {}",
+                    d,
+                    e.msg
+                ),
+                (Err(e), None) => crate::dbg_log!("[SüperBildirim] Akış hatası: {}", e.msg),
             }
 
-            // Bağlantı kurulabildiyse bekleyişi sıfırla (site de böyle yapıyor);
-            // kurulamıyorsa (giriş yok / ağ yok) kademeli olarak seyrelt.
-            if connected {
+            // Vanguard reddi (400/401): token bayat. Tekrar denemeden ÖNCE
+            // tazele — yoksa aynı ölü token'la sonsuza dek aynı 400 alınır
+            // (sahadaki davranış tam olarak buydu). Tazeleme de sonuç vermezse
+            // art arda birkaç retten sonra sayfayı yeniden yükleterek Vanguard'ı
+            // sıfırdan kurdur.
+            if outcome.as_ref().err().is_some_and(|e| e.gateway_rejected) {
+                gateway_rejections += 1;
+                crate::dbg_log!(
+                    "[SüperBildirim] Vanguard reddi #{} — Gateway-Token tazelenecek",
+                    gateway_rejections
+                );
+                let refreshed = refresh_gateway_token(&app, "Vanguard reddi").await;
+                if !refreshed && gateway_rejections >= GATEWAY_RELOAD_AFTER {
+                    reload_page_for_gateway(&app);
+                    gateway_rejections = 0;
+                    // Sayfanın yeniden yüklenip Vanguard'ı kurması zaman alır.
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            } else {
+                gateway_rejections = 0;
+            }
+
+            // Bekleyişi YALNIZCA akış "sağlıklı" yaşadıysa sıfırla.
+            //
+            // Eskiden bağlanabilmek tek başına yeterliydi (`connected == true`).
+            // Ama bu sunucuda akış her seferinde ~20 sn'de kesildiğinden bekleyiş
+            // her turda 1 sn'ye geri dönüyor, uygulama ömrü boyunca ~21 sn'de bir
+            // yeniden bağlanıp aynı "initial" listesini baştan indiriyordu.
+            // Artık kısa ömürlü akışlar bekleyişi sıfırlamaz: kopma ısrar ederse
+            // aralık kademeli olarak 30 sn'ye açılır. Bu sırada gelen bildirim
+            // KAYBOLMAZ — bağlantı kurulunca "initial" listesiyle yine yakalanır
+            // (tazelik + `seen` süzgeçleri tekrarı zaten eliyor).
+            let healthy = lived.is_some_and(|d| d >= Duration::from_millis(HEALTHY_STREAM_MS));
+            if healthy {
                 backoff = RECONNECT_MIN_MS;
             }
 
@@ -829,6 +1031,10 @@ fn handle_tray_action(app: &AppHandle, action: &str) {
 /// ortak kullanır). Tam sayfa yüklemesi: SPA router'ının iç API'sine bağımlı
 /// olmamak için `location.href` set edilir (kırılgan değil, kesin çalışır).
 pub fn restore_and_focus_window(win: &tauri::WebviewWindow) {
+    // Süreyi resume'dan ÖNCE oku: `resume_webview` pencereyi Foreground'a
+    // aldığı anda arka plan sayacı silinir.
+    let slept = crate::background_duration(&win.app_handle(), win.label());
+
     if win.is_minimized().unwrap_or(false) {
         let _ = win.unminimize();
     }
@@ -840,6 +1046,22 @@ pub fn restore_and_focus_window(win: &tauri::WebviewWindow) {
     // O durumda webview askıda (SetIsVisible(false) + TrySuspend) kalır ve
     // kullanıcı boş/donuk pencere görür. Bu yüzden koşulsuz geri döndürüyoruz.
     crate::resume_webview(win);
+
+    // OTURUM TAZELEME (Bug 3): sayfa uzun süre dondurulmuş kaldıysa SPA'nın
+    // bellekte tuttuğu erişim token'ı ve Vanguard `Gateway-Token`'ı çoktan
+    // geçersizleşmiştir (ölçüm: gateway token ~60 sn yaşıyor). Donmuş sayfa
+    // uyandırıldığında bu ölü kimlik bilgileriyle istek atıp 400/401 alıyor ve
+    // arayüzü "çıkış yapılmış" gibi çiziyordu — kullanıcının gördüğü "tepsiden
+    // açınca hesaptan çıkmış görünüyor" durumu tam olarak budur.
+    // Tek seferlik tam sayfa yüklemesi SPA'yı sıfırdan kurar; çerezdeki kalıcı
+    // oturum hâlâ geçerli olduğu için kullanıcı giriş yapmış olarak döner.
+    if slept.is_some_and(|d| d >= Duration::from_millis(STALE_SESSION_MS)) {
+        crate::dbg_log!(
+            "[SüperBildirim] Pencere {:?} arka planda kaldı → oturum tazelemek için sayfa yenileniyor",
+            slept.unwrap_or_default()
+        );
+        let _ = win.eval("try{window.location.reload();}catch(e){}");
+    }
 }
 
 /// Ana pencereyi öne getirip verilen URL'ye gider (SSE toast tıklaması + komut
@@ -1159,8 +1381,144 @@ pub fn sn_set_gateway_token(app: AppHandle, token: String) -> Result<(), String>
     if g.as_deref() != Some(token.as_str()) {
         crate::dbg_log!("[SüperBildirim] Gateway-Token güncellendi");
         *g = Some(token);
+        // Yaşı YALNIZCA değer gerçekten değiştiğinde sıfırla: aynı (bayat)
+        // token'ın tekrar yansıtılması onu tazelemez, sadece aynı değerin hâlâ
+        // orada durduğunu gösterir.
+        if let Ok(mut at) = state.gateway_token_at.lock() {
+            *at = Some(std::time::Instant::now());
+        }
     }
     Ok(())
+}
+
+/// Gateway-Token'ın yaşı (hiç alınmadıysa None).
+fn gateway_token_age(app: &AppHandle) -> Option<Duration> {
+    app.state::<SuperNotifState>()
+        .gateway_token_at
+        .lock()
+        .ok()
+        .and_then(|a| *a)
+        .map(|t| t.elapsed())
+}
+
+/// Sayfadan TAZE bir Gateway-Token ister ve gelmesini kısa süre bekler.
+///
+/// NEDEN GEREKLİ (Bug 2'nin kök nedeni): `Gateway-Token` OpenAnime Vanguard
+/// tarafından üretilir, KISA ÖMÜRLÜDÜR (ölçüm: ~60 sn) ve onu tazeleyebilen tek
+/// yer sayfanın kendisidir. Pencere tepsiye gizlenince WebView2 `TrySuspend`
+/// ile dondurulur ve background-mode.js "hidden" modunda tüm `oaBgInterval`
+/// timer'larını durdurur — token yansıtma timer'ı dahil. Böylece token bayatlar,
+/// Vanguard her isteği `HTTP 400 {"error":"Hata NNNNNN çerezleri temizleyin."}`
+/// ile reddeder ve tazeleyecek kimse olmadığı için bu SONSUZA DEK sürer.
+/// (Token'sız denemek çözüm değil: o zaman `HTTP 401 … denied by OpenAnime
+/// Vanguard` geliyor — başlık ZORUNLU.)
+///
+/// Çözüm: motoru pencereyi göstermeden kısa süreliğine uyandır, sayfanın kendi
+/// Vanguard mantığının çalışmasına izin ver, token'ı yeniden okut, sonra eski
+/// arka plan moduna (genelde DeepSleep) geri döndür.
+async fn refresh_gateway_token(app: &AppHandle, reason: &str) -> bool {
+    // Çok sık uyandırma — sayfa boşuna diriltilmesin.
+    // (Kilit bu blokta alınıp bırakılır; blok içinden `return` EDİLMEZ, aksi
+    // halde `State` ödünçlemesi dönüş değerinden uzun yaşamış olurdu.)
+    let cooling_down = {
+        let state = app.state::<SuperNotifState>();
+        let mut last = state.last_token_refresh.lock().ok();
+        match last.as_deref_mut() {
+            Some(slot) => match *slot {
+                Some(t) if t.elapsed() < Duration::from_millis(TOKEN_REFRESH_COOLDOWN_MS) => true,
+                _ => {
+                    *slot = Some(std::time::Instant::now());
+                    false
+                }
+            },
+            None => true, // kilit zehirli — bu turu atla
+        }
+    };
+    if cooling_down {
+        return false;
+    }
+
+    let Some((label, win)) = app
+        .get_webview_window("main")
+        .map(|w| ("main".to_string(), w))
+        .or_else(|| {
+            app.webview_windows()
+                .into_iter()
+                .next()
+                .map(|(l, w)| (l, w))
+        })
+    else {
+        crate::dbg_log!("[SüperBildirim] token tazelenemedi ({}): açık pencere yok", reason);
+        return false;
+    };
+
+    crate::dbg_log!(
+        "[SüperBildirim] Gateway-Token tazeleniyor ({}) · pencere={}",
+        reason,
+        label
+    );
+
+    let before = app
+        .state::<SuperNotifState>()
+        .gateway_token
+        .lock()
+        .ok()
+        .and_then(|g| g.clone());
+
+    // Motoru uyandır (pencereyi GÖSTERMEDEN) — donmuş webview'da eval çalışmaz.
+    crate::wake_webview_for_script(&win);
+    let _ = win.eval("try{window.__oaSnRefreshToken&&window.__oaSnRefreshToken();}catch(e){}");
+
+    // Taze token'ın yansıtılmasını bekle.
+    let deadline = std::time::Instant::now() + Duration::from_millis(TOKEN_REFRESH_WAIT_MS);
+    let mut changed = false;
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let now_tok = app
+            .state::<SuperNotifState>()
+            .gateway_token
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
+        if now_tok.is_some() && now_tok != before {
+            changed = true;
+            break;
+        }
+    }
+
+    // Pencereyi gerçek durumuna göre yeniden uyut (tepsideyse DeepSleep'e döner).
+    crate::restore_background_mode(app, &label);
+
+    if changed {
+        crate::dbg_log!("[SüperBildirim] Gateway-Token tazelendi");
+    } else {
+        // Sayfa uyandı ama Vanguard yeni token üretmedi. Tek kalan kesin yol
+        // sayfayı yeniden yükletmek (sunucunun "çerezleri temizleyin" dediği
+        // şeyin fiilî karşılığı) — ama bunu ancak gerçekten reddedildiğimizde
+        // yaparız, düzenli bayatlama kontrolünde değil.
+        crate::dbg_log!(
+            "[SüperBildirim] Gateway-Token tazelenemedi ({}) — sayfa yeni token üretmedi",
+            reason
+        );
+    }
+    changed
+}
+
+/// Vanguard bizi reddetti (400/401) ve token tazeleme de sonuç vermedi:
+/// gizli sayfayı yeniden yükleyerek Vanguard'ın yeniden kurulmasını sağla.
+/// Bu, sunucunun kendi talimatının ("çerezleri temizleyin") uygulamadaki
+/// karşılığıdır. Nadir ve maliyetli olduğu için yalnızca reddedilme
+/// döngüsünde, cooldown'a tabi çağrılır.
+fn reload_page_for_gateway(app: &AppHandle) {
+    let Some(win) = app
+        .get_webview_window("main")
+        .or_else(|| app.webview_windows().into_iter().next().map(|(_, w)| w))
+    else {
+        return;
+    };
+    crate::log!("[Bildirim] Oturum doğrulaması yenileniyor (sayfa yeniden yükleniyor)");
+    crate::wake_webview_for_script(&win);
+    let _ = win.eval("try{window.location.reload();}catch(e){}");
 }
 
 /// Sitenin canlı `Authorization` başlığını Rust'a yansıtır (JS köprüsü).

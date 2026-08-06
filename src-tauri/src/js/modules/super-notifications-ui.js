@@ -491,9 +491,30 @@ function initSuperNotifications() {
   snRelayGatewayToken();
   // Token oturum içinde yenilenebiliyor — periyodik tazele (fetch/XHR aynası
   // yakalayamazsa sessionStorage'dan gelen yedek yol).
-  // oaBgInterval: tepsideyken durur. Token'ı Rust zaten almış durumda ve SSE
-  // dinleyicisi Rust tarafında çalışıyor — sayfa gizliyken tazelemeye gerek yok.
-  oaBgInterval(snRelayGatewayToken, SN_TOKEN_RELAY_MS);
+  //
+  // `keepInMedia = true` (ÜÇÜNCÜ ARGÜMAN — bilerek):
+  // Buradaki eski varsayım "Rust token'ı zaten aldı, sayfa gizliyken
+  // tazelemeye gerek yok" idi. YANLIŞTI ve Bug 2'nin kök nedeniydi: Vanguard
+  // `Gateway-Token`'ı ~60 sn'de bir geçersizleşiyor. Sayfa tepside donunca
+  // tazeleme duruyor, Rust'ın elindeki kopya bayatlıyor ve SSE akışı
+  // `HTTP 400 {"error":"Hata NNNNNN çerezleri temizleyin."}` ile SONSUZA DEK
+  // reddediliyordu. Artık Rust motoru gerektiğinde "media" moduna uyandırıyor
+  // (bkz. lib.rs > wake_webview_for_script) ve bu timer o modda çalışmaya
+  // devam ederek token'ı canlı tutuyor.
+  oaBgInterval(snRelayGatewayToken, SN_TOKEN_RELAY_MS, true);
+
+  // Rust'ın doğrudan çağırdığı tazeleme girişi (bkz. super_notifications.rs >
+  // refresh_gateway_token). Motor donmuşken eval çalışmadığı için Rust önce
+  // pencereyi uyandırır, sonra burayı çağırır.
+  window.__oaSnRefreshToken = function () {
+    try {
+      // `snLastToken` eşitlik korumasını sıfırla: sayfa aynı değeri yeniden
+      // üretse bile Rust'ın yaş sayacının doğru çalışması için değerin
+      // gerçekten değişip değişmediğini Rust tarafı karşılaştırıyor.
+      snRelayGatewayToken();
+      snRelayAccount();
+    } catch (e) {}
+  };
 
   // Hesap bilgisini özel tepsi menüsü için yansıt. Hydration sonrası oturum
   // öğeleri geç belirebildiğinden birkaç kez erken dene, sonra seyrek tazele.

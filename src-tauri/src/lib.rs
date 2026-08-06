@@ -49,6 +49,11 @@ pub struct PerfState {
     /// `BgMode`'a çevrildi — bkz. set_background_suspend.)
     #[cfg(target_os = "windows")]
     pub suspended: Mutex<HashMap<String, BgMode>>,
+    /// Pencere etiketi -> arka plana (Media/DeepSleep) geçtiği an.
+    /// Ön plana dönünce silinir. Sayfanın ne kadar dondurulmuş kaldığını
+    /// bilmek oturum tazeliği için gerekli (bkz. background_duration).
+    #[cfg(target_os = "windows")]
+    pub bg_since: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 #[allow(non_snake_case)]
@@ -314,6 +319,24 @@ fn set_background_suspend(window: &tauri::WebviewWindow, mode: BgMode) {
 
     dbg_log!("[PerfMode] Arka plan modu ({}): {:?} → {:?}", label, previous, mode);
 
+    // Arka planda geçirilen süreyi izle: sayfa uzun süre dondurulmuşsa
+    // oturum/kimlik bilgileri bayatlamış olur ve geri dönüşte bir kez
+    // yenilenmesi gerekir (bkz. background_duration / restore_and_focus_window).
+    {
+        let st = window.app_handle().state::<PerfState>();
+        let mut since = st.bg_since.lock().unwrap();
+        match mode {
+            BgMode::Foreground => {
+                since.remove(&label);
+            }
+            // Media → DeepSleep gibi geçişlerde sayacı SIFIRLAMA: sayfa
+            // kesintisiz arka planda kalmaya devam ediyor.
+            _ => {
+                since.entry(label.clone()).or_insert_with(std::time::Instant::now);
+            }
+        }
+    }
+
     let _ = window.with_webview(move |webview| unsafe {
         use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_3;
         use webview2_com::TrySuspendCompletedHandler;
@@ -471,9 +494,18 @@ fn update_background_mode(app: &tauri::AppHandle, label: &str) {
 /// üretir; tauri-runtime-wry `WindowMessage::Hide`ı tao'ya yönlendirir ve
 /// wry'nin `controller.SetIsVisible` çağrısına dokunmaz.)
 ///
-/// Askıya alma 250 ms geciktirilir: JS'in `background-mode` olayını işleyip
+/// Askıya alma geciktirilir: JS'in `background-mode` olayını işleyip
 /// animasyon/timer'larını durdurması için bir pencere bırakır. Gecikme ayrı bir
 /// thread'de beklenir — ana thread'i (dolayısıyla gizleme animasyonunu) bloke etmez.
+///
+/// GECİKME NEDEN 1200 ms: X'e basınca sayfa artık /settings'e yönlendiriliyor
+/// (bkz. CloseRequested). `TrySuspend` sayfa YÜKLENİRKEN reddedilir — 250 ms ile
+/// askıya alma tam gezinmenin ortasına denk gelip sessizce başarısız oluyor,
+/// motor uyanık ve bellek yüksek kalıyordu. Bu süre hafif /settings sayfasının
+/// yüklenmesini bekler.
+#[cfg(target_os = "windows")]
+const TRAY_SUSPEND_DELAY_MS: u64 = 1_200;
+
 #[cfg(target_os = "windows")]
 fn enter_tray_background(app: &tauri::AppHandle, label: &str) {
     let playing = app
@@ -497,7 +529,7 @@ fn enter_tray_background(app: &tauri::AppHandle, label: &str) {
     let app_c = app.clone();
     let label_c = label.to_string();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        std::thread::sleep(std::time::Duration::from_millis(TRAY_SUSPEND_DELAY_MS));
         // Ayrı thread'den çağrılır: is_visible()/with_webview kendi içlerinde
         // ana thread'e dispatch eder. (Ana thread'in İÇİNDEN yeniden dispatch
         // etmek kilitlenme yaratıyordu — bkz. refresh_perf_mode'daki not.)
@@ -522,6 +554,82 @@ pub(crate) fn resume_webview(window: &tauri::WebviewWindow) {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = window;
+    }
+}
+
+/// Pencerenin kesintisiz olarak ne kadardır arka planda (Media/DeepSleep)
+/// olduğunu döndürür. Ön plandaysa None.
+pub(crate) fn background_duration(
+    app: &tauri::AppHandle,
+    label: &str,
+) -> Option<std::time::Duration> {
+    #[cfg(target_os = "windows")]
+    {
+        app.state::<PerfState>()
+            .bg_since
+            .lock()
+            .ok()?
+            .get(label)
+            .map(|t| t.elapsed())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, label);
+        None
+    }
+}
+
+/// Motoru SCRIPT ÇALIŞTIRABİLECEK duruma getirir — ama pencereyi GÖSTERMEZ.
+///
+/// NEDEN GEREKLİ: tepsideyken pencere `BgMode::DeepSleep`'tedir, yani WebView2
+/// `TrySuspend` ile DONDURULMUŞTUR; bu hâldeyken `eval` çalışmaz. Oysa Vanguard
+/// `Gateway-Token`'ı ~60 sn'de bir bayatlıyor ve onu tazeleyebilecek TEK yer
+/// sayfanın kendisi (bkz. super_notifications::refresh_gateway_token).
+///
+/// `Media` modu tam olarak bu iş için biçilmiş kaftan: `Resume()` çağrılır ama
+/// `SetIsVisible(false)` korunur — motor çalışır, render/compositing çalışmaz,
+/// pencere görünmez. İşi biten çağıran `restore_background_mode` ile eski
+/// duruma (genelde DeepSleep) geri döndürmelidir, yoksa motor uyanık kalıp
+/// tepsi RAM kazancını yer.
+///
+/// Pencere ZATEN ön plandaysa hiçbir şey yapılmaz — onu Media'ya düşürmek
+/// görünür bir pencerenin render'ını durdururdu.
+pub(crate) fn wake_webview_for_script(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        let label = window.label().to_string();
+        let current = window
+            .app_handle()
+            .state::<PerfState>()
+            .suspended
+            .lock()
+            .unwrap()
+            .get(&label)
+            .copied()
+            .unwrap_or(BgMode::Foreground);
+        if current == BgMode::Foreground {
+            return;
+        }
+        set_background_suspend(window, BgMode::Media);
+        // JS'e de "media" de: `keepInMedia` işaretli timer'lar (token yansıtma)
+        // yeniden kurulsun, yoksa motor uyanık olsa da timer'lar durmuş kalır.
+        emit_background_state(&window.app_handle(), &label, "media");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+    }
+}
+
+/// `wake_webview_for_script` ile uyandırılan pencereyi gerçek durumuna
+/// (görünürlük + oynatma) göre yeniden değerlendirip uygun arka plan moduna
+/// döndürür — tepsideki bir pencere için bu genelde DeepSleep'e geri dönmektir.
+pub(crate) fn restore_background_mode(app: &tauri::AppHandle, label: &str) {
+    #[cfg(target_os = "windows")]
+    update_background_mode(app, label);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, label);
     }
 }
 
@@ -1704,6 +1812,39 @@ pub fn run() {
 
                     if !quitting {
                         api.prevent_close();
+
+                        // ── X = "uygulamayı tepsiye park et" ──────────────
+                        // 1) TÜM medyayı duraklat. Bu OLMADAN video arka planda
+                        //    çalmaya devam ediyordu: X pencereyi kapatmıyor,
+                        //    gizliyor; oynatma sürerken seçilen `BgMode::Media`
+                        //    ise motoru BİLEREK dondurmuyor (bkz. BgMode::Media
+                        //    doküman notu) — yani "kapattım ama ses devam
+                        //    ediyor" tam olarak bu tasarımın sonucuydu.
+                        // 2) Hafif bir sayfaya (/settings) git: oynatıcı DOM'u
+                        //    tamamen yıkılır, arka plan belleği en aza iner.
+                        //    (Tepsi oturumu penceresi de aynı sebeple /settings
+                        //    kullanıyor — bkz. spawn_tray_session_window.)
+                        // NOT: buradaki `window` bir `tauri::Window` (webview
+                        // değil) — script çalıştırmak için etiketten
+                        // WebviewWindow'u almak gerekiyor.
+                        if let Some(wv) = app_handle.get_webview_window(&label) {
+                            let _ = wv.eval(
+                                "try{document.querySelectorAll('video,audio').forEach(function(m){try{m.pause();}catch(e){}});}catch(e){}\
+                                 try{window.location.href='https://openani.me/settings';}catch(e){}",
+                            );
+                        }
+
+                        // Oynatma durumunu Rust tarafında da HEMEN düşür.
+                        // JS'in `oa_set_player_playing(false)` bildirimini
+                        // beklemek yarış yaratırdı: bildirim geç kalırsa
+                        // update_background_mode hâlâ "oynuyor" görüp Media'yı
+                        // seçer ve motoru dondurmazdı.
+                        #[cfg(target_os = "windows")]
+                        {
+                            let st = app_handle.state::<PerfState>();
+                            st.player_playing.lock().unwrap().insert(label.clone(), false);
+                        }
+
                         let _ = window.hide();
                         log!("[Tauri] Pencere tepsiye gizlendi: {}", label);
 

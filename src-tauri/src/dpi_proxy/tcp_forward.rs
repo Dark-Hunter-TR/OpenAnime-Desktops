@@ -111,6 +111,95 @@ async fn resolve_target_doh(target: &str) -> String {
     target.to_string()
 }
 
+/// Sistem çözümleyicisi ADI ÇÖZEMEDİĞİNDE son çare: hedefi DoH ile çöz.
+///
+/// NEDEN VAR (Bug 5): `resolve_target_doh` DoH'u yalnızca `*.openani.me` için
+/// ve yalnızca WARP kapalıyken uyguluyordu. Diğer TÜM adlar (Cloudflare
+/// challenge alan adları, `events.openani.me` WARP açıkken, gstatic, vb.)
+/// doğrudan sistem çözümleyicisine düşüyordu ve o başarısız olunca YEDEK
+/// DENENMİYORDU — bağlantı "os error 11001" ile ölüyordu. Oturum günlüklerinde
+/// bu 908 kez oldu (247 challenges.cloudflare.com, 119 api.openani.me,
+/// 52 openani.me …), yani izole değil SİSTEMİK bir davranıştı.
+///
+/// Burada DoH'u önden DAYATMIYORUZ (WARP kuralı korunur); yalnızca sistem
+/// çözümleyicisi fiilen başarısız olduktan SONRA devreye giriyoruz.
+async fn resolve_fallback_doh(target: &str) -> Option<String> {
+    let host = target.split(':').next().unwrap_or(target);
+    // Zaten IP ise çözecek bir şey yok.
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return None;
+    }
+    let ip = super::remote_proxy::resolve_dns_doh(host).await?;
+    let port = target.split(':').nth(1).unwrap_or("443");
+    Some(format!("{}:{}", ip, port))
+}
+
+/// Hedefe bağlanır; ad çözümleme başarısız olursa DoH ile yeniden dener.
+/// Hangi yolun denendiği ve sonucu AÇIKÇA loglanır — eskiden hatadan sonra ne
+/// yapıldığı (yedek denendi mi) günlükten anlaşılamıyordu.
+async fn connect_with_dns_fallback(connect_target: &str) -> Result<TcpStream, std::io::Error> {
+    let first = match TcpStream::connect(connect_target).await {
+        Ok(s) => {
+            dbg_log!("[DPI Proxy]   Hedefe bağlanıldı: {}", connect_target);
+            return Ok(s);
+        }
+        Err(e) => e,
+    };
+
+    if !is_dns_failure(&first) {
+        // Ad çözüldü ama bağlanılamadı (bağlantı reddi/zaman aşımı) — DoH
+        // burada yardımcı olmaz, hatayı olduğu gibi geri ver.
+        return Err(first);
+    }
+
+    dbg_log!(
+        "[DPI Proxy]   Ad çözümlenemedi ({}): {} — DoH yedeği deneniyor",
+        connect_target,
+        first
+    );
+
+    let Some(doh_target) = resolve_fallback_doh(connect_target).await else {
+        dbg_log!(
+            "[DPI Proxy]   DoH yedeği de çözemedi: {} — bağlantı bırakılıyor",
+            connect_target
+        );
+        return Err(first);
+    };
+
+    match TcpStream::connect(&doh_target).await {
+        Ok(s) => {
+            dbg_log!(
+                "[DPI Proxy]   Hedefe bağlanıldı (DoH yedeği): {} -> {}",
+                connect_target,
+                doh_target
+            );
+            Ok(s)
+        }
+        Err(e) => {
+            dbg_log!(
+                "[DPI Proxy]   DoH yedeğiyle de bağlanılamadı ({} -> {}): {}",
+                connect_target,
+                doh_target,
+                e
+            );
+            Err(e)
+        }
+    }
+}
+
+/// Hata bir AD ÇÖZÜMLEME hatası mı? (Windows: os error 11001 =
+/// WSAHOST_NOT_FOUND; platformdan bağımsız olarak `NotFound`/`Uncategorized`
+/// biçiminde gelebildiği için mesaj da kontrol edilir.)
+fn is_dns_failure(e: &std::io::Error) -> bool {
+    if e.raw_os_error() == Some(11001) {
+        return true;
+    }
+    let msg = e.to_string().to_lowercase();
+    msg.contains("failed to lookup address")
+        || msg.contains("no such host")
+        || msg.contains("name or service not known")
+}
+
 /// HTTP Proxy girişi — CONNECT veya direkt HTTP isteklerini yönetir
 async fn handle_http_proxy(mut client: TcpStream, method: DpiMethod) -> Result<(), String> {
     let mut buf = vec![0u8; 4096];
@@ -172,11 +261,8 @@ async fn handle_connect(
     let connect_target = resolve_target_doh(target).await;
 
     // Hedefe bağlan
-    let mut server = match TcpStream::connect(&connect_target).await {
-        Ok(s) => {
-            dbg_log!("[DPI Proxy]   Hedefe bağlanıldı: {}", connect_target);
-            s
-        }
+    let mut server = match connect_with_dns_fallback(&connect_target).await {
+        Ok(s) => s,
         Err(e) => {
             // canvas domainleri için bağlantı hatalarını sessizce geç
             if is_canvas {
@@ -246,12 +332,9 @@ async fn handle_http_request(
 
     let connect_target = resolve_target_doh(&target).await;
 
-    // Hedefe bağlan
-    let mut server = match TcpStream::connect(&connect_target).await {
-        Ok(s) => {
-            dbg_log!("[DPI Proxy]   HTTP hedefe bağlanıldı: {}", connect_target);
-            s
-        }
+    // Hedefe bağlan (ad çözümlenemezse DoH yedeğiyle yeniden dener)
+    let mut server = match connect_with_dns_fallback(&connect_target).await {
+        Ok(s) => s,
         Err(e) => {
             dbg_log!("[DPI Proxy]   HTTP hedefe bağlanılamadı ({}): {}", connect_target, e);
             return Err(format!("HTTP hedefe bağlanılamadı ({}): {}", connect_target, e));

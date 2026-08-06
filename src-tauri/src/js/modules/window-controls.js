@@ -281,9 +281,22 @@
     // İmza: ölçümü etkileyen her girdi. Bunlardan biri değişmedikçe yeniden
     // ölçmenin anlamı yok (pencere yeniden boyutlanınca innerHeight değişir ve
     // ölçüm kendiliğinden yeniden çalışır).
+    // İMZAYA ÖLÇÜLEN KONUM DA DAHİL (önemli):
+    // Eskiden imza yalnızca `innerHeight|mt` idi. Sheet'ler aşağıdan yukarı
+    // kayarak AÇILDIĞI için ilk ölçüm çoğu zaman animasyonun ORTASINA denk
+    // geliyordu: o an `bodyTop` neredeyse `innerHeight` kadar büyük çıkıyor,
+    // `remaining` negatife düşüp 100px tabanına kırpılıyordu. Animasyon bitince
+    // pencere boyutu da zoom da değişmediğinden imza aynı kalıyor, `needsMeasure`
+    // false dönüyor ve o 100px'lik `max-height` sheet kapanana kadar YAPIŞIK
+    // kalıyordu — içindeki açılır/genişleyen bölümler 100px'lik bir kutuya
+    // sıkıştığı için "açılmıyor"/"çalışmıyor" gibi görünüyordu.
+    // Ölçülen `bodyTop` imzaya girince animasyon boyunca yeniden ölçülür ve
+    // hareket durduğunda kendiliğinden doğru değerde sabitlenir.
     var sizeSig = window.innerHeight + '|' + mt;
     var needsMeasure = marginChanged || Array.from(sheets).some(function(sheet) {
-      return sheet.__oaSheetSized !== sizeSig;
+      var body = sheet.querySelector('.sheet-body');
+      var top = body ? Math.round(body.getBoundingClientRect().top) : -1;
+      return sheet.__oaSheetSized !== sizeSig + '|' + top;
     });
     if (!needsMeasure) return;
 
@@ -305,7 +318,9 @@
           // overflow-y auto zaten OverlayScrollbars tarafından yönetiliyor
           setStyleIfChanged(el, 'max-height', remaining + 'px');
         });
-        sheet.__oaSheetSized = sizeSig;
+        // Ölçülen konumu imzaya yaz: bir sonraki turda `bodyTop` değişmişse
+        // (animasyon sürüyorsa) yeniden ölçeriz, değişmemişse iş yapmayız.
+        sheet.__oaSheetSized = sizeSig + '|' + bodyTop;
       });
     });
   }
