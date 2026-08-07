@@ -1,15 +1,39 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.2",
   "notes": "",
-  "pub_date": "2026-07-23T21:57:10.688Z",
+  "pub_date": "2026-08-07T07:22:25.483Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMVBnZjdLV1M3ZHZKNS9jMHh6T2R2MmhzTUxDbVp1RUVmemlTN0MrRlFldXpkaFdXZXc0MFBUY0J1aWhCUUwzQktwMTZETzlQM25CMGYyc0NzL2F1ZUFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODQzODI4CWZpbGU6T3BlbkFuaW1lXzEuMS4wX3g2NC1zZXR1cC5leGUKQ0N4bEZPc2M1Q0JtY3I5UXJmT3FyS2Y0a3M2Z2txMEJOMTVydUNrN0UySHhJWERYVklhUGhWd1BRL2tYenVmUmdmdjVreURDaFBGVld5K1M0YTVVRGc9PQo=",
-      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/487677539"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUtseGo0dzZqZU9BbUxKWDAzWk5sck1abXh2RlFxU0c3OEVUbUZuMmFidnNEc1hSRExiYndJRGVYTEQ1RkFZVDN3MlFwQ3FPYVFXSkF4cTAzTWd1SmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDg3MzI2CWZpbGU6T3BlbkFuaW1lXzEuMS4yX3g2NC1zZXR1cC5leGUKOFlLTm1YZHdGVGN6Rm91RHZIekYzZXFEemQ2M0RYVzlIcG82eWMrRzBiNnY4WUR6c0YzZEJGdXZmS1BLaGJ1cmNFeTV3SEVPT3Ryb1VzYVBITlFjQlE9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/504816967"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMVBnZjdLV1M3ZHZKNS9jMHh6T2R2MmhzTUxDbVp1RUVmemlTN0MrRlFldXpkaFdXZXc0MFBUY0J1aWhCUUwzQktwMTZETzlQM25CMGYyc0NzL2F1ZUFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODQzODI4CWZpbGU6T3BlbkFuaW1lXzEuMS4wX3g2NC1zZXR1cC5leGUKQ0N4bEZPc2M1Q0JtY3I5UXJmT3FyS2Y0a3M2Z2txMEJOMTVydUNrN0UySHhJWERYVklhUGhWd1BRL2tYenVmUmdmdjVreURDaFBGVld5K1M0YTVVRGc9PQo=",
-      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/487677539"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUtseGo0dzZqZU9BbUxKWDAzWk5sck1abXh2RlFxU0c3OEVUbUZuMmFidnNEc1hSRExiYndJRGVYTEQ1RkFZVDN3MlFwQ3FPYVFXSkF4cTAzTWd1SmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDg3MzI2CWZpbGU6T3BlbkFuaW1lXzEuMS4yX3g2NC1zZXR1cC5leGUKOFlLTm1YZHdGVGN6Rm91RHZIekYzZXFEemQ2M0RYVzlIcG82eWMrRzBiNnY4WUR6c0YzZEJGdXZmS1BLaGJ1cmNFeTV3SEVPT3Ryb1VzYVBITlFjQlE9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/504816967"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUZxbUpPeUpXQ3BxWHhkMHlrOVQ3aXBQUWczNnB6VWhRZ0dHRzVISHpxOGZuMy9lWS9ZaU44MldqcXlqYVNyZFBnZjVPbDRKVVBqT0tYUFg0VnhERHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDg3MzQwCWZpbGU6T3BlbkFuaW1lLmFwcC50YXIuZ3oKTmxHamRMNERlcjlrYU90S3RMQlkzSXVxR1RhK3V5eTBGdHR5QVEza2FyUi8wMEpONlExNGZ5d3U0d1JIVzNFMGNuUXZUajlVc0E3YmxtTDFmMWdzQ0E9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/504817303"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUZxbUpPeUpXQ3BxWHhkMHlrOVQ3aXBQUWczNnB6VWhRZ0dHRzVISHpxOGZuMy9lWS9ZaU44MldqcXlqYVNyZFBnZjVPbDRKVVBqT0tYUFg0VnhERHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDg3MzQwCWZpbGU6T3BlbkFuaW1lLmFwcC50YXIuZ3oKTmxHamRMNERlcjlrYU90S3RMQlkzSXVxR1RhK3V5eTBGdHR5QVEza2FyUi8wMEpONlExNGZ5d3U0d1JIVzNFMGNuUXZUajlVc0E3YmxtTDFmMWdzQ0E9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/504817303"
+    },
+    "darwin-universal": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUZxbUpPeUpXQ3BxWHhkMHlrOVQ3aXBQUWczNnB6VWhRZ0dHRzVISHpxOGZuMy9lWS9ZaU44MldqcXlqYVNyZFBnZjVPbDRKVVBqT0tYUFg0VnhERHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDg3MzQwCWZpbGU6T3BlbkFuaW1lLmFwcC50YXIuZ3oKTmxHamRMNERlcjlrYU90S3RMQlkzSXVxR1RhK3V5eTBGdHR5QVEza2FyUi8wMEpONlExNGZ5d3U0d1JIVzNFMGNuUXZUajlVc0E3YmxtTDFmMWdzQ0E9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/504817303"
+    },
+    "darwin-aarch64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUZxbUpPeUpXQ3BxWHhkMHlrOVQ3aXBQUWczNnB6VWhRZ0dHRzVISHpxOGZuMy9lWS9ZaU44MldqcXlqYVNyZFBnZjVPbDRKVVBqT0tYUFg0VnhERHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDg3MzQwCWZpbGU6T3BlbkFuaW1lLmFwcC50YXIuZ3oKTmxHamRMNERlcjlrYU90S3RMQlkzSXVxR1RhK3V5eTBGdHR5QVEza2FyUi8wMEpONlExNGZ5d3U0d1JIVzNFMGNuUXZUajlVc0E3YmxtTDFmMWdzQ0E9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/504817303"
+    },
+    "darwin-x86_64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUZxbUpPeUpXQ3BxWHhkMHlrOVQ3aXBQUWczNnB6VWhRZ0dHRzVISHpxOGZuMy9lWS9ZaU44MldqcXlqYVNyZFBnZjVPbDRKVVBqT0tYUFg0VnhERHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDg3MzQwCWZpbGU6T3BlbkFuaW1lLmFwcC50YXIuZ3oKTmxHamRMNERlcjlrYU90S3RMQlkzSXVxR1RhK3V5eTBGdHR5QVEza2FyUi8wMEpONlExNGZ5d3U0d1JIVzNFMGNuUXZUajlVc0E3YmxtTDFmMWdzQ0E9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/504817303"
+    },
+    "darwin-universal-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUZxbUpPeUpXQ3BxWHhkMHlrOVQ3aXBQUWczNnB6VWhRZ0dHRzVISHpxOGZuMy9lWS9ZaU44MldqcXlqYVNyZFBnZjVPbDRKVVBqT0tYUFg0VnhERHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDg3MzQwCWZpbGU6T3BlbkFuaW1lLmFwcC50YXIuZ3oKTmxHamRMNERlcjlrYU90S3RMQlkzSXVxR1RhK3V5eTBGdHR5QVEza2FyUi8wMEpONlExNGZ5d3U0d1JIVzNFMGNuUXZUajlVc0E3YmxtTDFmMWdzQ0E9PQo=",
+      "url": "https://api.github.com/repos/Dark-Hunter-TR/OpenAnime-Desktops/releases/assets/504817303"
     }
   }
 }
