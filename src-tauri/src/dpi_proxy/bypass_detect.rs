@@ -219,6 +219,7 @@ pub fn detect_tools_from_names<S: AsRef<str>>(names: &[S]) -> Vec<BypassTool> {
 
 /// `tasklist /NH /FO CSV` çıktısından process adlarını ayıklar.
 /// Satır formatı: "iexplore.exe","1234","Console","1","10.000 K"
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn parse_tasklist_csv(output: &str) -> Vec<String> {
     output
         .lines()
@@ -256,6 +257,7 @@ pub fn parse_ps_output(output: &str) -> Vec<String> {
 /// Servis kurulu değilse sc hata döner ve bu fonksiyon false verir.
 /// Not: Windows dil paketine bağlı olmamak için sayısal durum kodu (4 = RUNNING)
 /// aranır; "RUNNING"/"ÇALIŞIYOR" gibi yerelleştirilmiş metne güvenilmez.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn parse_sc_query_running(output: &str) -> bool {
     output.lines().any(|line| {
         let l = line.trim();
@@ -413,6 +415,7 @@ fn detect_warp_interface() -> bool {
 /// Sistemi tarayıp tam tespit raporunu üretir.
 pub fn detect() -> DetectionReport {
     let names = list_process_names();
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
     let mut tools = detect_tools_from_names(&names);
 
     #[cfg(target_os = "windows")]

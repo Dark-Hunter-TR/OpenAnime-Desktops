@@ -1102,7 +1102,7 @@ fn spawn_tray_session_window(app: &tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
 
-    let window = win_builder.build().map_err(|e| e.to_string())?;
+    let _window = win_builder.build().map_err(|e| e.to_string())?;
     dbg_log!("[Tepsi] Hafif arkaplan oturumu oluşturuldu (label: {})", label);
 
     // Görünmez + oynatmıyor → hemen askıya alınabilir, açılıştan itibaren
