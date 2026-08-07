@@ -807,6 +807,21 @@ const COMMON_INIT_SCRIPT: &str = concat!(
 
     include_str!("js/modules/keyboard-shortcuts.js"),
     "\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 4B: HIZLI ARAMA (Ctrl+T)
+    // Spotlight tarzı arama katmanı. Kısayolun KENDİSİ yukarıdaki
+    // keyboard-shortcuts.js'te kayıtlı (tüm kısayollar tek yerde); bu blok
+    // yalnızca katmanı ve arama mantığını sağlayıp `window.__oaQuickSearch`
+    // API'sini yayımlar. Sıra önemsiz: kısayol, API'yi kayıt anında değil
+    // tuşa basıldığında çağırır.
+    // ──────────────────────────────────────────────
+    "{\nconst QUICK_SEARCH_CSS = String.raw`",
+    include_str!("js/modules/quick-search.css"),
+    "`;\n",
+    include_str!("js/modules/quick-search.js"),
+    "}\n",
+
     include_str!("js/modules/link-interceptor.js"),
     "\n",
     include_str!("js/modules/fullscreen-manager.js"),

@@ -5,6 +5,24 @@
   window.addEventListener(
     "keydown",
     (e) => {
+      // Ctrl+T — hizli arama katmani (bkz. quick-search.js).
+      //
+      // INPUT ICINDEYKEN DE ACILIR (bilerek): bu genel bir "hizli erisim"
+      // kisayolu ve Ctrl'lu bir kombinasyon oldugu icin metin yazmayla
+      // cakismaz — Backspace/F gibi tek tuslarda gerekli olan `isInput`
+      // korumasi burada gereksiz olurdu.
+      //
+      // preventDefault SART: WebView2 sekme arayuzu sunmasa da Ctrl+T
+      // tarayici tarafinda varsayilan bir eylem olarak islenebiliyor; ayrica
+      // sitenin kendi kisayollarina sizmasini da engelliyoruz.
+      if (e.ctrlKey && !e.altKey && (e.key === "t" || e.key === "T")) {
+        if (e.repeat) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        if (window.__oaQuickSearch) window.__oaQuickSearch.toggle();
+        return;
+      }
       if (e.key === "F5" || (e.ctrlKey && (e.key === "r" || e.key === "R"))) {
         e.preventDefault();
         window.location.reload();
