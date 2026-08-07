@@ -51,6 +51,17 @@
     return "http://127.0.0.1:" + port + STREAM_MARK + encodeURIComponent(filePath);
   }
 
+  // .m3u8 — DOĞRULANDI: site blob içeriğine/mime'a bakıp .m3u8 için KENDİ
+  // hls.js'ini (window.Hls) zaten kuruyor, bizim ekstra bir şey yapmamıza
+  // gerek yok — sadece HIZLI YOL'un (aşağıda) blob URL'i bizim HTTP stream
+  // URL'imize yönlendirmesi yeterli. isHlsPath() yalnızca YEDEK YOL'da
+  // (applyHlsToVideo — hızlı yol tutmazsa) hangi stratejinin kullanılacağını
+  // seçmek için var. Segment/anahtar/init URI çözümü Rust tarafında
+  // (local_video_server.rs: rewrite_playlist) yapılıyor.
+  function isHlsPath(p) {
+    return typeof p === "string" && /\.m3u8(\?|$)/i.test(p);
+  }
+
   // Webview konsolu terminale düşmüyor; kilit dönüm noktalarını Rust oturum
   // loguna da aktarıyoruz ki sahadan tek bir log dosyasıyla tanı koyulabilsin.
   // (dbg_log! seviyesinde: dev build'de açık, release'de OA_DEBUG=1 ile.)
@@ -545,6 +556,7 @@
   };
 
   function isOurStream(video) {
+    if (video && video.__oaIsLocalHls) return true;
     var cur = (video && (video.currentSrc || video.src)) || "";
     return cur.indexOf(STREAM_MARK) > -1;
   }
@@ -570,7 +582,8 @@
         setTimeout(function () {
           console.log(TS() + "[LocalPlayer] Stream tek seferlik yeniden deneniyor");
           video.__oaAppliedUrl = null;
-          applyToVideo(video, lastMeta);
+          video.__oaHlsUrl = null;
+          applyStreamToVideo(video, lastMeta);
         }, 800);
       }
     }, true);
@@ -602,6 +615,65 @@
       try { hookVideo(e.target, ev); } catch (x) {}
     }, { capture: true, passive: true });
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // TANI (SALT OKUNUR): ileri/geri sarma farkı kanıtsız düzeltilmeyecek —
+  // "seeking" anındaki hedef saniye + o an buffered() aralıkları + sonucu
+  // (kaç ms sonra "seeked"/"waiting"/"stalled" geldi) loglanıyor. Davranışı
+  // DEĞİŞTİRMİYOR, yalnızca gözlemliyor.
+  // ═══════════════════════════════════════════════════════════
+  function bufferedRangesStr(video) {
+    try {
+      var b = video.buffered;
+      var parts = [];
+      for (var i = 0; i < b.length; i++) {
+        parts.push(b.start(i).toFixed(1) + "-" + b.end(i).toFixed(1));
+      }
+      return parts.length ? parts.join(",") : "yok";
+    } catch (e) { return "?"; }
+  }
+
+  (function watchSeeks() {
+    var lastKnownTime = new WeakMap();
+    var seekStartedAt = new WeakMap();
+
+    document.addEventListener("timeupdate", function (e) {
+      var v = e.target;
+      if (!v || v.tagName !== "VIDEO") return;
+      if (!v.seeking) lastKnownTime.set(v, v.currentTime);
+    }, { capture: true, passive: true });
+
+    document.addEventListener("seeking", function (e) {
+      var v = e.target;
+      if (!v || v.tagName !== "VIDEO") return;
+      var from = lastKnownTime.has(v) ? lastKnownTime.get(v) : v.currentTime;
+      var to = v.currentTime;
+      var dir = to >= from ? "ILERI" : "GERI";
+      seekStartedAt.set(v, performance.now());
+      console.log(TS() + "[LocalPlayer][SEEK-TANI] seeking yon=" + dir +
+        " " + from.toFixed(1) + "->" + to.toFixed(1) +
+        " readyState=" + v.readyState + " buffered=" + bufferedRangesStr(v));
+    }, { capture: true, passive: true });
+
+    document.addEventListener("seeked", function (e) {
+      var v = e.target;
+      if (!v || v.tagName !== "VIDEO") return;
+      var t0 = seekStartedAt.get(v);
+      var ms = t0 ? (performance.now() - t0).toFixed(0) : "?";
+      lastKnownTime.set(v, v.currentTime);
+      console.log(TS() + "[LocalPlayer][SEEK-TANI] seeked (" + ms + "ms sonra) t=" +
+        v.currentTime.toFixed(1) + " readyState=" + v.readyState + " buffered=" + bufferedRangesStr(v));
+    }, { capture: true, passive: true });
+
+    ["waiting", "stalled"].forEach(function (ev) {
+      document.addEventListener(ev, function (e) {
+        var v = e.target;
+        if (!v || v.tagName !== "VIDEO") return;
+        console.log(TS() + "[LocalPlayer][SEEK-TANI] " + ev + " t=" + v.currentTime.toFixed(1) +
+          " readyState=" + v.readyState + " buffered=" + bufferedRangesStr(v));
+      }, { capture: true, passive: true });
+    });
+  })();
 
   // ═══════════════════════════════════════════════════════════
   // YEDEK YOL: <video>.src'yi elle değiştir
@@ -648,6 +720,111 @@
     video.load();
     // load() sitenin bekleyen play()'ini iptal etti; oynatmayı biz üstleniyoruz.
     ensurePlayback(video, url);
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // HLS YEDEK YOLU: .m3u8 için elle hls.js ile attachMedia
+  // ═══════════════════════════════════════════════════════════
+  // DİKKAT: normalde buraya hiç gerek YOK. Site, blob içeriğine/mime'a bakıp
+  // .m3u8 için KENDİ hls.js'ini zaten kuruyor — bizim tek işimiz
+  // patchCreateObjectURL() ile döndürülen blob URL'i kendi HTTP stream
+  // URL'imize (tam ve doğru yeniden yazılmış playlist) yönlendirmek; site'in
+  // kendi player'ı gerisini hallediyor (bkz. store.get intercept'indeki not).
+  //
+  // Bu fonksiyon yalnızca o hızlı yol tutmazsa (ör. path senkron çözülemedi)
+  // devreye giren YEDEK YOL. window.Hls o an henüz yüklenmemiş olabilir
+  // (site'in kendi kullanımı lazy-import olabilir) — bu yüzden bekliyoruz,
+  // sabit "yok" deyip pes etmiyoruz.
+  var HLS_WAIT_TRIES = 25;   // ~5s
+  var HLS_WAIT_MS = 200;
+
+  function applyHlsToVideo(video, meta) {
+    if (!port || !meta || !meta.filePath) return;
+    if (!video.__oaHlsWaitTries) video.__oaHlsWaitTries = HLS_WAIT_TRIES;
+
+    var hlsReady = window.Hls && (!window.Hls.isSupported || window.Hls.isSupported());
+    if (!hlsReady) {
+      if (--video.__oaHlsWaitTries <= 0) {
+        console.warn(TS() + "[LocalPlayer] HLS.js zamaninda yuklenmedi — .m3u8 (yedek yol) oynatilamiyor");
+        return;
+      }
+      setTimeout(function () { applyHlsToVideo(video, meta); }, HLS_WAIT_MS);
+      return;
+    }
+    video.__oaHlsWaitTries = HLS_WAIT_TRIES;
+
+    var url = streamUrl(meta.filePath);
+
+    // Aynı playlist zaten bağlıysa dokunma.
+    if (video.__oaHlsUrl === url && video.__oaHls) {
+      ensurePlayback(video, url);
+      return;
+    }
+
+    var now = Date.now();
+    if (video.__oaAppliedAt && now - video.__oaAppliedAt < REAPPLY_MIN_MS) {
+      console.log(TS() + "[LocalPlayer] Cok sik yeniden uygulama engellendi (HLS)");
+      return;
+    }
+
+    guardPlay(video);
+    attachErrorHandler(video);
+    guardEndedStart(video);
+
+    if (video.__oaHls) {
+      try { video.__oaHls.destroy(); } catch (e) {}
+      video.__oaHls = null;
+    }
+
+    console.log(TS() + "[LocalPlayer] HLS stream baglaniyor:", meta.filePath.substring(0, 50) + "...");
+    relay("[LocalPlayer] HLS YOLU: hls.js ile attachMedia");
+
+    video.__oaIsLocalHls = true;
+    video.__oaAppliedUrl = url;
+    video.__oaHlsUrl = url;
+    video.__oaAppliedAt = now;
+    video.__oaAutoStarted = null; // yeni kaynak → otomatik başlatma hakkı yenilenir
+
+    var hls = new window.Hls();
+    video.__oaHls = hls;
+    // TANI: fatal olmayanlar da (segment fetch hatası vb. hls.js kendi içinde
+    // retry/level-switch ile toparlamaya çalışır ama sessiz kalır) — kanıtsız
+    // ilerlemeyelim, hepsini gör.
+    hls.on(window.Hls.Events.ERROR, function (event, data) {
+      var info = (data && (data.type + "/" + data.details)) || "?";
+      var extra = data && data.response ? (" http=" + data.response.code) : "";
+      if (data && data.fatal) {
+        console.warn(TS() + "[LocalPlayer] HLS FATAL hata:", info, extra, data);
+      } else {
+        console.log(TS() + "[LocalPlayer] HLS hata (fatal degil):", info, extra);
+      }
+    });
+    hls.on(window.Hls.Events.MANIFEST_PARSED, function (event, data) {
+      console.log(TS() + "[LocalPlayer] HLS manifest parse edildi — level sayisi:", data && data.levels && data.levels.length, "video.duration:", video.duration);
+    });
+    hls.on(window.Hls.Events.LEVEL_LOADED, function (event, data) {
+      var d = data && data.details;
+      console.log(TS() + "[LocalPlayer] HLS level yuklendi — toplam sure:", d && d.totalduration, "parca sayisi:", d && d.fragments && d.fragments.length, "live:", d && d.live);
+    });
+    hls.on(window.Hls.Events.FRAG_LOADED, function (event, data) {
+      var f = data && data.frag;
+      if (f && (f.sn === 0 || f.sn === 1 || f.sn === "initSegment")) {
+        console.log(TS() + "[LocalPlayer] HLS parca yuklendi sn=" + f.sn + " url=" + (f.url || "").substring(0, 80));
+      }
+    });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+
+    ensurePlayback(video, url);
+  }
+
+  // Yol'a bakıp doğru stratejiye yönlendirir (mp4/mkv/webm/... vs .m3u8).
+  function applyStreamToVideo(video, meta) {
+    if (meta && isHlsPath(meta.filePath)) {
+      applyHlsToVideo(video, meta);
+    } else {
+      applyToVideo(video, meta);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -723,6 +900,16 @@
 
                 var tag = null;
                 var path = pathForVideoId(vid);
+                // .m3u8 DAHİL hepsi aynı hızlı yoldan geçer: site zaten kendi
+                // bundle'ında hls.js taşıyor ve blob içeriğine/mime'a bakıp
+                // KENDİ hls.js'ini kuruyor (doğrulandı: kırpılmış stub blob'u
+                // düz bir m3u8 metni gibi ayrıştırıp içindeki segment
+                // URL'lerine gitmeye çalışıyordu). Bizim işimiz yalnızca
+                // createObjectURL'in döndürdüğü blob URL'i, kırpılmış 512KB'lık
+                // stub yerine TAM ve doğru şekilde yeniden yazılmış (bkz. Rust
+                // rewrite_playlist) gerçek dosyaya işaret eden kendi HTTP
+                // stream URL'imizle değiştirmek — site'in kendi hls.js'i
+                // gerisini hallediyor.
                 if (path) {
                   tag = { vid: vid, path: path, used: false };
                   stubTags.set(e.mp4File, tag);
@@ -739,7 +926,7 @@
                   var video = document.querySelector("video");
                   if (video) {
                     console.log(TS() + "[LocalPlayer] <video> bulundu, stream uygulaniyor...");
-                    applyToVideo(video, meta);
+                    applyStreamToVideo(video, meta);
                   } else {
                     console.log(TS() + "[LocalPlayer] <video> bulunamadi!");
                   }
@@ -774,6 +961,15 @@
                 console.log(TS() + "[LocalPlayer] Player kapandi");
                 var pv = node.querySelectorAll("video");
                 for (var k = 0; k < pv.length; k++) {
+                  // HLS: MediaSource'u serbest bırak — aksi halde her açılışta
+                  // yeni bir hls.js örneği eskisinin üstüne biner (kaynak sızıntısı).
+                  if (pv[k].__oaHls) {
+                    try { pv[k].__oaHls.destroy(); } catch (e) {}
+                    pv[k].__oaHls = null;
+                    pv[k].__oaIsLocalHls = false;
+                    pv[k].__oaHlsUrl = null;
+                    continue;
+                  }
                   // SADECE durdur, src'yi TEMİZLEME!
                   // Aynı bölüm tekrar açılırsa "zaten yüklü" bypass'ı çalışsın
                   // ve WebGPU pipeline restart OLMASIN.
@@ -794,7 +990,7 @@
                 console.log(TS() + "[LocalPlayer] Player yeniden eklendi");
                 var pv2 = n.querySelectorAll("video");
                 for (var vi = 0; vi < pv2.length; vi++) {
-                  applyToVideo(pv2[vi], lastMeta);
+                  applyStreamToVideo(pv2[vi], lastMeta);
                 }
               }
             }

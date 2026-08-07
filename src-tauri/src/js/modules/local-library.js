@@ -16,10 +16,39 @@
   var LOCAL_ANIME_ID = "local-anime";
   var LOCAL_ANIME_SLUG = "yerel-kutuphane";
   var LOCAL_FANSUB_ID = "local";
-  var LOCAL_FANSUB_NAME = "MP4, MKV, WEBM, AVI, MOV";
+  var LOCAL_FANSUB_NAME = "MP4, MKV, WEBM, AVI, MOV, HLS ve daha fazlası";
   var PLACEHOLDER_VIDEO_ID = "local/placeholder.mp4";
   var PLACEHOLDER_EPISODE = 0;
   var PLACEHOLDER_SEASON = 0;
+
+  // Desteklenen dosya uzantıları. Codec (H.264/HEVC/AV1/VP9...) demux/decode
+  // işi tamamen tarayıcının kendi işi — burada yalnızca konteyner uzantısına
+  // göre kabul/mime kararı veriyoruz. .m3u8 özel: gerçek dosya değil, Rust
+  // tarafında (local_video_server.rs) satır satır yeniden yazılan bir playlist;
+  // segment/anahtar/init URI'leri diskteki gerçek konuma göre çözülüyor.
+  var SUPPORTED_EXTENSIONS = [
+    "mp4", "mkv", "webm", "avi", "mov", "wmv", "flv", "m4v",
+    "3gp", "ogv", "mpg", "mpeg", "ts", "m2ts", "mts", "m3u8"
+  ];
+
+  var EXT_MIME_MAP = {
+    mp4: "video/mp4", m4v: "video/mp4",
+    mkv: "video/x-matroska",
+    webm: "video/webm",
+    avi: "video/x-msvideo",
+    mov: "video/quicktime",
+    wmv: "video/x-ms-wmv",
+    flv: "video/x-flv",
+    "3gp": "video/3gpp",
+    ogv: "video/ogg",
+    mpg: "video/mpeg", mpeg: "video/mpeg",
+    ts: "video/mp2t", m2ts: "video/mp2t", mts: "video/mp2t",
+    m3u8: "application/vnd.apple.mpegurl"
+  };
+
+  function mimeForExt(ext) {
+    return EXT_MIME_MAP[(ext || "").toLowerCase()] || "video/mp4";
+  }
 
   // Kapak görselleri. Boyutlar önemli, karıştırılmamalı:
   //   5.png → 1080x1080 (kare)      → avatar / kart görseli
@@ -81,7 +110,7 @@
 
   function makeEpisodeEntry(videoId, filePath, fileName, resolution, fileSize) {
     var ext = fileName.split('.').pop().toLowerCase();
-    var mime = ext === "mkv" ? "video/x-matroska" : "video/mp4";
+    var mime = mimeForExt(ext);
     var resLabel = resolution > 0 ? resolution + "p" : "";
     var fansubName = resLabel ? fileName + " (" + resLabel + ")" : fileName;
 
@@ -256,7 +285,7 @@
         // mime kontrol
         if (!e.mime || e.mime === "") {
           var ext = (e.videoFileName || "").split('.').pop().toLowerCase();
-          e.mime = ext === "mkv" ? "video/x-matroska" : ext === "webm" ? "video/webm" : "video/mp4";
+          e.mime = mimeForExt(ext);
           changed = true;
         }
 
@@ -353,7 +382,7 @@
       // 2. Dosya bilgilerini al
       var fileName = filePath.split('\\').pop().split('/').pop();
       var ext = fileName.split('.').pop().toLowerCase();
-      if (ext !== "mp4" && ext !== "mkv" && ext !== "webm" && ext !== "avi" && ext !== "mov") {
+      if (SUPPORTED_EXTENSIONS.indexOf(ext) === -1) {
         console.log("[LocalLib] ❌ Desteklenmeyen dosya türü:", ext);
         return;
       }

@@ -1565,7 +1565,13 @@ fn get_super_opening_video_data(app: tauri::AppHandle, variant: String) -> Resul
 async fn pick_mp4_file() -> Result<String, String> {
     let file = rfd::AsyncFileDialog::new()
         .set_title("Yerel Video Dosyası Seç")
-        .add_filter("Video Dosyaları", &["mp4", "mkv", "webm", "avi", "mov"])
+        .add_filter(
+            "Video Dosyaları",
+            &[
+                "mp4", "mkv", "webm", "avi", "mov", "wmv", "flv", "m4v", "3gp", "ogv", "mpg",
+                "mpeg", "ts", "m2ts", "mts", "m3u8",
+            ],
+        )
         .pick_file()
         .await
         .ok_or_else(|| "Kullanıcı dosya seçmedi".to_string())?;

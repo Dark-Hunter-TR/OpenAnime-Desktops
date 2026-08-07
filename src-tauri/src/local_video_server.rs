@@ -20,7 +20,9 @@
 ///   - Range byte → seeking desteği
 /// ────────────────────────────────────────────────────────────
 
-use std::io::{Read, Seek, SeekFrom};
+use regex::Regex;
+use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tiny_http::{Header, Response, Server, StatusCode};
@@ -86,7 +88,11 @@ pub fn start_server(state: &Arc<LocalVideoState>) -> Result<u16, String> {
                         .map(|(_, v)| v.clone());
 
                     if let Some(ref path) = file_path {
-                        serve_file(request, path, range_header);
+                        if is_hls_playlist(path) {
+                            serve_playlist(request, path);
+                        } else {
+                            serve_file(request, path, range_header);
+                        }
                     } else {
                         let resp = Response::from_string("HATA: 'path' parametresi gerekli")
                             .with_status_code(400);
@@ -124,11 +130,31 @@ fn extract_query_param(query: &str, name: &str) -> Option<String> {
         })
 }
 
+fn is_hls_playlist(path: &str) -> bool {
+    path.to_lowercase().ends_with(".m3u8")
+}
+
+/// Konteyner/codec ne olursa olsun (H.264, HEVC/H265, AV1, VP9...) demux/decode
+/// tarayıcının kendi işi — burada yalnızca doğru Content-Type ile servis
+/// ediyoruz. HLS (.m3u8/.ts/.m4s) ayrı ele alınıyor, bkz. serve_playlist().
 fn get_mime_type(path: &str) -> &'static str {
     let lower = path.to_lowercase();
-    if lower.ends_with(".mp4") { "video/mp4" }
+    if lower.ends_with(".mp4") || lower.ends_with(".m4v") { "video/mp4" }
     else if lower.ends_with(".mkv") { "video/x-matroska" }
     else if lower.ends_with(".webm") { "video/webm" }
+    else if lower.ends_with(".avi") { "video/x-msvideo" }
+    else if lower.ends_with(".mov") { "video/quicktime" }
+    else if lower.ends_with(".wmv") { "video/x-ms-wmv" }
+    else if lower.ends_with(".flv") { "video/x-flv" }
+    else if lower.ends_with(".3gp") { "video/3gpp" }
+    else if lower.ends_with(".ogv") || lower.ends_with(".ogg") { "video/ogg" }
+    else if lower.ends_with(".mpg") || lower.ends_with(".mpeg") { "video/mpeg" }
+    else if lower.ends_with(".m2ts") || lower.ends_with(".mts") { "video/mp2t" }
+    else if lower.ends_with(".ts") { "video/mp2t" }
+    else if lower.ends_with(".m3u8") { "application/vnd.apple.mpegurl" }
+    else if lower.ends_with(".m4s") { "video/iso.segment" }
+    else if lower.ends_with(".aac") { "audio/aac" }
+    else if lower.ends_with(".ac3") { "audio/ac3" }
     else { "application/octet-stream" }
 }
 
@@ -233,4 +259,92 @@ fn serve_file(
         None, // trailing headers
     );
     let _ = request.respond(resp);
+}
+
+// ════════════════════════════════════════════════════════════
+// HLS (.m3u8) SERVİSİ — "sahte dosya" yaklaşımı
+// ════════════════════════════════════════════════════════════
+// <video src> hiçbir tarayıcıda (WebView2 dahil) .m3u8'i doğrudan
+// çözemiyor — site zaten kendi bundle'ında hls.js taşıyor
+// (bkz. local-player.js: window.Hls ile attachMedia). Bizim işimiz
+// yalnızca playlist içindeki GÖRECELİ yolları (segment .ts/.m4s,
+// alt varyant .m3u8, #EXT-X-KEY / #EXT-X-MAP URI'leri) diskteki
+// gerçek konuma göre çözüp yine /local-video?path=... sarmalayıcısına
+// çevirmek. Böylece hls.js her parçayı da bizim server'dan ister ve
+// Range/CORS zaten var olan serve_file() yolundan geçer.
+fn serve_playlist(request: tiny_http::Request, file_path: &str) {
+    let cors = cors_header();
+
+    let raw = match std::fs::read_to_string(file_path) {
+        Ok(s) => s,
+        Err(e) => {
+            let resp = Response::from_string(format!("Dosya bulunamadı: {} ({})", file_path, e))
+                .with_status_code(404);
+            let _ = request.respond(resp);
+            return;
+        }
+    };
+
+    let base_dir = Path::new(file_path).parent().unwrap_or_else(|| Path::new(""));
+    let rewritten = rewrite_playlist(&raw, base_dir);
+    let bytes = rewritten.into_bytes();
+    let len = bytes.len();
+
+    let resp = Response::new(
+        StatusCode(200),
+        vec![
+            Header::from_bytes(&b"Content-Type"[..], get_mime_type(file_path).as_bytes()).unwrap(),
+            Header::from_bytes(&b"Content-Length"[..], len.to_string().as_bytes()).unwrap(),
+            Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).unwrap(),
+            cors,
+        ],
+        Cursor::new(bytes),
+        Some(len),
+        None,
+    );
+    let _ = request.respond(resp);
+}
+
+/// Playlist'i satır satır gezer. `#` ile başlamayan her satır bir URI'dir
+/// (segment ya da alt-varyant .m3u8 — master/media playlist farkı gözetmeye
+/// gerek yok, ikisi de aynı kuralla çözülür). `#EXT-X-KEY` / `#EXT-X-MAP`
+/// gibi etiket satırlarındaki `URI="..."` alanı da ayrıca çözülür.
+fn rewrite_playlist(content: &str, base_dir: &Path) -> String {
+    let key_re = Regex::new(r#"URI="([^"]*)""#).unwrap();
+    let mut out = String::with_capacity(content.len() + 256);
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            out.push('\n');
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            if trimmed.contains("URI=\"") {
+                let replaced = key_re.replace(line, |caps: &regex::Captures| {
+                    format!("URI=\"{}\"", resolve_uri(base_dir, &caps[1]))
+                });
+                out.push_str(&replaced);
+            } else {
+                out.push_str(line);
+            }
+        } else {
+            out.push_str(&resolve_uri(base_dir, trimmed));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Playlist içindeki bir URI değerini (segment/alt-playlist/anahtar/init) diskteki
+/// gerçek dosyaya göre çözüp `/local-video?path=...` sarmalayıcısına çevirir.
+/// Zaten mutlak bir HTTP(S) URL ise ya da zaten bizim sarmalayıcımızsa dokunmaz.
+fn resolve_uri(base_dir: &Path, value: &str) -> String {
+    if value.starts_with("http://") || value.starts_with("https://") || value.starts_with("/local-video") {
+        return value.to_string();
+    }
+    let joined = base_dir.join(value);
+    let abs = joined.to_string_lossy().to_string();
+    let encoded = percent_encoding::utf8_percent_encode(&abs, percent_encoding::NON_ALPHANUMERIC).to_string();
+    format!("/local-video?path={}", encoded)
 }
