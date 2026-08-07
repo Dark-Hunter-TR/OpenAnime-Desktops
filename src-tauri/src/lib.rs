@@ -904,6 +904,15 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n",
 
     // ──────────────────────────────────────────────
+    // BLOK 7D: DASHBOARD İYİLEŞTİRMELERİ
+    // Sidebar gruplama (katlanabilir), form state hafızası (bellek-içi,
+    // sahne değişiminde kaybolmaz) ve çözünürlük checkbox genişlik düzeltmesi.
+    // Yalnızca /dashboard rotasında aktif olur (bkz. dosya içi route guard'ı).
+    // ──────────────────────────────────────────────
+    include_str!("js/modules/dashboard-enhancer.js"),
+    "\n",
+
+    // ──────────────────────────────────────────────
     // BLOK 8: TEMA SİSTEMİ
     // ──────────────────────────────────────────────
     "{\n",
