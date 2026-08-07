@@ -489,63 +489,16 @@
     } catch (e) {}
   })();
 
-  // ═══════════════════════════════════════════════════════════
-  // LUT (RENK EFEKTİ) YARIŞ KURTARMASI
-  // ═══════════════════════════════════════════════════════════
-  // Site bir player instance'ını yıkıp (WebGPU: Destroyed / Player destroyed)
-  // hemen ardından yenisini kurarken (hızlı sekme geçişi, hızlı "çık-gir" ya
-  // da bizim spurious error(0) sonrası tetiklediğimiz "zaten yüklü" no-op
-  // sonrası site'nin kendi iç reinit'i), LUT (renk derecelendirme) dokusunu
-  // yükleyen selectLutTexture() bir önceki instance'ın hâlâ temizlenmekte
-  // olan bir kaynağıyla çakışıp `EncodingError: The source image cannot be
-  // decoded` ile patlıyor (openani.me bundle'ında doğrulandı, DevTools ile
-  // tekrarlandı — bizim hiçbir interceptor'ımız bu zincirde yok). Sonuç:
-  // render döngüsü çalışmaya devam etse bile renk efektleri ve ayarlar
-  // menüsündeki bazı alt öğeler o oturum için ölü kalıyor. Kullanıcının
-  // manuel "kapat-aç"ı her seferinde düzeltiyor (temiz component remount);
-  // biz aynı sonucu otomatik bir reload ile veriyoruz — kaldığı yer
-  // (leftOff izolasyonu) ve stream yönlendirmesi (HIZLI YOL) zaten reload
-  // sonrası sorunsuz devam edecek şekilde tasarlı, kullanıcı neredeyse fark
-  // etmeyecek.
-  var LUT_RECOVER_KEY_PREFIX = "oa_lut_recovered_";
-
-  function tryRecoverFromLutRace(reason) {
-    // Yalnızca BİZİM yerel oynatım bağlamındayız — bu bug'ı sadece bu
-    // senaryoda doğruladık, başka bir yerde tetiklenip alakasız bir hatada
-    // sayfayı yenilemeyelim.
-    if (!activeLocalId) return false;
-
-    var key = LUT_RECOVER_KEY_PREFIX + activeLocalId;
-    try {
-      if (sessionStorage.getItem(key)) {
-        // Bu videoId için zaten bir kez otomatik kurtarma denedik — aynı
-        // oturumda tekrar tetiklenirse döngüye girmemek için elle
-        // kapat-aça bırak.
-        console.warn(TS() + "[LocalPlayer] LUT yarışı tekrar görüldü, otomatik kurtarma zaten denenmişti — atlanıyor:", reason);
-        return false;
-      }
-      sessionStorage.setItem(key, String(Date.now()));
-    } catch (e) {}
-
-    console.warn(TS() + "[LocalPlayer] LUT yarış hatası tespit edildi, temiz yeniden yükleme tetikleniyor:", reason);
-    relay("[LocalPlayer] LUT yarışı sonrası otomatik reload tetiklendi: " + reason);
-    setTimeout(function () {
-      try { window.location.reload(); } catch (e) {}
-    }, 150);
-    return true;
-  }
-
-  window.addEventListener("unhandledrejection", function (ev) {
-    try {
-      var err = ev && ev.reason;
-      var name = (err && err.name) || "";
-      var msg = (err && err.message) || String(err || "");
-      if (name !== "EncodingError" || msg.indexOf("cannot be decoded") === -1) return;
-      if (tryRecoverFromLutRace(name + ": " + msg)) {
-        ev.preventDefault(); // Watchdog'un aynı hatayı ayrıca loglamasına gerek yok
-      }
-    } catch (e) {}
-  });
+  // NOT — DENENDİ VE İŞE YARAMADI, BİLEREK KALDIRILDI:
+  // Bir ara `EncodingError: The source image cannot be decoded` (site
+  // bundle'ındaki selectLutTexture) yakalanınca sayfayı otomatik reload eden
+  // bir kurtarma vardı. Sahada ölçüldü: reload'dan sonra AYNI hata yeniden
+  // fırlıyor — yani `location.reload()`, kullanıcının elle yaptığı
+  // "oynatıcıyı kapat-aç"ın karşılığı DEĞİL. Tek yaptığı, hiçbir şeyi
+  // düzeltmeden izlemeyi kesmekti; net zarar. Kök neden site tarafında
+  // (init zinciri unhandled rejection ile ölüyor, ardından menü kurulurken
+  // `Cannot read properties of null (reading 'OFGPresets')` geliyor) ve
+  // buradan güvenilir biçimde onarılamıyor.
 
   // ── "Bitmiş gibi açılma" koruması ──
   // Site `loadedmetadata` anında kayıtlı konuma atlar. Konum videonun

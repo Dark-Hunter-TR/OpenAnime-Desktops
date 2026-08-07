@@ -572,7 +572,22 @@
     })();
   }
 
-  // Cache'te varsa img'e blob URL uygular (applySrc ile), yoksa arka planda indirir.
+  // Cache'i YALNIZCA ağ yüklemesi başarısız olursa devreye sokar; yoksa
+  // arka planda indirip cache'i doldurur.
+  //
+  // NEDEN BÖYLE (kritik — geri alma): Eski davranış cache isabetinde img.src'yi
+  // ANINDA blob URL'iyle değiştiriyordu. Ama setter'ımız orijinal src'yi de
+  // native setter'a geçirdiği için ağ yüklemesi çoktan başlamış oluyordu; swap
+  // asenkron geldiğinden site o sırada `img.decode()` / `createImageBitmap(img)`
+  // bekliyorsa kaynak altından değişiyor ve tarayıcı `EncodingError: The source
+  // image cannot be decoded` fırlatıyordu. Bu, oynatıcının LUT (renk efekti)
+  // yüklemesini aralıklı olarak öldürüyordu: init zinciri unhandled rejection
+  // ile kopuyor, ardından ayarlar menüsü kurulurken `OFGPresets` null kalıp
+  // menü öğeleri (Çözünürlük, Renkler, Kare Oluşturma...) işlevsizleşiyordu.
+  // Kanıt zinciri: hata yalnızca bizim uygulamada + yalnızca cache doluyken;
+  // audit cache'teki tüm LUT bayt'larının sağlam olduğunu gösterdi (sorun veri
+  // değil, decode sırasındaki src değişimi). Bu yüzden uçuş halindeki bir
+  // görselin src'sine cache'ten ASLA dokunmuyoruz.
   function serveImageFromCache(img, url, applySrc) {
     if (!cacheApiAvailable) return;
     caches.open(CACHE_NAME).then(async (cache) => {
@@ -584,11 +599,24 @@
           return;
         }
         const blob = await cached.blob();
-        const objUrl = URL.createObjectURL(blob);
-        img.addEventListener("load", () => {
-          try { URL.revokeObjectURL(objUrl); } catch (e) {}
-        }, { once: true });
-        applySrc(objUrl);
+
+        const applyFallback = () => {
+          const objUrl = URL.createObjectURL(blob);
+          img.addEventListener("load", () => {
+            try { URL.revokeObjectURL(objUrl); } catch (e) {}
+          }, { once: true });
+          applySrc(objUrl);
+        };
+
+        // Ağ yüklemesi biz buraya gelmeden BİTMİŞ ve BAŞARISIZ olmuşsa
+        // (complete + naturalWidth 0) hemen cache'e düş; decode yarışı yok
+        // çünkü başarısız görselde bekleyen decode kalmaz.
+        if (img.complete && img.naturalWidth === 0 && (img.currentSrc || img.src)) {
+          applyFallback();
+          return;
+        }
+        // Aksi halde yalnızca gelecekteki bir hata durumunda devreye gir.
+        img.addEventListener("error", applyFallback, { once: true });
       } catch (e) {
         cacheImageInBackground(url, cache);
       }
