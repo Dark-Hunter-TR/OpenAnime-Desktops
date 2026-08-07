@@ -123,15 +123,55 @@ async fn resolve_target_doh(target: &str) -> String {
 ///
 /// Burada DoH'u önden DAYATMIYORUZ (WARP kuralı korunur); yalnızca sistem
 /// çözümleyicisi fiilen başarısız olduktan SONRA devreye giriyoruz.
+/// DoH'un da ÇÖZEMEDİĞİ adlar — kısa süreli negatif önbellek.
+///
+/// NEDEN GEREKLİ (canlı ölçümle bulundu): bazı adlar gerçekten YOKTUR ve
+/// hiçbir çözümleyici onları çözemez. Sahada görülen örnek
+/// `brunhild.challenges.cloudflare.com`: hem sistem DNS'i hem 1.1.1.1 hem
+/// dns.google "böyle bir ana bilgisayar yok" diyor — Cloudflare Turnstile'ın
+/// istemci davranışını ölçmek için bilerek denediği, çözülmemesi BEKLENEN bir
+/// ad. `resolve_dns_doh` 4 sağlayıcıyı 2'şer sn timeout'la denediğinden, böyle
+/// bir ad her denendiğinde 8 sn'ye kadar boşuna beklenirdi (oturum başına
+/// onlarca kez). Negatif sonucu kısa süre hatırlayıp DoH'u atlıyoruz.
+static DOH_NEGATIVE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Negatif sonucun hatırlanma süresi. Kısa tutuldu: gerçekten engellenen ama
+/// sonradan çözülebilir hale gelen adlar fazla uzun cezalandırılmasın.
+const DOH_NEGATIVE_TTL: Duration = Duration::from_secs(60);
+
 async fn resolve_fallback_doh(target: &str) -> Option<String> {
     let host = target.split(':').next().unwrap_or(target);
     // Zaten IP ise çözecek bir şey yok.
     if host.parse::<std::net::IpAddr>().is_ok() {
         return None;
     }
-    let ip = super::remote_proxy::resolve_dns_doh(host).await?;
-    let port = target.split(':').nth(1).unwrap_or("443");
-    Some(format!("{}:{}", ip, port))
+
+    // Yakın zamanda DoH da çözemediyse tekrar deneyip beklemeyelim.
+    if let Ok(mut neg) = DOH_NEGATIVE.lock() {
+        neg.retain(|_, t| t.elapsed() < DOH_NEGATIVE_TTL);
+        if neg.contains_key(host) {
+            dbg_log!(
+                "[DPI Proxy]   DoH yedeği atlandı ({}): yakın zamanda da çözülemedi",
+                host
+            );
+            return None;
+        }
+    }
+
+    match super::remote_proxy::resolve_dns_doh(host).await {
+        Some(ip) => {
+            let port = target.split(':').nth(1).unwrap_or("443");
+            Some(format!("{}:{}", ip, port))
+        }
+        None => {
+            if let Ok(mut neg) = DOH_NEGATIVE.lock() {
+                neg.insert(host.to_string(), std::time::Instant::now());
+            }
+            None
+        }
+    }
 }
 
 /// Hedefe bağlanır; ad çözümleme başarısız olursa DoH ile yeniden dener.

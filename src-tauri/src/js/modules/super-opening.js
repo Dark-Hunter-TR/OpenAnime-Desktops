@@ -1,7 +1,9 @@
 // ============================================================================
 // 📁 MODULE: Süper Açılış (Super Opening) Manager & Self-Contained UI
-// ─── Description: Sitenin üzerine bağımsız tam ekran MP4 video / GIF overlay
-//                  serer. Medya bitene kadar siteyi arkada kilitler.
+// ─── Description: Sitenin üzerine bağımsız tam ekran MP4 video overlay ya da
+//                  Canvas ile gerçek zamanlı render edilen logo animasyonu
+//                  (bkz. js/modules/logo-animator/logo-animator.js) serer.
+//                  Medya/animasyon bitene kadar siteyi arkada kilitler.
 //                  Ayar değiştirildiğinde uygulamayı otomatik yeniler.
 //                  Sitenin Svelte/Fluent ayarlar kartını tam uyumlu olarak enjekte eder.
 // ============================================================================
@@ -17,17 +19,9 @@
 
   const VARIANT_NAMES = {
     [VARIANTS.SUPER_LOGO]: "Süper Logo (MP4 Video)",
-    [VARIANTS.MUPTEZEL_ANIME]: "Muptezel Anime (GIF)",
+    [VARIANTS.MUPTEZEL_ANIME]: "Muptezel Anime (Logo Animasyonu)",
     [VARIANTS.DEFAULT]: "Varsayılan (Site Yükleme Ekranı)",
   };
-
-  // GIF tabanlı varyantların gösterim süresi (ms). Video tabanlı varyantlar
-  // (ör. SUPER_LOGO) bu tabloyu kullanmaz — onlar videonun kendi doğal
-  // uzunluğu kadar (video 'ended' eventi) oynar.
-  const VARIANT_GIF_DURATIONS_MS = {
-    [VARIANTS.MUPTEZEL_ANIME]: 1500,
-  };
-  const DEFAULT_GIF_DURATION_MS = 2000;
 
   function getActiveVariant() {
     const val = localStorage.getItem(SUPER_OPENING_KEY);
@@ -240,21 +234,27 @@
 
     freezeSite();
 
+    // "Muptezel Anime" bir dosyaya değil, Canvas üzerinde gerçek zamanlı
+    // render edilen bir logo animasyonuna dayanır (bkz.
+    // js/modules/logo-animator/logo-animator.js). Dosya okuma/IPC/base64
+    // taşıma yok — bu yüzden diğer varyantlardan ÖNCE, ayrı bir dalda ele
+    // alınır ve fonksiyondan doğrudan döner.
+    if (variant === VARIANTS.MUPTEZEL_ANIME) {
+      await playLogoAnimatorIntro(overlay);
+      finishOpening();
+      return;
+    }
+
     // Medya baytlarını Rust'tan DOĞRUDAN Tauri IPC ile al — 127.0.0.1'e HTTP
     // isteği YOK. `openani.me` PUBLIC bir https sayfası olduğundan,
     // WebView2/Chromium'un Private Network Access koruması ona giden
     // 127.0.0.1 <video src> isteklerini SESSİZCE engelliyordu (video hiç
     // görünmüyordu — hata bile fırlatmıyordu). IPC bir ağ isteği olmadığı
-    // için bu korumaya hiç takılmaz. Rust tarafı dosyayı MIME tipiyle
-    // (video/mp4 veya image/gif) birlikte döner, JS buna göre <video> ya da
-    // <img> öğesi seçer. Çözülen payload aynı uygulama oturumu boyunca
+    // için bu korumaya hiç takılmaz. Rust tarafı dosyayı video/mp4 MIME
+    // tipiyle birlikte döner. Çözülen payload aynı uygulama oturumu boyunca
     // sessionStorage'da CACHE'lenir (tekrar dosya okuma+encode+IPC
     // round-trip'i gerekmez); uygulama tamamen kapanıp yeniden açıldığında
     // sessionStorage zaten temizlenmiş olur.
-    // Varyant bazlı cache key: "super_logo" ve "muptezel_anime" ayrı dosyalara
-    // bağlı olduğundan aynı sessionStorage girdisini paylaşmamalı — aksi
-    // halde varyant değiştirilip sayfa yenilendiğinde önceki varyantın
-    // (yanlış) medyası cache'ten dönebilir.
     const VIDEO_DATA_CACHE_KEY = `tauri-super-opening-media-cache-${variant}`;
 
     function base64ToObjectUrl(base64, mime) {
@@ -303,7 +303,7 @@
     }
 
     if (!media) {
-      console.warn("[Süper Açılış] Açılış medyası (mp4/gif) bulunamadı, açılış geçiliyor.");
+      console.warn("[Süper Açılış] Açılış videosu (mp4) bulunamadı, açılış geçiliyor.");
       finishOpening();
       return;
     }
@@ -312,81 +312,111 @@
       try { URL.revokeObjectURL(media.url); } catch (e) {}
     };
 
-    const isGif = media.mime === "image/gif";
+    // Video elementini ekle ve oynat
+    video = document.createElement("video");
+    video.autoplay = true;
+    video.loop = false; // Video döngüsüz — tek sefer baştan sona oynar
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    video.style.cssText = `
+      width: 100vw !important;
+      height: 100vh !important;
+      object-fit: cover !important;
+      pointer-events: none !important;
+    `;
 
-    if (isGif) {
-      // GIF'in <video>'daki gibi doğal bir "ended" eventi yok, ve GIF
-      // byte'larından frame gecikmesi hesaplamak güvenilmez çıktı — bunun
-      // yerine her varyant için sabit bir gösterim süresi kullanılıyor.
-      const gifDurationMs = VARIANT_GIF_DURATIONS_MS[variant] || DEFAULT_GIF_DURATION_MS;
+    video.addEventListener("ended", () => {
+      cleanupObjectUrl();
+      finishOpening();
+    });
+    video.addEventListener("error", (err) => {
+      console.warn("[Süper Açılış] Video oynatılırken hata:", err, video.error);
+      // Cache'lenmiş payload bozuk/geçersiz olabilir — sonraki denemenin
+      // taze veri istemesi için sil.
+      try { sessionStorage.removeItem(VIDEO_DATA_CACHE_KEY); } catch (e) {}
+      cleanupObjectUrl();
+      finishOpening();
+    });
 
-      const img = document.createElement("img");
-      video = img; // freezeSite() erken referans aldığı için isim korunuyor
-      img.style.cssText = `
-        max-width: 60vw !important;
-        max-height: 60vh !important;
-        width: auto !important;
-        height: auto !important;
-        object-fit: contain !important;
-        pointer-events: none !important;
-      `;
-
-      img.addEventListener("error", (err) => {
-        console.warn("[Süper Açılış] GIF oynatılırken hata:", err);
-        try { sessionStorage.removeItem(VIDEO_DATA_CACHE_KEY); } catch (e) {}
-        cleanupObjectUrl();
-        finishOpening();
+    overlay.appendChild(video);
+    video.src = media.url;
+    const playAttempt = video.play();
+    if (playAttempt && typeof playAttempt.catch === "function") {
+      playAttempt.catch((err) => {
+        console.warn("[Süper Açılış] video.play() reddedildi:", err);
       });
+    }
 
-      overlay.appendChild(img);
-      img.src = media.url;
+    // Güvenlik zaman aşımı: Video beklenmeyen bir nedenle takılırsa max 15sn sonra kapat
+    setTimeout(() => {
+      if (!videoFinished) finishOpening();
+    }, 15000);
+  }
 
-      setTimeout(() => {
-        cleanupObjectUrl();
-        finishOpening();
-      }, gifDurationMs);
-    } else {
-      // Video elementini ekle ve oynat
-      video = document.createElement("video");
-      video.autoplay = true;
-      video.loop = false; // Video döngüsüz — tek sefer baştan sona oynar
-      video.muted = true;
-      video.defaultMuted = true;
-      video.playsInline = true;
-      video.style.cssText = `
-        width: 100vw !important;
-        height: 100vh !important;
-        object-fit: cover !important;
-        pointer-events: none !important;
-      `;
-
-      video.addEventListener("ended", () => {
-        cleanupObjectUrl();
-        finishOpening();
-      });
-      video.addEventListener("error", (err) => {
-        console.warn("[Süper Açılış] Video oynatılırken hata:", err, video.error);
-        // Cache'lenmiş payload bozuk/geçersiz olabilir — sonraki denemenin
-        // taze veri istemesi için sil.
-        try { sessionStorage.removeItem(VIDEO_DATA_CACHE_KEY); } catch (e) {}
-        cleanupObjectUrl();
-        finishOpening();
-      });
-
-      overlay.appendChild(video);
-      video.src = media.url;
-      const playAttempt = video.play();
-      if (playAttempt && typeof playAttempt.catch === "function") {
-        playAttempt.catch((err) => {
-          console.warn("[Süper Açılış] video.play() reddedildi:", err);
-        });
+  /**
+   * "Muptezel Anime" varyantı: tam ekran overlay içine bir WebGL <canvas>
+   * koyar ve logo-animator.js'teki initOpenAnimeLogoAnimator motoruyla
+   * OPENANIME_LOGO_CONFIG'in loopSeconds süresinde bir tam "twist" dönüşü,
+   * ardından holdSeconds kadar durağan kare gösterir. Dosya/IPC yok —
+   * dokular data: URI olarak gömülü (bkz. textures.js), ilerleme sadece
+   * requestAnimationFrame ile sürülür.
+   * @param {HTMLElement} overlay
+   * @returns {Promise<void>} animasyon (dönüş + bekleme) bitince resolve olur
+   */
+  function playLogoAnimatorIntro(overlay) {
+    return new Promise((resolve) => {
+      if (typeof initOpenAnimeLogoAnimator !== "function") {
+        console.warn("[Süper Açılış] Logo animatör motoru bulunamadı, açılış geçiliyor.");
+        resolve();
+        return;
       }
 
-      // Güvenlik zaman aşımı: Video beklenmeyen bir nedenle takılırsa max 15sn sonra kapat
-      setTimeout(() => {
-        if (!videoFinished) finishOpening();
-      }, 15000);
-    }
+      const size = 224; // 320 * 0.7 — %30 küçültülmüş boyut
+      const dpr = window.devicePixelRatio || 1;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(size * dpr);
+      canvas.height = Math.round(size * dpr);
+      canvas.style.cssText = `
+        width: ${size}px !important;
+        height: ${size}px !important;
+        max-width: 60vw !important;
+        max-height: 60vh !important;
+        pointer-events: none !important;
+      `;
+      overlay.appendChild(canvas);
+
+      const engine = initOpenAnimeLogoAnimator(canvas);
+      if (!engine) {
+        console.warn("[Süper Açılış] WebGL başlatılamadı, açılış geçiliyor.");
+        resolve();
+        return;
+      }
+
+      // Her biri 1 saniyelik 3 döngü art arda oynar, toplam ekranda kalma
+      // süresi 3 saniyedir.
+      const loopMs = 1000;
+      const totalMs = 3000;
+
+      engine.ready.then(() => {
+        let startTs = null;
+
+        function frame(ts) {
+          if (startTs === null) startTs = ts;
+          const elapsed = ts - startTs;
+          if (elapsed >= totalMs) {
+            engine.renderFrame(1);
+            resolve();
+            return;
+          }
+          const progress = (elapsed % loopMs) / loopMs;
+          engine.renderFrame(progress);
+          requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+      });
+    });
   }
 
   // Mümkün olan en erken anda overlay'i başlat
@@ -509,7 +539,7 @@
             <div class="item ${itemHeaderHash}" style="overflow:visible;align-items:flex-start;gap:12px;">
               <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
                 <span class="text-block type-body ${textBlockHash}">Açılış Ekranı Varyantı</span>
-                <span class="text-block type-caption text-secondary ${textBlockHash}">Varsayılan site yükleme ekranı, Süper Logo (MP4) veya Muptezel Anime (GIF) seçeneği.</span>
+                <span class="text-block type-caption text-secondary ${textBlockHash}">Varsayılan site yükleme ekranı, Süper Logo (MP4) veya Muptezel Anime (logo animasyonu) seçeneği.</span>
               </div>
               <div class="combo-box ${dropdownHashes.comboBoxHash}" id="tauri-super-opening-dropdown-wrapper" style="position:relative !important;flex-shrink:0;">
                 <button class="button style-standard combo-box-button ${dropdownHashes.buttonHash}" tabindex="0" type="button" id="tauri-super-opening-dropdown-btn" style="pointer-events:auto;width:230px !important;min-width:230px !important;white-space:nowrap !important;" aria-haspopup="listbox">

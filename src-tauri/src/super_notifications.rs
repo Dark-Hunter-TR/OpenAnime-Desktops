@@ -52,6 +52,20 @@
 // KAYIPSIZ yapmaktır — kaçan bildirim bir sonraki "initial" listesinde
 // yakalanır (tazelik + `seen` süzgeçleri tekrarı eler).
 //
+// TAZELEME ÖLÇÜMÜ — GATEWAY-TOKEN ARKA PLANDA TAZELENEMEZ (canlı test):
+// Vanguard `Gateway-Token`'ı ~60 sn yaşıyor ve yalnızca RENDER EDEN bir sayfada
+// yenilenebiliyor. Tepside 8 dakika boyunca yapılan test: motor `Media`ya
+// uyandırıldı, sayfa 4 kez tam olarak yeniden yüklendi (DPI günlüğünde tam
+// CONNECT fırtınası görünüyor) — token BİR KEZ BİLE tazelenmedi. Tazelenme
+// ancak pencere ön plana döndüğü an (03:00:49) gerçekleşti.
+// Sebep büyük olasılıkla challenge'ın görsel doğrulamaya bağlı olması
+// (günlüklerde sürekli `challenges.cloudflare.com` + `canvas.openani.me`).
+//
+// SONUÇ: arka planda bağlanmayı denemek GARANTİLİ 400'dür. Bu yüzden token
+// bayatken ve hiçbir pencere ön planda değilken akış DURAKLATILIR; pencere geri
+// gelince sayfa token'ı kendiliğinden tazeler ve akış sürer. Kaçan bildirim
+// kaybolmaz, "initial" listesinde yakalanır.
+//
 // DEADLOCK UYARISI:
 // cookies_for_url() Windows'ta SENKRON komut/event handler içinde çağrılırsa
 // KİLİTLENİR (wry#583). Bu yüzden yalnızca spawn_blocking içinde, ana thread
@@ -760,6 +774,8 @@ pub fn start_listener(app: &AppHandle) {
         /// Art arda kaç Vanguard reddinden sonra sayfa yeniden yüklenir.
         const GATEWAY_RELOAD_AFTER: u32 = 3;
         let mut gateway_rejections: u32 = 0;
+        // "Ön plan bekleniyor" mesajı bir kez yazılsın (günlüğü doldurmasın).
+        let mut waiting_for_foreground = false;
 
         loop {
             if !app
@@ -769,6 +785,32 @@ pub fn start_listener(app: &AppHandle) {
             {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
+            }
+
+            // BAYAT TOKEN + ARKA PLAN = DENEME. Bağlanmak GARANTİLİ 400 demek
+            // (Vanguard render eden sayfa istiyor, tepside token tazelenemiyor).
+            // Eskiden burada durmadan deneniyordu: ~35 sn'de bir kesin-400 alan
+            // istek + her ~3,5 dk'da bir tam sayfa yeniden yüklemesi, saatlerce.
+            // Bunun yerine bekliyoruz; pencere ön plana dönünce sayfa token'ı
+            // kendiliğinden tazeliyor ve akış hemen kaldığı yerden sürüyor.
+            // Bu sırada gelen bildirimler KAYBOLMUYOR — bağlanınca "initial"
+            // listesiyle yakalanıyor (tazelik + `seen` süzgeçleri tekrarı eler).
+            let token_stale = gateway_token_age(&app)
+                .is_none_or(|age| age >= Duration::from_millis(GATEWAY_TOKEN_MAX_AGE_MS));
+            if token_stale && !crate::any_window_foreground(&app) {
+                if !waiting_for_foreground {
+                    waiting_for_foreground = true;
+                    crate::dbg_log!(
+                        "[SüperBildirim] Gateway-Token bayat ve pencere arka planda → akış duraklatıldı (pencere geri gelince sürecek)"
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+            if waiting_for_foreground {
+                waiting_for_foreground = false;
+                crate::dbg_log!("[SüperBildirim] Pencere geri geldi → akış sürdürülüyor");
+                backoff = RECONNECT_MIN_MS;
             }
 
             let mut connected: Option<std::time::Instant> = None;
@@ -796,12 +838,15 @@ pub fn start_listener(app: &AppHandle) {
             // sıfırdan kurdur.
             if outcome.as_ref().err().is_some_and(|e| e.gateway_rejected) {
                 gateway_rejections += 1;
-                crate::dbg_log!(
-                    "[SüperBildirim] Vanguard reddi #{} — Gateway-Token tazelenecek",
-                    gateway_rejections
-                );
                 let refreshed = refresh_gateway_token(&app, "Vanguard reddi").await;
-                if !refreshed && gateway_rejections >= GATEWAY_RELOAD_AFTER {
+                // Sayfayı yeniden yükletmek YALNIZCA ön planda anlamlı: arka
+                // planda Vanguard challenge'ı tamamlanamadığı için reload hiçbir
+                // şey değiştirmiyor, sadece bedava bir sayfa yüklemesi maliyeti
+                // çıkarıyordu (ölçüm: 4 reload, 0 tazelenme).
+                if !refreshed
+                    && gateway_rejections >= GATEWAY_RELOAD_AFTER
+                    && crate::any_window_foreground(&app)
+                {
                     reload_page_for_gateway(&app);
                     gateway_rejections = 0;
                     // Sayfanın yeniden yüklenip Vanguard'ı kurması zaman alır.
@@ -1391,6 +1436,20 @@ pub fn sn_set_gateway_token(app: AppHandle, token: String) -> Result<(), String>
     Ok(())
 }
 
+/// Arka plandaki pencerenin RENDER ETMEYE devam etmesi gerekiyor mu?
+///
+/// Süper Bildirimler açıkken EVET: Vanguard `Gateway-Token`'ı yalnızca render
+/// eden bir sayfada tazelenebiliyor (bkz. TAZELEME ÖLÇÜMÜ notu). Sayfa
+/// dondurulursa token ~60 sn içinde bayatlıyor ve bildirim akışı susuyor.
+/// Bedeli: tepside TrySuspend + working-set trim uygulanamaz, yani RAM düşmez.
+/// Bu bilinçli bir takas — özelliğin tepside çalışmasının bilinen tek yolu.
+/// (X artık önce hafif `/settings` sayfasına gittiği için canlı tutulan sayfa
+/// oynatıcı değil, ucuz bir ayar sayfası oluyor — bkz. lib.rs CloseRequested.)
+pub fn needs_live_page(app: &AppHandle) -> bool {
+    app.try_state::<SuperNotifState>()
+        .is_some_and(|s| s.enabled.load(Ordering::SeqCst))
+}
+
 /// Gateway-Token'ın yaşı (hiç alınmadıysa None).
 fn gateway_token_age(app: &AppHandle) -> Option<Duration> {
     app.state::<SuperNotifState>()
@@ -1417,6 +1476,19 @@ fn gateway_token_age(app: &AppHandle) -> Option<Duration> {
 /// Vanguard mantığının çalışmasına izin ver, token'ı yeniden okut, sonra eski
 /// arka plan moduna (genelde DeepSleep) geri döndür.
 async fn refresh_gateway_token(app: &AppHandle, reason: &str) -> bool {
+    // ÖN PLAN ŞARTI (canlı testle kesinleşti — bkz. TAZELEME ÖLÇÜMÜ notu):
+    // Sayfa render etmiyorsa Vanguard yeni token ÜRETMİYOR. Tepside 8 dakika
+    // boyunca 4 kez tam sayfa yeniden yüklendi ve token bir kez bile
+    // tazelenmedi; tazelenme ancak pencere ön plana döndüğü an gerçekleşti.
+    // Bu yüzden arka plandayken denemenin FAYDASI YOK, ZARARI VAR (garantili
+    // 400 alan istekler + boşuna sayfa yeniden yüklemeleri).
+    if !crate::any_window_foreground(app) {
+        crate::dbg_log!(
+            "[SüperBildirim] token tazeleme atlandı ({}): pencere arka planda, Vanguard render eden sayfa istiyor",
+            reason
+        );
+        return false;
+    }
     // Çok sık uyandırma — sayfa boşuna diriltilmesin.
     // (Kilit bu blokta alınıp bırakılır; blok içinden `return` EDİLMEZ, aksi
     // halde `State` ödünçlemesi dönüş değerinden uzun yaşamış olurdu.)

@@ -226,6 +226,24 @@ fn refresh_perf_mode(app: &tauri::AppHandle) {
         // pencerede (örn. arkaplan tepsi oturumu) oynayan video BU pencereyi
         // tam performansa geçirmez.
         let full_perf = playing_map.get(&label).copied().unwrap_or(false) && focused;
+        // BELLEK hedefi CPU kararından AYRI tutulur (ikisi farklı şeyler yapar,
+        // bkz. fonksiyon başı notu).
+        //
+        // NEDEN: `SetMemoryUsageTargetLevel(LOW)` Chromium'a "cache'leri at"
+        // demektir ve GPU kaynaklarını da bırakır. Eski kural `playing &&
+        // focused` olduğu için VİDEO DURAKLATILDIĞI anda — kullanıcı ekrana
+        // bakarken, örneğin oynatıcının ayar menüsünü açmak için duraklattığında
+        // — webview LOW'a düşüyordu. WebGPU tabanlı oynatıcıda bu, cihazın
+        // kaybına ("WebGPU: Destroyed" → "Player destroyed.") yol açabiliyor;
+        // ardından sitenin ayar menüsü alt bileşeni artık null olan oynatıcıdan
+        // `OFGPresets` okumaya çalışıp mount sırasında patlıyor ve alt menü
+        // DOM'a hiç eklenmiyor (genişleyen bölümlerin "çalışmaması" bu).
+        //
+        // Artık ölçüt ODAKTA OLMAK: kullanıcı pencereye bakıyorsa duraklatmış
+        // olsa bile belleği kısmayız. Tasarruf yalnızca pencere arka plandayken
+        // yapılır — asıl kazanç zaten orada. EcoQoS (CPU) eski kuralda kalır;
+        // o GPU durumuna dokunmaz.
+        let memory_normal = focused;
         let _ = window.with_webview(move |webview| unsafe {
             use webview2_com::Microsoft::Web::WebView2::Win32::{
                 ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
@@ -244,7 +262,7 @@ fn refresh_perf_mode(app: &tauri::AppHandle) {
 
             // 1) Bellek hedefi
             if let Ok(wv19) = core_webview.cast::<ICoreWebView2_19>() {
-                let level = if full_perf {
+                let level = if memory_normal {
                     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
                 } else {
                     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
@@ -319,23 +337,9 @@ fn set_background_suspend(window: &tauri::WebviewWindow, mode: BgMode) {
 
     dbg_log!("[PerfMode] Arka plan modu ({}): {:?} → {:?}", label, previous, mode);
 
-    // Arka planda geçirilen süreyi izle: sayfa uzun süre dondurulmuşsa
-    // oturum/kimlik bilgileri bayatlamış olur ve geri dönüşte bir kez
-    // yenilenmesi gerekir (bkz. background_duration / restore_and_focus_window).
-    {
-        let st = window.app_handle().state::<PerfState>();
-        let mut since = st.bg_since.lock().unwrap();
-        match mode {
-            BgMode::Foreground => {
-                since.remove(&label);
-            }
-            // Media → DeepSleep gibi geçişlerde sayacı SIFIRLAMA: sayfa
-            // kesintisiz arka planda kalmaya devam ediyor.
-            _ => {
-                since.entry(label.clone()).or_insert_with(std::time::Instant::now);
-            }
-        }
-    }
+    // NOT: arka plan SÜRESİ burada tutulmaz — bu fonksiyon mod değişmediğinde
+    // erken döndüğü için sayaç kaçırılırdı. Süre, pencerenin gerçek
+    // görünürlüğüne göre `update_background_mode` içinde tutulur.
 
     let _ = window.with_webview(move |webview| unsafe {
         use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_3;
@@ -469,14 +473,53 @@ fn update_background_mode(app: &tauri::AppHandle, label: &str) {
         .unwrap_or(false);
     let minimized = window.is_minimized().unwrap_or(false);
     let visible = window.is_visible().unwrap_or(true);
+    let hidden = minimized || !visible;
 
-    let mode = if !(minimized || !visible) {
+    // ARKA PLAN SÜRESİ — motor moduna DEĞİL, pencerenin gerçek görünürlüğüne
+    // bağlanır (bkz. background_duration / restore_and_focus_window).
+    //
+    // NEDEN BURADA: sayaç önce `set_background_suspend` içindeydi ve mod
+    // geçişine bakıyordu. Süper Bildirimler açıkken pencere tepside bilerek
+    // `Foreground` modunda tutulduğu için (render sürsün diye) o fonksiyon
+    // "mod değişmedi" deyip erken dönüyor, sayaç HİÇ BAŞLAMIYORDU: pencere
+    // 66 sn tepside kalmasına rağmen geri dönüşte oturum tazeleme yenilemesi
+    // tetiklenmedi. Görünürlük ölçütü mod seçiminden bağımsızdır, bu yüzden
+    // doğru sinyal budur.
+    {
+        let st = app.state::<PerfState>();
+        let mut since = st.bg_since.lock().unwrap();
+        if hidden {
+            // Zaten arka plandaysa sayacı SIFIRLAMA — kesintisiz süre ölçülür.
+            since.entry(label.to_string()).or_insert_with(std::time::Instant::now);
+        } else {
+            since.remove(label);
+        }
+    }
+
+    let mut mode = if !hidden {
         BgMode::Foreground
     } else if playing {
         BgMode::Media
     } else {
         BgMode::DeepSleep
     };
+
+    // SÜPER BİLDİRİM İSTİSNASI: açıkken arka plandaki pencere RENDER ETMEYE
+    // devam etmeli. Vanguard `Gateway-Token`'ı yalnızca render eden sayfada
+    // tazelenebiliyor (canlı testle kanıtlandı — `Media`da 4 tam sayfa
+    // yenilemesine rağmen token bir kez bile tazelenmedi, çünkü Media
+    // `SetIsVisible(false)` demek ve rAF/canvas durur; Cloudflare challenge'ı
+    // da tam olarak ona dayanıyor). `Foreground` modu `Resume()` +
+    // `SetIsVisible(true)` uygular; pencerenin kendisi (HWND) `hide()` ile
+    // gizli kaldığı için kullanıcı hiçbir şey görmez, ama motor çalışır.
+    // TAKAS: TrySuspend/working-set trim uygulanamaz → tepside RAM düşmez.
+    if mode != BgMode::Foreground && super_notifications::needs_live_page(app) {
+        dbg_log!(
+            "[PerfMode] Süper Bildirim açık → {} penceresi arka planda canlı tutuluyor (render sürüyor)",
+            label
+        );
+        mode = BgMode::Foreground;
+    }
 
     // JS'e ÖNCE haber ver: DeepSleep'te motor donduğu için sinyal sonradan
     // gönderilseydi sayfaya hiç ulaşmazdı.
@@ -520,11 +563,19 @@ fn enter_tray_background(app: &tauri::AppHandle, label: &str) {
     // Gizlenme ANINDAKİ oynatma durumu kararı belirler: video oynuyorsa sayfa
     // "media" moduna (timer'ların çoğu durur, Discord RPC + oynatıcı bildirimi
     // sürer), oynamıyorsa "hidden" moduna (her şey durur) geçer.
-    emit_background_state(
-        app,
-        label,
-        if playing { "media" } else { "hidden" },
-    );
+    //
+    // Süper Bildirimler açıkken İKİSİ DE OLMAZ: sayfaya "foreground" denir ki
+    // TÜM timer'lar (özellikle 30 sn'lik Gateway-Token yansıtması) çalışmaya
+    // devam etsin ve Page Visibility geçersiz kılınmasın — Vanguard challenge'ı
+    // sayfanın kendini görünür sanmasına bağlı (bkz. update_background_mode).
+    let js_mode = if super_notifications::needs_live_page(app) {
+        "foreground"
+    } else if playing {
+        "media"
+    } else {
+        "hidden"
+    };
+    emit_background_state(app, label, js_mode);
 
     let app_c = app.clone();
     let label_c = label.to_string();
@@ -548,12 +599,52 @@ fn enter_tray_background(app: &tauri::AppHandle, label: &str) {
 pub(crate) fn resume_webview(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
+        // Arka plan sayacını AÇIKÇA sıfırla. Çağıran (restore_and_focus_window)
+        // süreyi bu satırdan ÖNCE okur; burada temizlemek aynı arka plan
+        // dönemine ait ikinci bir geri-yüklemenin oturum tazeleme yenilemesini
+        // tekrar tetiklemesini önler.
+        clear_background_since(&window.app_handle(), window.label());
         set_background_suspend(window, BgMode::Foreground);
         emit_background_state(&window.app_handle(), window.label(), "foreground");
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = window;
+    }
+}
+
+/// Pencerenin arka plan sayacını sıfırlar (pencere geri geldi).
+#[cfg(target_os = "windows")]
+fn clear_background_since(app: &tauri::AppHandle, label: &str) {
+    // Kilit doğrudan bağlanır (dosyadaki diğer PerfState kullanımlarıyla aynı
+    // biçim): `if let` kalıbı burada State ödünçlemesini kilit korumasından
+    // uzun yaşatmadığı için derlenmiyor.
+    let st = app.state::<PerfState>();
+    let mut since = st.bg_since.lock().unwrap();
+    since.remove(label);
+}
+
+/// Herhangi bir pencere ÖN PLANDA (görünür + motor tam çalışır) mı?
+///
+/// Vanguard `Gateway-Token`'ı yalnızca RENDER EDEN bir sayfada tazelenebiliyor
+/// (Turnstile/canvas doğrulaması gerektiriyor). Bu yüzden "token tazelenebilir
+/// mi" sorusunun cevabı fiilen budur — bkz. super_notifications.
+pub(crate) fn any_window_foreground(app: &tauri::AppHandle) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let state = app.state::<PerfState>();
+        let Ok(map) = state.suspended.lock() else {
+            return false;
+        };
+        // Kayıtta hiç yoksa pencere henüz arka plana alınmamıştır → ön plan.
+        app.webview_windows().keys().any(|label| {
+            map.get(label).copied().unwrap_or(BgMode::Foreground) == BgMode::Foreground
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        true
     }
 }
 
@@ -757,8 +848,15 @@ const COMMON_INIT_SCRIPT: &str = concat!(
 
     // ──────────────────────────────────────────────
     // BLOK 6B: SÜPER AÇILIŞ (SPLASH SCREEN VARYANTLARI)
+    // "Muptezel Anime" varyantının Canvas render motoru, super-opening.js'in
+    // kendi IIFE'sinden de erişilebilmesi için AYNI blokta ondan önce
+    // enjekte edilir (sloppy-mode function hoisting sayesinde görünür).
     // ──────────────────────────────────────────────
     "{\n",
+    include_str!("js/modules/logo-animator/textures.js"),
+    "\n",
+    include_str!("js/modules/logo-animator/logo-animator.js"),
+    "\n",
     include_str!("js/modules/super-opening.js"),
     "\n}\n",
 
@@ -1325,19 +1423,12 @@ const SUPER_LOGO_MEDIA_NAMES: &[(&str, &str)] = &[
     ("super_logo.mp4", "video/mp4"),
 ];
 
-/// "muptezel_anime" varyantının olası dosya adları — SADECE GIF. Ayrı,
-/// bağımsız bir açılış seçeneği; super_logo'nun yedeği DEĞİL.
-const MUPTEZEL_ANIME_MEDIA_NAMES: &[(&str, &str)] = &[
-    ("Muptezel-anime.gif", "image/gif"),
-    ("muptezel-anime.gif", "image/gif"),
-    ("muptezel_anime.gif", "image/gif"),
-];
-
-fn media_names_for_variant(variant: &str) -> &'static [(&'static str, &'static str)] {
-    match variant {
-        "muptezel_anime" => MUPTEZEL_ANIME_MEDIA_NAMES,
-        _ => SUPER_LOGO_MEDIA_NAMES,
-    }
+/// "muptezel_anime" varyantı artık bir dosyaya dayanmıyor — açılışta
+/// js/modules/logo-animator/logo-animator.js ile Canvas üzerinde gerçek
+/// zamanlı render ediliyor (bkz. super-opening.js). Bu yüzden medya adı
+/// eşlemesi tek varyanta (super_logo) indirgendi.
+fn media_names_for_variant(_variant: &str) -> &'static [(&'static str, &'static str)] {
+    SUPER_LOGO_MEDIA_NAMES
 }
 
 /// Verilen dosya adı/MIME listesindeki ilk mevcut dosyayı diskte arar.
@@ -1416,12 +1507,13 @@ struct SuperOpeningMedia {
     mime: String,
 }
 
-/// Süper Açılış medyasını (`variant`'a göre MP4 video veya GIF) doğrudan
-/// Tauri IPC üzerinden (ağ isteği YOK) JS'e base64 olarak taşır.
+/// Süper Açılış MP4 videosunu (super_logo varyantı) doğrudan Tauri IPC
+/// üzerinden (ağ isteği YOK) JS'e base64 olarak taşır. `muptezel_anime`
+/// varyantı bu komutu hiç çağırmaz — o Canvas ile render edilir.
 /// `get_super_opening_video_url`'in aksine bu bir HTTP isteği değil — bu
 /// yüzden Private Network Access / mixed-content gibi tarayıcı
 /// korumalarına hiç takılmaz. JS tarafı base64'ü dönen `mime` tipine göre
-/// Blob'a çevirip `<video>` veya `<img>` öğesine verir.
+/// Blob'a çevirip `<video>` öğesine verir.
 #[tauri::command]
 fn get_super_opening_video_data(app: tauri::AppHandle, variant: String) -> Result<SuperOpeningMedia, String> {
     use base64::Engine;
