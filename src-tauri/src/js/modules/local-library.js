@@ -85,6 +85,14 @@
     var resLabel = resolution > 0 ? resolution + "p" : "";
     var fansubName = resLabel ? fileName + " (" + resLabel + ")" : fileName;
 
+    // Site "Gerçek zamanlı 4K (GPU)" seçeneğini yalnızca episode.resolutions
+    // dizisinde en az bir 1080p+ girdi varsa aktif ediyor — çözünürlükle
+    // ilgili, GPU ile alakasız bir kilit. Yerel oynatıcı hangi kalite seçili
+    // olursa olsun HER ZAMAN aynı gerçek dosyayı servis ettiği için (bkz.
+    // local-player.js store.get intercept'i, kaliteye bakmaz) burada 1080'i
+    // listeye eklemek gerçek oynatmayı etkilemez — sadece kilidi açar.
+    var resolutionsList = resolution >= 1080 ? [resolution] : [resolution, 1080];
+
     return {
       type: "tv",
       videoFileName: videoId,
@@ -98,7 +106,7 @@
         fansub: { id: LOCAL_FANSUB_ID, name: fansubName, secureName: "local", avatar: "", website: "", discord: "", contributors: "", is4K: resolution >= 2160 },
         uploader: { id: "local", username: "Local" },
         processing: false,
-        resolutions: [resolution],
+        resolutions: resolutionsList,
         files: [{ storage_cluster_id: "local", resolution: resolution, size: fileSize, file: videoId }],
         mime: mime,
         createdAt: Date.now(),
