@@ -203,30 +203,30 @@ function initOpenAnimeLogoAnimator(canvas) {
     return null;
   }
 
-  function compileShader(type, source) {
+  // ÖNEMLİ: gl.compileShader/linkProgram'dan HEMEN sonra durumunu
+  // (COMPILE_STATUS/LINK_STATUS) senkron sorgulamak, GPU sürecine bir
+  // "flush" zorlar ve derleme bitene kadar ANA THREAD'İ BLOKE EDER. Bu tam
+  // olarak uygulamanın ilk açılışında (GPU sürücüsünün shader cache'i
+  // henüz soğukken) gözle görülür "kasma"ya yol açan şeydi. Bu yüzden
+  // derleme/linkleme durumunu burada değil, aşağıdaki `waitForLink()`
+  // içinde — KHR_parallel_shader_compile uzantısı varsa BLOKE ETMEDEN
+  // polling ile — kontrol ediyoruz.
+  const parallelCompile = gl.getExtension("KHR_parallel_shader_compile");
+
+  function createShader(type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-      console.warn("[Logo Animator] Shader derleme hatası:", gl.getShaderInfoLog(shader));
-      gl.deleteShader(shader);
-      return null;
-    }
     return shader;
   }
 
-  const vertexShader = compileShader(gl.VERTEX_SHADER, OPENANIME_LOGO_VERTEX_SHADER);
-  const fragmentShader = compileShader(gl.FRAGMENT_SHADER, OPENANIME_LOGO_FRAGMENT_SHADER);
-  if (!vertexShader || !fragmentShader) return null;
+  const vertexShader = createShader(gl.VERTEX_SHADER, OPENANIME_LOGO_VERTEX_SHADER);
+  const fragmentShader = createShader(gl.FRAGMENT_SHADER, OPENANIME_LOGO_FRAGMENT_SHADER);
 
   const program = gl.createProgram();
   gl.attachShader(program, vertexShader);
   gl.attachShader(program, fragmentShader);
   gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    console.warn("[Logo Animator] Program linkleme hatası:", gl.getProgramInfoLog(program));
-    return null;
-  }
 
   const positionBuffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -235,7 +235,6 @@ function initOpenAnimeLogoAnimator(canvas) {
     new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
     gl.STATIC_DRAW
   );
-  const positionLocation = gl.getAttribLocation(program, "a_position");
 
   const uvBuffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer);
@@ -244,7 +243,13 @@ function initOpenAnimeLogoAnimator(canvas) {
     new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1]),
     gl.STATIC_DRAW
   );
-  const uvLocation = gl.getAttribLocation(program, "a_texCoord");
+
+  // a_position/a_texCoord konumları ve uniform konumları da programın
+  // LİNKLENMİŞ olmasını gerektirir — bu yüzden onlar da waitForLink()
+  // tamamlanana kadar ertelenir (aşağıda doldurulur).
+  let positionLocation = -1;
+  let uvLocation = -1;
+  let uniforms = null;
 
   function loadTexture(base64) {
     const texture = gl.createTexture();
@@ -282,15 +287,62 @@ function initOpenAnimeLogoAnimator(canvas) {
     "u_loopSeconds", "u_holdSeconds", "u_invertTwist", "u_autoAnimate",
     "u_effectMode", "u_easing", "u_progress", "u_centerOnTop", "u_bgColor",
   ];
-  const uniforms = {};
-  uniformNames.forEach((name) => {
-    uniforms[name] = gl.getUniformLocation(program, name);
-  });
+
+  // Programın linkleme durumunu (ve buna bağlı attrib/uniform konumlarını)
+  // BLOKE ETMEDEN bekler. Uzantı varsa (WebView2/Chromium'da mevcuttur)
+  // COMPLETION_STATUS_KHR ile polling yapılır — her poll bir sonraki tick'e
+  // ertelendiği için ana thread'i asla dondurmaz. Uzantı yoksa (nadir/eski
+  // sürücü) durumu bir kerede sorgulamak zorunda kalırız; bu shader'lar
+  // sabit ve test edilmiş olduğundan bu yol pratikte hemen hiç kullanılmaz.
+  // Üst sınır: context kaybı (GPU sürücü resetlenmesi, tepsi modunda
+  // TrySuspend vb.) sırasında COMPLETION_STATUS_KHR kalıcı olarak `null`
+  // dönebilir — bu da polling'i sonsuza dek sürdürürdü. 3 saniye (300 poll)
+  // sonra pes edip "linklenmedi" say; çağıran taraf (playLogoAnimatorIntro)
+  // bunu normal bir başarısızlık gibi ele alıp açılışı bitirir.
+  const WAIT_FOR_LINK_MAX_POLLS = 300;
+
+  function waitForLink() {
+    return new Promise((resolve) => {
+      let pollCount = 0;
+      function poll() {
+        if (gl.isContextLost()) {
+          console.warn("[Logo Animator] WebGL context kayboldu, linkleme iptal.");
+          resolve(false);
+          return;
+        }
+        if (parallelCompile && !gl.getProgramParameter(program, parallelCompile.COMPLETION_STATUS_KHR)) {
+          pollCount++;
+          if (pollCount >= WAIT_FOR_LINK_MAX_POLLS) {
+            console.warn("[Logo Animator] Shader linkleme zaman aşımına uğradı, açılış geçiliyor.");
+            resolve(false);
+            return;
+          }
+          setTimeout(poll, 10);
+          return;
+        }
+        const linked = gl.getProgramParameter(program, gl.LINK_STATUS);
+        if (!linked) {
+          console.warn("[Logo Animator] Program linkleme hatası:", gl.getProgramInfoLog(program));
+          resolve(false);
+          return;
+        }
+        positionLocation = gl.getAttribLocation(program, "a_position");
+        uvLocation = gl.getAttribLocation(program, "a_texCoord");
+        uniforms = {};
+        uniformNames.forEach((name) => {
+          uniforms[name] = gl.getUniformLocation(program, name);
+        });
+        resolve(true);
+      }
+      poll();
+    });
+  }
 
   /**
    * @param {number} progress - 0.0 (animasyon başı) - 1.0 (tam döngü + bekleme sonu)
    */
   function renderFrame(progress) {
+    if (!uniforms) return; // waitForLink() henüz tamamlanmadı
     const cfg = OPENANIME_LOGO_CONFIG;
 
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -339,7 +391,9 @@ function initOpenAnimeLogoAnimator(canvas) {
   }
 
   return {
-    ready: Promise.all([spin.ready, centerTex.ready]).then(() => {}),
+    ready: Promise.all([spin.ready, centerTex.ready, waitForLink()]).then(
+      ([, , linked]) => linked
+    ),
     renderFrame,
   };
 }

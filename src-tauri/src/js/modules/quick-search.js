@@ -69,6 +69,8 @@
   let aiPhEl = null;
   let aiPhIdx = 0;
   let aiPhTimer = null;
+  let ctxMenu = null;
+  let ctxMenuTarget = null;
 
   function readRecent() {
     try {
@@ -107,7 +109,7 @@
       if (cached && imgEl) {
         imgEl.src = cached;
         imgEl.style.display = "";
-        if (fallbackEl) fallbackEl.style.display = "none";
+        if (fallbackEl) fallbackEl.style.setProperty("display", "none", "important");
       }
       return;
     }
@@ -122,7 +124,7 @@
         if (imgEl && imgEl.isConnected) {
           imgEl.src = url;
           imgEl.style.display = "";
-          if (fallbackEl) fallbackEl.style.display = "none";
+          if (fallbackEl) fallbackEl.style.setProperty("display", "none", "important");
         }
       })
       .catch(() => {});
@@ -208,7 +210,7 @@
 
       if (it.poster) {
         img.src = it.poster;
-        fallback.style.display = "none";
+        fallback.style.setProperty("display", "none", "important");
       } else {
         img.style.display = "none";
         lazyPoster(it.slug, img, fallback);
@@ -267,8 +269,26 @@
       li.appendChild(fallback);
       li.appendChild(texts);
       li.addEventListener("mousedown", (e) => {
+        // Yalnızca sol tık (button 0) direkt açsın — mousedown herhangi bir
+        // düğme için tetiklendiğinden, bu kontrol olmadan sağ/orta tık da
+        // aynı anda navigasyonu tetikliyordu (sağ tık artık kendi menüsünü
+        // açıyor, bkz. aşağıdaki "contextmenu" dinleyicisi).
+        if (e.button !== 0) return;
         e.preventDefault();
+        // Ctrl/Cmd+Click: sitenin <a> linklerindeki kısayolla tutarlı olsun
+        // diye — bu öğeler gerçek <a> olmadığından link-interceptor.js'in
+        // click yakalayıcısına hiç girmiyor, o yüzden aynı davranışı burada
+        // ayrıca uyguluyoruz.
+        if (e.ctrlKey || e.metaKey) {
+          openInNewWindow(items[idx]);
+          return;
+        }
         choose(idx);
+      });
+      li.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showContextMenu(e.clientX, e.clientY, it);
       });
       li.addEventListener("mousemove", () => setActive(idx));
       listEl.appendChild(li);
@@ -401,7 +421,11 @@
   const AI_SITEKEY = "0x4AAAAAACd9i-5jcBUICPhj";
   const AI_MODE_KEY = "defaultAiMode";
   const AI_ON_KEY = "oa_quick_search_ai";
-  const AI_DEBOUNCE_MS = 750;
+  // 2sn: AI aramada her ara duraklamada istek atmamak için normal aramadan
+  // (250ms) çok daha uzun bekleme. Turnstile doğrulama + LLM round-trip
+  // maliyetli olduğundan, kullanıcı cümlesini bitirene kadar (2sn boyunca
+  // harf değişikliği olmayana dek) istek atılmaz.
+  const AI_DEBOUNCE_MS = 2000;
 
   function aiMode() {
     try {
@@ -431,7 +455,16 @@
 
   let tsContainer = null;
   let tsWidgetId = null;
-  let tsResolve = null;
+  // Widget bir kez render edilip sonraki çağrılarda reset() ile yeniden
+  // kullanılıyor — bu yüzden callback/error-callback KAPANIŞLARI ilk render
+  // anındaki resolve/reject'e sabitlenemez (aksi halde 2. aramadan itibaren
+  // yanlış (bayat) Promise'i çözer/reddeder). Bunun yerine tek, DEĞİŞKEN bir
+  // "aktif istek" referansına (tsPending) bakılır; her yeni turnstileToken()
+  // çağrısı öncekini üzerine yazmadan önce açıkça reddeder — böylece üst
+  // üste binen AI aramalarda (debounce süresi Turnstile round-trip'inden
+  // kısa kalırsa) önceki isteğin sonucu/hatası YANLIŞLIKLA yeni isteğe
+  // yönlendirilmez.
+  let tsPending = null;
 
   function turnstileToken() {
     return new Promise((resolve, reject) => {
@@ -440,7 +473,11 @@
         reject(new Error("turnstile-yok"));
         return;
       }
-      tsResolve = resolve;
+
+      if (tsPending) {
+        tsPending.reject(new DOMException("superseded", "AbortError"));
+      }
+      tsPending = { resolve, reject };
 
       if (tsWidgetId !== null) {
         try { ts.reset(tsWidgetId); return; } catch (e) { tsWidgetId = null; }
@@ -458,11 +495,12 @@
         tsWidgetId = ts.render(tsContainer, {
           sitekey: AI_SITEKEY,
           execution: "render",
-          callback: (tok) => { if (tsResolve) { tsResolve(tok); tsResolve = null; } },
-          "error-callback": () => { if (tsResolve) { tsResolve = null; reject(new Error("turnstile-hata")); } },
+          callback: (tok) => { if (tsPending) { tsPending.resolve(tok); tsPending = null; } },
+          "error-callback": () => { if (tsPending) { tsPending.reject(new Error("turnstile-hata")); tsPending = null; } },
           "expired-callback": () => { try { ts.reset(tsWidgetId); } catch (e) {} },
         });
       } catch (e) {
+        tsPending = null;
         reject(e);
       }
     });
@@ -514,6 +552,12 @@
     try {
       tok = await turnstileToken();
     } catch (e) {
+      // "superseded" (bkz. turnstileToken): daha yeni bir arama bu iste\u011Fin
+      // yerini ald\u0131 \u2014 bu bir hata de\u011Fil, sessizce iptal edilmesi gereken
+      // normal bir durum. Genel bir Error'a \u00E7evirip kullan\u0131c\u0131ya "Do\u011Frulama
+      // tamamlanamad\u0131" gibi yanl\u0131\u015F bir hata FLASH'lamamak i\u00E7in AbortError
+      // kimli\u011Fini koruyarak yeniden f\u0131rlat.
+      if (e && e.name === "AbortError") throw e;
       throw new Error(e && e.message === "turnstile-yok"
         ? "AI arama i\u00E7in do\u011Frulama y\u00FCklenemedi"
         : "Do\u011Frulama tamamlanamad\u0131");
@@ -528,7 +572,22 @@
       `${API}/anime/ai-search?q=${encodeURIComponent(q)}&mode=${aiMode()}`,
       { method: "POST", body: JSON.stringify({ tk: tok }), headers, signal: ctrl.signal }
     );
-    if (!resp.ok || !resp.body) throw new Error("HTTP " + resp.status);
+    if (!resp.ok || !resp.body) {
+      // Sitenin kendi arama kutusu bu özelliği plan yetersizse HİÇ istek
+      // atmadan (client-side) bir "teaching tip" ile engelliyor — bizim
+      // klon burada gate yapmadığından istek gerçekten backend'e gidiyor.
+      // Bu iki mesaj sitenin minified bundle'ından (openanime-C4wWGNpH.js)
+      // birebir alındı; hangi HTTP status'e karşılık geldiği DOĞRULANMADI
+      // (401/403 varsayımı) — gerçek status/body Network sekmesinden teyit
+      // edilince buradaki eşleşme kesinleştirilmeli.
+      if (resp.status === 401) {
+        throw new Error("Bu özelliği kullanmak için giriş yapmanız ve OpenAnime+ Standard üyesi olmanız gerekmektedir.");
+      }
+      if (resp.status === 402 || resp.status === 403) {
+        throw new Error("Bu özelliği kullanmak için OpenAnime+ Standard üyesi olmanız gerekmektedir.");
+      }
+      throw new Error("HTTP " + resp.status);
+    }
 
     const steps = [];
     let webLinks = [];
@@ -638,6 +697,37 @@
     pushRecent({ slug: it.slug, title: it.title, poster: it.poster || null });
     close();
     window.location.href = `${SITE}/anime/${encodeURIComponent(it.slug)}`;
+  }
+
+  function showContextMenu(x, y, it) {
+    if (!ctxMenu) return;
+    ctxMenuTarget = it;
+    ctxMenu.classList.remove("oa-qs-hidden");
+    // Menü boyutu bilinmeden konumlanamayacağı için önce ekliyor, sonra
+    // gerçek boyutuna göre viewport dışına taşmayacak şekilde clamp ediyoruz.
+    const rect = ctxMenu.getBoundingClientRect();
+    const left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 4));
+    const top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 4));
+    ctxMenu.style.left = `${left}px`;
+    ctxMenu.style.top = `${top}px`;
+  }
+
+  function hideContextMenu() {
+    if (ctxMenu) ctxMenu.classList.add("oa-qs-hidden");
+    ctxMenuTarget = null;
+  }
+
+  function openInNewWindow(it) {
+    if (!it) return;
+    hideContextMenu();
+    pushRecent({ slug: it.slug, title: it.title, poster: it.poster || null });
+    const url = `${SITE}/anime/${encodeURIComponent(it.slug)}`;
+    if (window.__TAURI__ && window.__TAURI__.core) {
+      window.__TAURI__.core.invoke("open_new_window", { url }).catch(console.error);
+    } else {
+      window.open(url, "_blank");
+    }
+    close();
   }
 
   function build() {
@@ -834,6 +924,44 @@
     backdrop.appendChild(panel);
     document.documentElement.appendChild(backdrop);
 
+    // Sağ tık menüsü ("Yeni pencerede aç") — backdrop'ın DIŞINDA, ayrı bir
+    // üst seviye eleman olarak ekleniyor. Çünkü backdrop'ın kendi mousedown
+    // dinleyicisi "panel dışına tıklanınca kapat" mantığında; menü panel
+    // dışında (imlecin konumunda) göründüğünden panel'in içine koyarsak o
+    // mantık aramayı erken kapatırdı.
+    ctxMenu = document.createElement("div");
+    ctxMenu.className = "oa-qs-ctxmenu oa-qs-hidden";
+    const ctxItem = document.createElement("button");
+    ctxItem.type = "button";
+    ctxItem.className = "oa-qs-ctxmenu-item";
+    ctxItem.textContent = "Yeni pencerede aç";
+    ctxItem.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openInNewWindow(ctxMenuTarget);
+    });
+    ctxMenu.appendChild(ctxItem);
+    document.documentElement.appendChild(ctxMenu);
+
+    document.addEventListener(
+      "mousedown",
+      (e) => {
+        if (ctxMenu && !ctxMenu.classList.contains("oa-qs-hidden") && !ctxMenu.contains(e.target)) {
+          hideContextMenu();
+        }
+      },
+      true
+    );
+    document.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.key === "Escape" && ctxMenu && !ctxMenu.classList.contains("oa-qs-hidden")) {
+          hideContextMenu();
+        }
+      },
+      true
+    );
+
     input.addEventListener("input", () => search(input.value));
 
     backdrop.addEventListener("mousedown", (e) => {
@@ -856,6 +984,22 @@
     );
   }
 
+  // Sitenin kendi popup/modal'ları (ör. kütüphanede bir animeye tıklayınca
+  // açılan detay popup'ı) genelde kendi "focus trap"'ini kurar: focus kendi
+  // dışına çıktığında bunu yakalayıp geri kendine çeker. Bizim backdrop'ımız
+  // DOM'da <body>'nin DIŞINDA (documentElement'e ekli) olduğundan, altta
+  // açık bir site popup'ı varken Ctrl+T ile input.focus() çağırsak bile o
+  // trap focus'u bir sonraki tick'te kendine geri çekebiliyor — sonuç:
+  // arama kutusu görünür ama yazı yazılamaz. Bunu, backdrop açık kaldığı
+  // sürece document düzeyinde bir focus guard ile aşıyoruz: focus, backdrop
+  // dışına her kaçtığında anında input'a geri alınır.
+  let focusGuardActive = false;
+  function guardFocus() {
+    if (!isOpen || !backdrop || !input) return;
+    if (backdrop.contains(document.activeElement)) return;
+    input.focus();
+  }
+
   function open() {
     build();
     if (isOpen) { input.select(); return; }
@@ -865,7 +1009,17 @@
     input.value = "";
     showEmptyState();
     syncAiUi();
+
+    // Tek seferlik focus() yetmeyebilir (altındaki popup'ın trap'i async/
+    // sıradaki tick'te focus'u geri çekiyorsa) — birkaç kez ısrar ediyoruz.
     input.focus();
+    requestAnimationFrame(() => { if (isOpen) input.focus(); });
+    setTimeout(() => { if (isOpen) input.focus(); }, 50);
+
+    if (!focusGuardActive) {
+      focusGuardActive = true;
+      document.addEventListener("focusin", guardFocus, true);
+    }
   }
 
   function close() {
@@ -876,7 +1030,12 @@
     spinner.classList.remove("oa-qs-busy");
     stopAiPlaceholder();
     toggleModePopup(false);
+    hideContextMenu();
     setSteps([]);
+    if (focusGuardActive) {
+      focusGuardActive = false;
+      document.removeEventListener("focusin", guardFocus, true);
+    }
     backdrop.classList.remove("oa-qs-open");
     setTimeout(() => { if (!isOpen && backdrop) backdrop.classList.add("oa-qs-hidden"); }, 200);
   }

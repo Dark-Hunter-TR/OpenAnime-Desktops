@@ -26,6 +26,8 @@ pub mod logger;
 mod dpi_proxy;
 #[cfg(target_os = "windows")]
 mod perf_mode;
+#[cfg(target_os = "windows")]
+mod perf_report;
 
 /// Performans modu kararı için paylaşılan durum.
 ///
@@ -1716,6 +1718,21 @@ pub fn run() {
         let dpi_manager = dpi_proxy::DpiProxyManager::new(&app_handle);
         app.manage(dpi_manager);
         let user_agent = platform_user_agent();
+
+        // Dakikada bir RAM/CPU/uyku-durumu raporu (bkz. perf_report.rs).
+        // Sadece gözlem — hiçbir davranışı etkilemez.
+        #[cfg(target_os = "windows")]
+        {
+            let app_handle_for_perf = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    perf_report::report(&app_handle_for_perf);
+                }
+            });
+        }
 
         // DPI proxy'yi en baştan başlat (arkaplan) - Windows için 3 adımlı bağlantı doğrulama akışı
         #[cfg(target_os = "windows")]

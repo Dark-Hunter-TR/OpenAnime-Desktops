@@ -54,11 +54,12 @@
     video.__openanime_optimized__ = true;
 
     try {
-      // CSS GPU hints
-      video.style.willChange = "transform";
-      video.style.transform = "translateZ(0)";        // Force GPU layer
-      video.style.backfaceVisibility = "hidden";      // Hide back face (Android)
-      video.style.webkitBackfaceVisibility = "hidden"; // Safari/WebKit
+      // NOT: transform/will-change GPU-layer hileleri BİLEREK KALDIRILDI.
+      // Site <video>'yu ekrana hiç basmıyor (opacity:0, yalnızca WebGPU'nun
+      // kare kaynağı) — bu yüzden compositing layer'a zorlamanın performans
+      // kazancı yok, ama <video>'ya yeni bir stacking context açıp sitenin
+      // ayarlar submenu'sünü ve renk filtresi UI'ını videonun arkasına
+      // gömerek kırıyordu (hover submenu açılmıyor, renk filtreleri çalışmıyor).
 
       // Preload strategy
       if (!video.hasAttribute("preload") || video.getAttribute("preload") === "none") {
@@ -273,11 +274,21 @@
     applyAdaptiveNetworkHints();
   }
 
+  // Süper Açılış (bkz. super-opening.js) oynuyorsa, WebGL rAF döngüsüyle
+  // ana thread çakışmasını önlemek için init açılış bitene kadar ertelenir.
+  function startInitVideoOptimizer() {
+    if (typeof window.deferUntilSuperOpeningDone === "function") {
+      window.deferUntilSuperOpeningDone(initVideoOptimizer);
+    } else {
+      initVideoOptimizer();
+    }
+  }
+
   // İlk sayfa yüklemesinde başlat
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initVideoOptimizer, { once: true });
+    document.addEventListener("DOMContentLoaded", startInitVideoOptimizer, { once: true });
   } else {
-    initVideoOptimizer();
+    startInitVideoOptimizer();
   }
 
   // SPA navigation tracking: yeni sayfa yüklendiğinde yeniden optimize et

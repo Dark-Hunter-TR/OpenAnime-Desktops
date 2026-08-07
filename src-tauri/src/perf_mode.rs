@@ -95,7 +95,7 @@ fn set_eco_qos(pid: u32, enable: bool) -> bool {
 }
 
 /// browser_pid'in kendisi + tüm çocukları (renderer, GPU, utility...).
-fn webview_process_tree(browser_pid: u32) -> Vec<u32> {
+pub(crate) fn webview_process_tree(browser_pid: u32) -> Vec<u32> {
     let mut out = vec![browser_pid];
     unsafe {
         let snapshot = match CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {

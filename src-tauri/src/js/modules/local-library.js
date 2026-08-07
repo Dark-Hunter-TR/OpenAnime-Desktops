@@ -795,7 +795,13 @@
   }
 // __TAURI__ kontrolü OLMADAN direkt başla (tıpkı Discord/Updater gibi)
 // Svelte DOM'u hemen hazır olmayabilir, ama MutationObserver bekler.
-init();
+// Süper Açılış (bkz. super-opening.js) oynuyorsa, WebGL rAF döngüsüyle ana
+// thread çakışmasını önlemek için açılış bitene kadar ertelenir.
+if (typeof window.deferUntilSuperOpeningDone === "function") {
+  window.deferUntilSuperOpeningDone(init);
+} else {
+  init();
+}
 
 
 })();

@@ -17,8 +17,8 @@
   align-items: flex-start !important;
   padding-top: 10vh !important;
   background-color: var(--fds-smoke-background-default, rgba(0, 0, 0, 0.45)) !important;
-  backdrop-filter: blur(4px) !important;
   -webkit-backdrop-filter: blur(4px) !important;
+  backdrop-filter: blur(4px) !important;
   opacity: 0;
   transition: opacity var(--fds-control-fast-duration, 167ms) ease !important;
 }
@@ -58,6 +58,7 @@
 .oa-qs-panel.oa-qs-acrylic {
   background-color: var(--fds-acrylic-fallback-background-base, rgba(24, 28, 38, 0.94)) !important;
   background-image: var(--fds-acrylic-noise-asset-alpha) !important;
+  -webkit-backdrop-filter: var(--fds-acrylic-fallback-filter, blur(32px) saturate(200%)) !important;
   backdrop-filter: var(--fds-acrylic-fallback-filter, blur(32px) saturate(200%)) !important;
   background-clip: border-box !important;
 }
@@ -86,7 +87,15 @@
 }
 
 .oa-qs-inputwrap.oa-qs-ai-on {
-  border-color: color-mix(in srgb, var(--fds-accent-default, var(--accent, #60cdff)) 50%, transparent) !important;
+  border-color: var(--fds-accent-default, var(--accent, #60cdff)) !important;
+}
+
+/* Chrome < 111 / Safari < 16.2 color-mix() desteklemez — @supports ile
+   korumaya alinarak yukaridaki duz renk fallback'i onlarda gecerli kalir. */
+@supports (border-color: color-mix(in srgb, red 50%, transparent)) {
+  .oa-qs-inputwrap.oa-qs-ai-on {
+    border-color: color-mix(in srgb, var(--fds-accent-default, var(--accent, #60cdff)) 50%, transparent) !important;
+  }
 }
 
 .oa-qs-underline {
@@ -602,3 +611,40 @@
   background-color: rgba(255, 255, 255, 0.05) !important;
   font-size: 11px !important;
 }
+
+/* ── Sağ tık menüsü (sonuç öğesi için "Yeni pencerede aç") ──── */
+/* Panel/mode-popup ile aynı --fds-* token'lar (gerçek temaya uyar, sabit
+   renk yok) — bir "menü satırı" olduğundan .oa-qs-clear'ın accent-link
+   stili yerine .oa-qs-mode-item'ın beyaz yazı + hover highlight dili. */
+.oa-qs-ctxmenu {
+  position: fixed !important;
+  z-index: 99999999 !important;
+  box-sizing: border-box !important;
+  font-family: inherit !important;
+  border-radius: var(--fds-overlay-corner-radius, 8px) !important;
+  border: 1px solid var(--fds-surface-stroke-flyout, rgba(255, 255, 255, 0.08)) !important;
+  background-color: var(--fds-solid-background-base, var(--bg-elevated, #1c202b)) !important;
+  background-clip: padding-box !important;
+  box-shadow: var(--fds-flyout-shadow, 0 24px 64px rgba(0, 0, 0, 0.6)) !important;
+  padding: 4px !important;
+}
+
+.oa-qs-ctxmenu.oa-qs-hidden { display: none !important; }
+
+.oa-qs-ctxmenu-item {
+  display: block !important;
+  width: 100% !important;
+  background: transparent !important;
+  border: none !important;
+  color: var(--fds-text-primary, #fff) !important;
+  cursor: pointer !important;
+  font-family: inherit !important;
+  font-size: 13px !important;
+  padding: 8px 12px !important;
+  border-radius: 4px !important;
+  text-align: left !important;
+  white-space: nowrap !important;
+  transition: background 120ms ease !important;
+}
+
+.oa-qs-ctxmenu-item:hover { background-color: rgba(255, 255, 255, 0.08) !important; }

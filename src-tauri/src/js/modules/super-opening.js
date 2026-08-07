@@ -69,10 +69,53 @@
     } catch (e) {}
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // ⏳ AĞIR BAŞLANGIÇ İŞLERİNİ AÇILIŞ ANİMASYONU BİTENE KADAR ERTELEME
+  // ──────────────────────────────────────────────────────────────────────────
+  // Süper Açılış (özellikle Muptezel Anime — WebGL rAF tabanlı) oynarken
+  // diğer modüllerin (video-optimizer, local-player, local-library vb.)
+  // DOMContentLoaded'da tetiklenen senkron init'leri ana thread'i paylaşınca
+  // rAF tick'leri gecikiyor; animasyonun ilerlemesi wall-clock'a dayandığı
+  // için bu gecikme "ileri sıçrama" (kaçan/atlanan kare) olarak görünüyordu.
+  // Site zaten overlay arkasında donduğu (freezeSite) için kullanıcı bu
+  // modüllerin hemen çalışmasını göremiyor — o yüzden bu modüller ağır
+  // init'lerini doğrudan çağırmak yerine burada kayıt olur; açılış bitince
+  // (ya da hiç gösterilmeyecekse hemen) sırayla çalıştırılır.
+  const deferredAfterIntro = [];
+  let introSettled = false;
+
+  function runDeferredAfterIntro() {
+    if (introSettled) return;
+    introSettled = true;
+    const queued = deferredAfterIntro.splice(0);
+    queued.forEach((fn) => {
+      try { fn(); } catch (e) { console.warn("[Süper Açılış] Ertelenen init hatası:", e); }
+    });
+  }
+
+  window.deferUntilSuperOpeningDone = function (fn) {
+    if (introSettled) {
+      fn();
+    } else {
+      deferredAfterIntro.push(fn);
+    }
+  };
+
+  // Son çare emniyet ağı: overlay hiç oluşmaz/beklenmedik bir hata olursa
+  // ertelenen init'ler sonsuza dek bekletilmesin (mevcut video/logo
+  // watchdog'larının en büyüğünden — 15sn — biraz daha uzun).
+  setTimeout(runDeferredAfterIntro, 20000);
+
   async function initSuperOpeningOverlay() {
     const variant = getActiveVariant();
-    if (variant === VARIANTS.DEFAULT || overlayCreated) return;
-    if (wasAlreadyShownThisSession()) return;
+    if (variant === VARIANTS.DEFAULT || overlayCreated) {
+      runDeferredAfterIntro();
+      return;
+    }
+    if (wasAlreadyShownThisSession()) {
+      runDeferredAfterIntro();
+      return;
+    }
     overlayCreated = true;
     markShownThisSession();
 
@@ -216,6 +259,7 @@
       if (videoFinished) return;
       videoFinished = true;
 
+      runDeferredAfterIntro();
       wakeSite();
       nukeSiteSplash();
       // Video bittikten hemen sonra hydration/route geçişiyle sitenin kendi
@@ -365,7 +409,24 @@
    * @returns {Promise<void>} animasyon (dönüş + bekleme) bitince resolve olur
    */
   function playLogoAnimatorIntro(overlay) {
-    return new Promise((resolve) => {
+    return new Promise((resolveRaw) => {
+      // Güvenlik zaman aşımı: video varyantındaki 15sn'lik watchdog'un eşi.
+      // engine.ready (waitForLink) kendi içinde 3sn'de pes ediyor olsa da,
+      // burası son çare — WebGL zincirinde öngörülemeyen bir yerde (texture
+      // yükleme, context kaybı vb.) sonsuza dek beklenirse bile freezeSite()
+      // ile kilitlenen site EBEDİYEN kilitli kalmasın.
+      let settled = false;
+      const watchdog = setTimeout(() => {
+        console.warn("[Süper Açılış] Logo animasyonu zaman aşımına uğradı, açılış geçiliyor.");
+        resolve();
+      }, 8000);
+      function resolve() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        resolveRaw();
+      }
+
       if (typeof initOpenAnimeLogoAnimator !== "function") {
         console.warn("[Süper Açılış] Logo animatör motoru bulunamadı, açılış geçiliyor.");
         resolve();
@@ -394,23 +455,55 @@
         return;
       }
 
-      // Her biri 1 saniyelik 3 döngü art arda oynar, toplam ekranda kalma
-      // süresi 3 saniyedir.
-      const loopMs = 1000;
-      const totalMs = 3000;
+      // TEK gerçek kaynak: açılış animasyonu KESİN OLARAK INTRO_DURATION_MS
+      // (3 saniye) sürer. Bitiş koşulu SADECE geçen süreye bakar — "N döngü
+      // tamamlandı mı" diye bir kontrol YOKTUR, dolayısıyla döngü zamanlamasında
+      // (LOOP_SPIN_MS) ileride yapılacak bir değişiklik ya da bir tick'in
+      // beklenenden yavaş/hızlı gelmesi bitişi ASLA geciktiremez veya
+      // "yarım döngüde takılı kalma" gibi bir buga yol açamaz — 3 saniye
+      // dolduğu an, hangi spin'in ortasında olursa olsun, motor doğrudan
+      // tamamlanmış (renderFrame(1)) kareyi çizip biter.
+      // LOOP_SPIN_MS sadece kozmetiktir: bu süre içinde logonun kaç kez
+      // "spin" attığını belirler, tamamlanma süresini ETKİLEMEZ.
+      const INTRO_DURATION_MS = 3000;
+      const LOOP_SPIN_MS = 1000;
 
-      engine.ready.then(() => {
+      engine.ready.then((linked) => {
+        if (!linked) {
+          console.warn("[Süper Açılış] Shader linklenemedi, açılış geçiliyor.");
+          resolve();
+          return;
+        }
+
+        // İlerleme ham "ts - startTs" (wall-clock) yerine, tick başına en
+        // fazla MAX_STEP_MS kadar tüketilen bir sanal sayaçla (virtualElapsed)
+        // sürülür. Açılış sırasında ana thread'i paylaşan diğer modüllerin
+        // (video-optimizer, local-player, local-library vb.) senkron init'leri
+        // yüzünden bir rAF tick'i gecikirse, ham wall-clock farkı büyük bir
+        // sıçramaya (animasyonun aniden ileri atlamasına, "kare kaçırma"
+        // hissine) yol açardı. Clamp sayesinde gecikme, sıçrama yerine kısa
+        // bir yavaşlamaya dönüşür — toplam süre biraz uzayabilir ama akış
+        // pürüzsüz kalır. Bitiş yine de INTRO_DURATION_MS'e ulaşınca kesin
+        // olarak gerçekleşir.
+        const MAX_STEP_MS = 34; // ~30fps üst sınır
         let startTs = null;
+        let lastTs = null;
+        let virtualElapsed = 0;
 
         function frame(ts) {
-          if (startTs === null) startTs = ts;
-          const elapsed = ts - startTs;
-          if (elapsed >= totalMs) {
+          if (startTs === null) {
+            startTs = ts;
+            lastTs = ts;
+          }
+          virtualElapsed += Math.min(ts - lastTs, MAX_STEP_MS);
+          lastTs = ts;
+
+          if (virtualElapsed >= INTRO_DURATION_MS) {
             engine.renderFrame(1);
             resolve();
             return;
           }
-          const progress = (elapsed % loopMs) / loopMs;
+          const progress = (virtualElapsed % LOOP_SPIN_MS) / LOOP_SPIN_MS;
           engine.renderFrame(progress);
           requestAnimationFrame(frame);
         }
@@ -454,7 +547,7 @@
     menu.style.setProperty("top", `${offset}px`, "important");
     menu.style.setProperty("display", "block", "important");
     menu.style.setProperty("position", "absolute", "important");
-    const btnWidth = wrapper.querySelector(".combo-box-button")?.offsetWidth || 230;
+    const btnWidth = wrapper.querySelector(".combo-box-button")?.offsetWidth || 270;
     const menuWidth = btnWidth + 8;
     menu.style.setProperty("left", "0", "important");
     menu.style.setProperty("width", `${menuWidth}px`, "important");
@@ -512,6 +605,7 @@
     const activeLabel = VARIANT_NAMES[activeVariant] || VARIANT_NAMES[VARIANTS.SUPER_LOGO];
 
     const boltIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>`;
+    const playIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>`;
 
     return `
       <h>
@@ -541,24 +635,29 @@
                 <span class="text-block type-body ${textBlockHash}">Açılış Ekranı Varyantı</span>
                 <span class="text-block type-caption text-secondary ${textBlockHash}">Varsayılan site yükleme ekranı, Süper Logo (MP4) veya Muptezel Anime (logo animasyonu) seçeneği.</span>
               </div>
-              <div class="combo-box ${dropdownHashes.comboBoxHash}" id="tauri-super-opening-dropdown-wrapper" style="position:relative !important;flex-shrink:0;">
-                <button class="button style-standard combo-box-button ${dropdownHashes.buttonHash}" tabindex="0" type="button" id="tauri-super-opening-dropdown-btn" style="pointer-events:auto;width:230px !important;min-width:230px !important;white-space:nowrap !important;" aria-haspopup="listbox">
-                  <span class="combo-box-label ${dropdownHashes.comboBoxHash}" id="tauri-super-opening-dropdown-label">${activeLabel}</span>
-                  <svg aria-hidden="true" class="combo-box-icon ${dropdownHashes.comboBoxHash}" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
-                    <path fill="currentColor" d="M8.36612 16.1161C7.87796 16.6043 7.87796 17.3957 8.36612 17.8839L23.1161 32.6339C23.6043 33.122 24.3957 33.122 24.8839 32.6339L39.6339 17.8839C40.122 17.3957 40.122 16.6043 39.6339 16.1161C39.1457 15.628 38.3543 15.628 37.8661 16.1161L24 29.9822L10.1339 16.1161C9.64573 15.628 8.85427 15.628 8.36612 16.1161Z"></path>
-                  </svg>
+              <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                <div class="combo-box ${dropdownHashes.comboBoxHash}" id="tauri-super-opening-dropdown-wrapper" style="position:relative !important;flex-shrink:0;">
+                  <button class="button style-standard combo-box-button ${dropdownHashes.buttonHash}" tabindex="0" type="button" id="tauri-super-opening-dropdown-btn" style="pointer-events:auto;width:270px !important;min-width:270px !important;white-space:nowrap !important;" aria-haspopup="listbox">
+                    <span class="combo-box-label ${dropdownHashes.comboBoxHash}" id="tauri-super-opening-dropdown-label" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;max-width:100%;">${activeLabel}</span>
+                    <svg aria-hidden="true" class="combo-box-icon ${dropdownHashes.comboBoxHash}" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+                      <path fill="currentColor" d="M8.36612 16.1161C7.87796 16.6043 7.87796 17.3957 8.36612 17.8839L23.1161 32.6339C23.6043 33.122 24.3957 33.122 24.8839 32.6339L39.6339 17.8839C40.122 17.3957 40.122 16.6043 39.6339 16.1161C39.1457 15.628 38.3543 15.628 37.8661 16.1161L24 29.9822L10.1339 16.1161C9.64573 15.628 8.85427 15.628 8.36612 16.1161Z"></path>
+                    </svg>
+                  </button>
+                  <ul id="tauri-super-opening-dropdown-menu" role="listbox" class="combo-box-dropdown ${dropdownHashes.dropdownHash} acrylic" style="display:none;">
+                    ${Object.entries(VARIANT_NAMES)
+                      .map(
+                        ([key, name]) => `
+                      <li tabindex="0" class="combo-box-item ${dropdownHashes.itemHash} ${activeVariant === key ? "selected" : ""}" role="option" data-val="${key}">
+                        <span class="${dropdownHashes.itemHash}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;">${name}</span>
+                      </li>
+                    `
+                      )
+                      .join("")}
+                  </ul>
+                </div>
+                <button class="button style-standard ${dropdownHashes.buttonHash}" type="button" id="tauri-super-opening-preview-btn" title="Önizle" aria-label="Açılış animasyonunu önizle" style="pointer-events:auto;width:36px !important;min-width:36px !important;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                  ${playIconSvg}
                 </button>
-                <ul id="tauri-super-opening-dropdown-menu" role="listbox" class="combo-box-dropdown ${dropdownHashes.dropdownHash} acrylic" style="display:none;">
-                  ${Object.entries(VARIANT_NAMES)
-                    .map(
-                      ([key, name]) => `
-                    <li tabindex="0" class="combo-box-item ${dropdownHashes.itemHash} ${activeVariant === key ? "selected" : ""}" role="option" data-val="${key}">
-                      <span class="${dropdownHashes.itemHash}">${name}</span>
-                    </li>
-                  `
-                    )
-                    .join("")}
-                </ul>
               </div>
             </div>
           </div>
@@ -633,6 +732,19 @@
 
     refCard.after(newCard);
 
+    // Kart genelde ayarlar listesinin en altına yakın ekleniyor; accordion
+    // açılınca kartın yüksekliği aniden artıyor ve sitenin kendi scroll
+    // konteyneri bunu geç fark edip bir adım sonra kendini ayarlıyordu
+    // (gözle görülür bir "zıplama"). Konteynerin alt boşluğunu kart daha
+    // KAPALIYKEN fazladan büyütmek, genişleme sırasında sitenin yeniden
+    // hesaplama yapmasına gerek bırakmıyor.
+    const bottomSpaceParent = findScrollParent(newCard);
+    if (bottomSpaceParent && bottomSpaceParent.dataset.oaSuperOpeningExtraBottom !== "1") {
+      bottomSpaceParent.dataset.oaSuperOpeningExtraBottom = "1";
+      const currentPadding = parseFloat(getComputedStyle(bottomSpaceParent).paddingBottom) || 0;
+      bottomSpaceParent.style.setProperty("padding-bottom", `${currentPadding + 220}px`, "important");
+    }
+
     // Accordion Header & Chevron Click Handlers
     const header = newCard.querySelector("#tauri-super-opening-header");
     const content = newCard.querySelector("#tauri-super-opening-content");
@@ -642,6 +754,22 @@
     const dropdownBtn = newCard.querySelector("#tauri-super-opening-dropdown-btn");
     const dropdownMenu = newCard.querySelector("#tauri-super-opening-dropdown-menu");
     const dropdownLabel = newCard.querySelector("#tauri-super-opening-dropdown-label");
+    const previewBtn = newCard.querySelector("#tauri-super-opening-preview-btn");
+
+    // Önizleme SADECE bu butona basınca tetiklenir — dropdown'dan seçim
+    // yapmak artık anında sayfayı yenilemiyor (bkz. aşağıdaki bindItems).
+    if (previewBtn) {
+      previewBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Kullanıcı bilinçli olarak önizleme istiyor — bu, önizlemeyi
+        // görebilmesi için "bu oturumda zaten gösterildi" bayrağını bilerek
+        // sıfırlıyoruz (normal F5/Ctrl+R'de bu bayrak korunur).
+        try { sessionStorage.removeItem(SESSION_SHOWN_FLAG_KEY); } catch (err) {}
+        setTimeout(() => {
+          window.location.reload();
+        }, 200);
+      });
+    }
 
     if (header && content) {
       header.addEventListener("click", () => {
@@ -732,7 +860,8 @@
       }
     }
 
-    // Dropdown Event Handlers & Auto-Reload on Change
+    // Dropdown Event Handlers — seçim SADECE değeri kaydeder, sayfayı
+    // yenilemez. Önizleme artık ayrı "▶" butonuyla (previewBtn) tetiklenir.
     if (dropdownBtn && dropdownMenu && dropdownWrapper) {
       const bindItems = () => {
         const items = dropdownMenu.querySelectorAll(".combo-box-item");
@@ -740,7 +869,6 @@
           const cb = (e) => {
             e.stopPropagation();
             const val = item.getAttribute("data-val");
-            const previousVal = getActiveVariant();
 
             setActiveVariant(val);
 
@@ -754,16 +882,6 @@
 
             dropdownWrapper.classList.remove("open");
             dropdownMenu.style.setProperty("display", "none", "important");
-
-            if (previousVal !== val) {
-              // Kullanıcı bilinçli olarak varyant değiştiriyor — bu, önizleme
-              // görebilmesi için "bu oturumda zaten gösterildi" bayrağını
-              // bilerek sıfırlıyoruz (normal F5/Ctrl+R'de bu bayrak korunur).
-              try { sessionStorage.removeItem(SESSION_SHOWN_FLAG_KEY); } catch (e) {}
-              setTimeout(() => {
-                window.location.reload();
-              }, 200);
-            }
           };
           item.removeEventListener("click", item._superOpeningClickFn);
           item._superOpeningClickFn = cb;
