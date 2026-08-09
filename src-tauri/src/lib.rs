@@ -1437,6 +1437,18 @@ impl Drop for ActiveGuard {
     }
 }
 
+/// Solver penceresini Drop'ta KOŞULSUZ kapatır. ÖNEMLİ: dıştaki
+/// `tokio::time::timeout` süresi dolunca içteki future'ı BEKLEMEDEN düşürür
+/// (cancel) — o anda `win.close()`'a sıra gelmemiş olabilir, pencere sızar.
+/// Bu guard, future nasıl biterse bitsin (başarı/hata/zaman aşımı/iptal)
+/// pencerenin gerçekten kapanmasını garanti eder.
+struct WindowCloseGuard(tauri::WebviewWindow);
+impl Drop for WindowCloseGuard {
+    fn drop(&mut self) {
+        let _ = self.0.close();
+    }
+}
+
 /// Bir tek eval_with_callback çağrısını oneshot kanalıyla Result'a çevirir —
 /// tüm poll döngülerinde tekrarlanan boilerplate'i tekilleştirir.
 async fn eval_once(win: &tauri::WebviewWindow, js: &str, timeout_ms: u64) -> Option<String> {
