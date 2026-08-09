@@ -950,6 +950,8 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     include_str!("js/modules/link-extractor/core.js"),
     "\n",
     include_str!("js/modules/link-extractor/sources/turkanime.js"),
+    "\n",
+    include_str!("js/modules/link-extractor/sources/animecix.js"),
     "\n}\n",
 
     // ──────────────────────────────────────────────
@@ -1547,6 +1549,41 @@ async fn resolve_turkanime_embed(
     if active_now > 1 {
         dbg_log!("[LinkSolver] !!! SIRALAMA BOZUK !!! label={} active_now={}", label, active_now);
     }
+
+    // TÜM ZİNCİRE (navigasyon + #videodetay/IndexIcerik bekleme + tüm
+    // tıklamalar + sonuç okuma) TEK BİR ÜST TIMEOUT uygulanır. Alt adımların
+    // (15sn + N×6sn + 8sn) toplamı teorik olarak birikip belirsiz uzayabiliyordu
+    // — artık bir link çözümü en fazla bu kadar sürebilir, aşılırsa hemen
+    // bırakılıp kuyruktaki bir sonraki linke geçilir.
+    const OVERALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    match tokio::time::timeout(
+        OVERALL_TIMEOUT,
+        resolve_turkanime_embed_core(&app, &label, active_now, parsed, &episode_url, &click_paths),
+    )
+    .await
+    {
+        Ok(inner_result) => inner_result,
+        Err(_) => {
+            dbg_log!("[LinkSolver] ÜST ZAMAN AŞIMI ({:?}): label={} — pencere WindowCloseGuard ile kapatılacak", OVERALL_TIMEOUT, label);
+            Err("Zaman aşımı: embed çözülemedi (üst limit)".to_string())
+        }
+    }
+}
+
+/// `resolve_turkanime_embed`'in asıl işi: pencere açma → sayfa+IndexIcerik
+/// bekleme → tıklama zinciri → sonucu okuma. ÖNEMLİ: dıştaki
+/// `tokio::time::timeout` süresi dolunca bu future'ı BEKLEMEDEN düşürür
+/// (cancel) — bu yüzden pencere kapatma kodun içinde EXPLICIT `win.close()`
+/// çağrılarıyla DEĞİL, `WindowCloseGuard`'ın Drop'uyla garanti edilir (future
+/// nasıl biterse bitsin — başarı/hata/üst zaman aşımı — çalışır).
+async fn resolve_turkanime_embed_core(
+    app: &tauri::AppHandle,
+    label: &str,
+    active_now: u32,
+    parsed: url::Url,
+    episode_url: &str,
+    click_paths: &[String],
+) -> Result<String, String> {
     dbg_log!("[LinkSolver] build() öncesi: label={} active_now={} episode={} clicks={:?}", label, active_now, episode_url, click_paths);
     // GÖRÜNMEZLİK: pencere GÖRÜNÜR oluşturulur (WebView2'nin gerçekten
     // başlaması için — `.visible(false)` ile Windows'ta motor hiç
@@ -1558,15 +1595,11 @@ async fn resolve_turkanime_embed(
     // hiçbir şey görmez, ekranda parlama olmaz (önceki off-screen-konum
     // denemesi WM'nin pencereyi kısa süreliğine varsayılan konumda göstermesine
     // yol açıyordu — canlı testte 2 saniyelik görünme olarak doğrulandı).
-    // NOT: Reklam/analitik-budama init script'i (MutationObserver ile DOM'dan
-    // kaldırma) DENENDİ, ardından TÜM pencereler #videodetay'ı hiç oluşturamadı
-    // (canlı testte doğrulandı — bir önceki denemede EN AZ bir pencere
-    // başarıyla çözülüyordu, bu değişiklikten sonra sıfıra düştü). `.
-    // initialization_script()` eklemek de `additional_browser_args` gibi
-    // WebView2'nin farklı bir ortam/profil kullanmasına yol açıyor olabilir —
-    // ispatlanmadan tekrar denenmeyecek. GERİ ALINDI; bu pencereye hiçbir
-    // ek script enjekte edilmiyor.
-    let win_builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+    // NOT: Reklam/analitik-budama init script'i DENENDİ, TÜM pencereler
+    // #videodetay'ı hiç oluşturamadı hâle geldi — `.initialization_script()`
+    // eklemek de `additional_browser_args` gibi WebView2'nin farklı bir
+    // ortam/profil kullanmasına yol açıyor olabilir. GERİ ALINDI.
+    let win_builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(parsed))
         .inner_size(800.0, 600.0)
         .visible(true)
         .focused(false)
@@ -1577,14 +1610,6 @@ async fn resolve_turkanime_embed(
     // ÖNEMLİ: Ana pencere ve open_new_window/spawn_tray_session_window İLE
     // AYNI proxy args'ı uygular (DPI-atlatma proxy'si olmadan turkanime.tv'ye
     // doğrudan bağlanmaya çalışıyordu — canlı testte doğrulandı).
-    //
-    // NOT: `--blink-settings=imagesEnabled=false` denendi ("gereksiz render'ı
-    // azalt" isteği için) ama canlı testte GERÇEK BİR GERİLEMEYE yol açtı —
-    // browser-args string'i değişince WebView2 muhtemelen bu kombinasyon için
-    // YENİ bir ortam kurmak zorunda kaldı ve bu, sayfa yüklemesini 15sn
-    // içinde tamamlayamayacak kadar yavaşlattı (TÜM pencereler #videodetay
-    // beklerken zaman aşımına uğradı). Derleyip test edemeden bunu tekrar
-    // denemek riskli — WINDOWS_PROXY_ARGS'a DOKUNULMADAN bırakılıyor.
     #[cfg(target_os = "windows")]
     let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
 
@@ -1592,6 +1617,9 @@ async fn resolve_turkanime_embed(
         .build()
         .map_err(|e| format!("Solver penceresi açılamadı: {}", e))?;
     dbg_log!("[LinkSolver] build() TAMAM: label={}", label);
+    // Bundan sonraki HER çıkış yolunda (return, ?, ya da dıştaki timeout'un
+    // bu future'ı iptal etmesi) pencere garanti olarak kapanır.
+    let _close_guard = WindowCloseGuard(win.clone());
     match win.hide() {
         Ok(()) => dbg_log!("[LinkSolver] hide() TAMAM: label={}", label),
         Err(e) => dbg_log!("[LinkSolver] hide() HATA (devam ediliyor): label={} err={}", label, e),
@@ -1604,7 +1632,7 @@ async fn resolve_turkanime_embed(
     // oynatıcıda kalıyor, sonuç yanlış oluyordu.
     let loaded = wait_for_js_condition(
         &win,
-        &label,
+        label,
         "document.querySelector('#videodetay') && typeof IndexIcerik === 'function'",
         15000,
     )
@@ -1614,7 +1642,6 @@ async fn resolve_turkanime_embed(
         if let Some(diag) = eval_once(&win, SOLVER_DIAG_JS, 1500).await {
             dbg_log!("[LinkSolver] SON DIAG (yükleme başarısız): label={} => {}", label, diag);
         }
-        let _ = win.close();
         return Err("Bölüm sayfası yüklenemedi (#videodetay / IndexIcerik yok)".to_string());
     }
 
@@ -1638,7 +1665,7 @@ async fn resolve_turkanime_embed(
         } else {
             "document.querySelector('#videodetay button[onclick*=\"IndexIcerik\"]')"
         };
-        let settled = wait_for_js_condition(&win, &label, cond, 6000).await;
+        let settled = wait_for_js_condition(&win, label, cond, 6000).await;
         dbg_log!("[LinkSolver] tıklama {} sonrası bekleme: label={} settled={}", i + 1, label, settled);
     }
 
@@ -1702,8 +1729,576 @@ async fn resolve_turkanime_embed(
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
 
-    let _ = win.close();
     result.ok_or_else(|| "Zaman aşımı: embed çözülemedi".to_string())
+}
+
+// ──────────────────────────────────────────────
+// Link Ayıklayıcı — AnimeCix (animecix.tv) kaynağı
+//
+// turkanime'den TAMAMEN FARKLI bir mimari gerektiriyor: animecix.tv'nin
+// TÜMÜ (ilk HTML dahil) Cloudflare bot-koruması arkasında — canlı testte
+// `curl` "Attention Required! | Cloudflare" sayfası döndü, gerçek site hiç
+// gelmedi. Bu yüzden `fetch_external_html`'in düz `reqwest` çağrısı
+// animecix.tv için asla çalışmaz; turkanime'deki gibi yalnızca embed
+// çözümü değil, SAYFANIN KENDİSİ de gizli bir WebviewWindow'dan geçmeli.
+//
+// Keşif (headful + stealth Puppeteer ile canlı doğrulandı, tahmin değil):
+//   1. animecix.tv Angular SPA'sı, bölüm sayfasına girince kendi JS'i ile
+//      `GET /secure/titles/{titleId}?titleId=...&seasonNumber=...&episodeNumber=...`
+//      çağırıyor — dönen JSON'un `title.videos` dizisinde İLGİLİ SEZON/BÖLÜM
+//      için HER fansub/çeviri grubunun `tau-video.xyz/embed/<hash>` embed
+//      URL'si ve sayısal `id`'si ZATEN var. Kullanıcının her `.translator-item`
+//      butonuna tek tek tıklamasına gerek YOK — bu tek çağrı hepsini veriyor.
+//   2. `title.translatorPoints` (`{template_id: puan}`) ve ayrı bir
+//      `GET /secure/translators` çağrısı (id → gerçek isim, ör. "Kitsune Fansub")
+//      görüntü adlarını çözüyor.
+//   3. Bu İKİ uç nokta da (`/secure/titles/...` ve `/secure/translators`)
+//      Cloudflare korumalı — `curl` ile doğrudan denendi, ikisi de 403 döndü.
+//      Ama animecix.tv'nin KENDİ sayfası içinden `fetch(..., {credentials:
+//      'include'})` ile çağrıldığında (sayfa zaten CF meydan okumasını geçmiş
+//      oturum çerezleriyle) ikisi de düz JSON döndürüyor. Bu yüzden bu iki
+//      çağrı gizli pencerenin İÇİNDEN tetiklenir, dıştan değil.
+//   4. Kullanıcının "odağın tau player olsun" dediği servis budur:
+//      `tau-video.xyz`. Kritik fark: bu servisin KENDİSİ Cloudflare
+//      korumasız — `tau-video.xyz/api/video/<hash>?vid=<id>` düz `curl` ile
+//      bile 200 dönüyor ve gerçek 480p/720p/1080p MP4 linklerini İÇİNDE
+//      ŞİFRESİZ veriyor. turkanime'deki AES çözme adımının animecix'te
+//      KARŞILIĞI YOK — bu adım gizli pencereye hiç ihtiyaç duymadan, doğrudan
+//      Rust'tan `reqwest` ile yapılabilir (çok daha hızlı, paralelleştirilebilir).
+//
+// Sonuç mimari: gizli pencere yalnızca BİR KEZ, yalnızca CF oturumunu almak
+// ve iki `/secure/...` çağrısını tetiklemek için açılır; gerçek video linki
+// çözümü (tau-video.xyz) pencere kapandıktan SONRA düz `reqwest` ile yapılır.
+// ──────────────────────────────────────────────
+
+fn is_allowed_animecix_host(host: &str) -> bool {
+    host == "animecix.tv" || host.ends_with(".animecix.tv")
+}
+
+fn is_allowed_tau_video_host(host: &str) -> bool {
+    host == "tau-video.xyz" || host.ends_with(".tau-video.xyz")
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct AnimecixVideoEntry {
+    #[serde(default)]
+    episode_num: i64,
+    #[serde(default)]
+    season_num: i64,
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    template: i64,
+    #[serde(default)]
+    quality: String,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct AnimecixTitleData {
+    #[serde(default)]
+    videos: Vec<AnimecixVideoEntry>,
+    #[serde(default, rename = "translatorPoints")]
+    translator_points: std::collections::HashMap<String, f64>,
+}
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct AnimecixTitlesResponse {
+    #[serde(default)]
+    title: AnimecixTitleData,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct AnimecixTranslatorEntry {
+    id: i64,
+    #[serde(default)]
+    translator: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct TauVideoQuality {
+    label: String,
+    url: String,
+    #[serde(default)]
+    size: Option<u64>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct TauVideoResponse {
+    #[serde(default)]
+    urls: Vec<TauVideoQuality>,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct AnimecixQualityUrl {
+    label: String,
+    url: String,
+    size: Option<u64>,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct AnimecixVideoLink {
+    translator_id: i64,
+    translator_name: String,
+    rating: Option<f64>,
+    quality: String,
+    urls: Vec<AnimecixQualityUrl>,
+}
+
+/// Gizli pencere içinden tetiklenen iki `fetch()` çağrısının sonucunu
+/// `window.__oaAnimecix*` globallerine yazan kickoff script'i. `eval_once`
+/// senkron bir sonuç bekler — `fetch()` asenkron olduğundan sonucu doğrudan
+/// döndüremez; bu yüzden turkanime'deki tıklama-sonrası-bekleme deseniyle
+/// aynı yaklaşım kullanılır: kickoff başlatır, `wait_for_js_condition` sonucu
+/// bekler, ayrı bir READ adımı asıl veriyi okur.
+fn animecix_kickoff_js(title_id: u64, season_number: u32, episode_number: u32) -> String {
+    format!(
+        r#"(function(){{
+            window.__oaAnimecixTitles = null;
+            window.__oaAnimecixTranslators = null;
+            window.__oaAnimecixError = null;
+            Promise.all([
+                fetch('/secure/titles/{title_id}?titleId={title_id}&seasonNumber={season}&episodeNumber={episode}&page=1&perPage=100', {{credentials: 'include'}}).then(function(r){{ return r.text(); }}),
+                fetch('/secure/translators', {{credentials: 'include'}}).then(function(r){{ return r.text(); }})
+            ]).then(function(results){{
+                window.__oaAnimecixTitles = results[0];
+                window.__oaAnimecixTranslators = results[1];
+            }}).catch(function(e){{
+                window.__oaAnimecixError = String(e);
+            }});
+            return 'started';
+        }})()"#,
+        title_id = title_id,
+        season = season_number,
+        episode = episode_number,
+    )
+}
+
+const ANIMECIX_READ_JS: &str = r#"(function () {
+    return JSON.stringify({
+        titles: window.__oaAnimecixTitles,
+        translators: window.__oaAnimecixTranslators,
+        error: window.__oaAnimecixError
+    });
+})()"#;
+
+#[derive(serde::Deserialize, Debug, Default)]
+struct AnimecixReadResult {
+    #[serde(default)]
+    titles: Option<String>,
+    #[serde(default)]
+    translators: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn resolve_animecix_episode(
+    app: tauri::AppHandle,
+    title_id: u64,
+    season_number: u32,
+    episode_number: u32,
+) -> Result<Vec<AnimecixVideoLink>, String> {
+    let counter = LINK_SOLVER_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = format!(
+        "{}animecix_{}_{}",
+        LINK_SOLVER_LABEL_PREFIX,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        counter
+    );
+
+    dbg_log!("[LinkSolver][AnimeCix] kuyrukta bekliyor: label={}", label);
+    // AYNI kuyruk (link_solver_semaphore) turkanime ile PAYLAŞILIYOR — ikisi
+    // aynı anda paralel açılırsa aynı DPI-atlatma proxy'si + WebView2
+    // başlatma tıkanması riski turkanime'de zaten canlı testte görülmüştü.
+    let _permit = link_solver_semaphore().acquire().await;
+    let active_now = LINK_SOLVER_ACTIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let _active_guard = ActiveGuard;
+    if active_now > 1 {
+        dbg_log!("[LinkSolver][AnimeCix] !!! SIRALAMA BOZUK !!! label={} active_now={}", label, active_now);
+    }
+
+    const OVERALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    match tokio::time::timeout(
+        OVERALL_TIMEOUT,
+        resolve_animecix_episode_core(&app, &label, title_id, season_number, episode_number),
+    )
+    .await
+    {
+        Ok(inner_result) => inner_result,
+        Err(_) => {
+            dbg_log!("[LinkSolver][AnimeCix] ÜST ZAMAN AŞIMI ({:?}): label={}", OVERALL_TIMEOUT, label);
+            Err("Zaman aşımı: AnimeCix verisi alınamadı (üst limit)".to_string())
+        }
+    }
+}
+
+async fn resolve_animecix_episode_core(
+    app: &tauri::AppHandle,
+    label: &str,
+    title_id: u64,
+    season_number: u32,
+    episode_number: u32,
+) -> Result<Vec<AnimecixVideoLink>, String> {
+    let episode_url = format!(
+        "https://animecix.tv/titles/{}/season/{}/episode/{}",
+        title_id, season_number, episode_number
+    );
+    let parsed = is_https_and_not_private(&episode_url)?;
+    let host = parsed.host_str().unwrap_or("").to_string();
+    if !is_allowed_animecix_host(&host) {
+        return Err(format!("İzin verilmeyen host: {}", host));
+    }
+
+    dbg_log!("[LinkSolver][AnimeCix] build() öncesi: label={} url={}", label, episode_url);
+    let win_builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(parsed))
+        .inner_size(800.0, 600.0)
+        .visible(true)
+        .focused(false)
+        .skip_taskbar(true)
+        .decorations(false)
+        .user_agent(platform_user_agent());
+    #[cfg(target_os = "windows")]
+    let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
+
+    let win = win_builder
+        .build()
+        .map_err(|e| format!("Solver penceresi açılamadı: {}", e))?;
+    dbg_log!("[LinkSolver][AnimeCix] build() TAMAM: label={}", label);
+    let close_guard = WindowCloseGuard(win.clone());
+    match win.hide() {
+        Ok(()) => dbg_log!("[LinkSolver][AnimeCix] hide() TAMAM: label={}", label),
+        Err(e) => dbg_log!("[LinkSolver][AnimeCix] hide() HATA (devam ediliyor): label={} err={}", label, e),
+    }
+
+    // Cloudflare meydan okumasının geçmesini bekle (turkanime'de #videodetay
+    // beklerken burada "sayfa başlığı artık CF challenge metni değil" beklenir
+    // — canlı testte "Just a moment...", "Attention Required!", "Checking your
+    // browser" başlıkları görüldü).
+    let loaded = wait_for_js_condition(
+        &win,
+        label,
+        "document.readyState === 'complete' && !/just a moment|attention required|checking your browser/i.test(document.title)",
+        20000,
+    )
+    .await;
+    dbg_log!("[LinkSolver][AnimeCix] CF geçiş bekleme sonucu: label={} loaded={}", label, loaded);
+    if !loaded {
+        return Err("AnimeCix sayfası yüklenemedi (Cloudflare meydan okuması geçilemedi)".to_string());
+    }
+
+    let kickoff_js = animecix_kickoff_js(title_id, season_number, episode_number);
+    let kickoff_result = eval_once(&win, &kickoff_js, 1500).await;
+    dbg_log!("[LinkSolver][AnimeCix] kickoff sonucu: label={} => {:?}", label, kickoff_result);
+
+    let fetched = wait_for_js_condition(
+        &win,
+        label,
+        "window.__oaAnimecixTitles !== null || window.__oaAnimecixError !== null",
+        10000,
+    )
+    .await;
+    dbg_log!("[LinkSolver][AnimeCix] fetch bekleme sonucu: label={} fetched={}", label, fetched);
+    if !fetched {
+        return Err("AnimeCix veri isteği zaman aşımına uğradı".to_string());
+    }
+
+    let raw = eval_once(&win, ANIMECIX_READ_JS, 2000)
+        .await
+        .ok_or_else(|| "AnimeCix sonucu okunamadı".to_string())?;
+    // `eval_with_callback` sonucu bir JS string'i olarak JSON'a sarar —
+    // turkanime'deki READ_JS ile aynı ÇİFT JSON-kodlu gövde.
+    let inner_json: String = serde_json::from_str(&raw)
+        .map_err(|e| format!("AnimeCix sonucu çözülemedi (dış JSON): {}", e))?;
+    let read: AnimecixReadResult = serde_json::from_str(&inner_json)
+        .map_err(|e| format!("AnimeCix sonucu çözülemedi (iç JSON): {}", e))?;
+
+    if let Some(err) = read.error {
+        return Err(format!("AnimeCix fetch hatası: {}", err));
+    }
+    let titles_raw = read.titles.ok_or_else(|| "AnimeCix başlık verisi boş döndü".to_string())?;
+    let translators_raw = read.translators.unwrap_or_default();
+
+    let titles_resp: AnimecixTitlesResponse = serde_json::from_str(&titles_raw)
+        .map_err(|e| format!("AnimeCix başlık JSON'u ayrıştırılamadı: {}", e))?;
+    let translators: Vec<AnimecixTranslatorEntry> =
+        serde_json::from_str(&translators_raw).unwrap_or_default();
+    let translator_names: std::collections::HashMap<i64, String> = translators
+        .into_iter()
+        .map(|t| {
+            let name = if !t.translator.is_empty() {
+                t.translator
+            } else {
+                t.name.unwrap_or_else(|| format!("Çevirmen #{}", t.id))
+            };
+            (t.id, name)
+        })
+        .collect();
+
+    let season_i = season_number as i64;
+    let episode_i = episode_number as i64;
+    let matching: Vec<&AnimecixVideoEntry> = titles_resp
+        .title
+        .videos
+        .iter()
+        .filter(|v| {
+            v.season_num == season_i
+                && v.episode_num == episode_i
+                && v.kind == "embed"
+                && v.url.starts_with("https://tau-video.xyz/embed/")
+        })
+        .collect();
+    dbg_log!(
+        "[LinkSolver][AnimeCix] eşleşen video girdisi: label={} count={}",
+        label,
+        matching.len()
+    );
+
+    // Pencere artık gerekli değil — tau-video.xyz çözümü düz reqwest ile,
+    // Cloudflare'e hiç takılmadan yapılır. `close_guard` fonksiyon dönüşünde
+    // zaten kapatacaktı; burada erken bırakmak solver kuyruğunu daha hızlı
+    // boşaltır (bir sonraki bölüm/çağrı beklemeden başlayabilir).
+    drop(close_guard);
+
+    let client = reqwest::Client::builder()
+        .user_agent(platform_user_agent())
+        .build()
+        .map_err(|e| format!("Client build error: {}", e))?;
+
+    let mut out: Vec<AnimecixVideoLink> = Vec::new();
+    for entry in matching {
+        let hash = entry.url.trim_start_matches("https://tau-video.xyz/embed/");
+        let tau_url = format!("https://tau-video.xyz/api/video/{}?vid={}", hash, entry.id);
+        let tau_parsed = match is_https_and_not_private(&tau_url) {
+            Ok(u) => u,
+            Err(e) => {
+                dbg_log!("[LinkSolver][AnimeCix] tau URL reddedildi: {} err={}", tau_url, e);
+                continue;
+            }
+        };
+        if !is_allowed_tau_video_host(tau_parsed.host_str().unwrap_or("")) {
+            continue;
+        }
+        let resp = match client.get(tau_url.clone()).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                dbg_log!("[LinkSolver][AnimeCix] tau fetch hatası: {} err={}", tau_url, e);
+                continue;
+            }
+        };
+        let text = match resp.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                dbg_log!("[LinkSolver][AnimeCix] tau body okunamadı: {} err={}", tau_url, e);
+                continue;
+            }
+        };
+        let tau_data: TauVideoResponse = match serde_json::from_str(&text) {
+            Ok(d) => d,
+            Err(e) => {
+                dbg_log!("[LinkSolver][AnimeCix] tau JSON ayrıştırılamadı: {} err={}", tau_url, e);
+                continue;
+            }
+        };
+        if tau_data.urls.is_empty() {
+            continue;
+        }
+        let translator_name = translator_names
+            .get(&entry.template)
+            .cloned()
+            .unwrap_or_else(|| format!("Çevirmen #{}", entry.template));
+        let rating = titles_resp
+            .title
+            .translator_points
+            .get(&entry.template.to_string())
+            .copied();
+        out.push(AnimecixVideoLink {
+            translator_id: entry.template,
+            translator_name,
+            rating,
+            quality: entry.quality.clone(),
+            urls: tau_data
+                .urls
+                .into_iter()
+                .map(|u| AnimecixQualityUrl { label: u.label, url: u.url, size: u.size })
+                .collect(),
+        });
+    }
+
+    if out.is_empty() {
+        return Err("Bu bölüm için çözülebilir video bulunamadı".to_string());
+    }
+    Ok(out)
+}
+
+/// AnimeCix sezon sayfası (`/titles/{id}/season/{n}`) DOĞRUDAN o sezonun tüm
+/// bölüm kartlarını (`.episode-card-container`) DOM'a basıyor — canlı testte
+/// doğrulandı, `seasonNumber` API parametresiyle `episodes[]` denendi ama
+/// SÜREKLİ boş/alakasız veri döndü (başka bir title'ın sezon verisiyle
+/// kirlenmiş görünüyordu). API'ye güvenmek yerine turkanime'deki gibi gerçek
+/// DOM'dan okunur: her karttaki `<img class="episode-poster" alt="...">`
+/// temiz bölüm başlığını, en yakın `<a href="/titles/{id}/season/{n}/episode/{e}">`
+/// de bölüm URL'sini verir.
+#[derive(serde::Serialize, Clone)]
+struct AnimecixEpisodeRef {
+    episode_number: u32,
+    title: String,
+    url: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct AnimecixEpisodeCard {
+    episode_number: u32,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    href: String,
+}
+
+const ANIMECIX_EPISODE_LIST_JS: &str = r#"(function () {
+    var cards = Array.prototype.slice.call(document.querySelectorAll('.episode-card-container'));
+    var out = [];
+    cards.forEach(function (c) {
+        var a = c.closest('a') || c.querySelector('a');
+        var href = a ? a.getAttribute('href') : null;
+        if (!href) return;
+        var m = /\/episode\/(\d+)/.exec(href);
+        if (!m) return;
+        var img = c.querySelector('img.episode-poster');
+        var title = img ? (img.getAttribute('alt') || '') : '';
+        out.push({ episode_number: parseInt(m[1], 10), title: title, href: href });
+    });
+    return JSON.stringify(out);
+})()"#;
+
+#[tauri::command]
+async fn list_animecix_season_episodes(
+    app: tauri::AppHandle,
+    title_id: u64,
+    season_number: u32,
+) -> Result<Vec<AnimecixEpisodeRef>, String> {
+    let counter = LINK_SOLVER_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = format!(
+        "{}animecixlist_{}_{}",
+        LINK_SOLVER_LABEL_PREFIX,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        counter
+    );
+
+    dbg_log!("[LinkSolver][AnimeCix] bölüm listesi kuyrukta bekliyor: label={}", label);
+    let _permit = link_solver_semaphore().acquire().await;
+    let active_now = LINK_SOLVER_ACTIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let _active_guard = ActiveGuard;
+    if active_now > 1 {
+        dbg_log!("[LinkSolver][AnimeCix] !!! SIRALAMA BOZUK !!! label={} active_now={}", label, active_now);
+    }
+
+    const OVERALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+    match tokio::time::timeout(
+        OVERALL_TIMEOUT,
+        list_animecix_season_episodes_core(&app, &label, title_id, season_number),
+    )
+    .await
+    {
+        Ok(inner_result) => inner_result,
+        Err(_) => {
+            dbg_log!("[LinkSolver][AnimeCix] bölüm listesi ÜST ZAMAN AŞIMI: label={}", label);
+            Err("Zaman aşımı: AnimeCix bölüm listesi alınamadı".to_string())
+        }
+    }
+}
+
+async fn list_animecix_season_episodes_core(
+    app: &tauri::AppHandle,
+    label: &str,
+    title_id: u64,
+    season_number: u32,
+) -> Result<Vec<AnimecixEpisodeRef>, String> {
+    let season_url = format!("https://animecix.tv/titles/{}/season/{}", title_id, season_number);
+    let parsed = is_https_and_not_private(&season_url)?;
+    let host = parsed.host_str().unwrap_or("").to_string();
+    if !is_allowed_animecix_host(&host) {
+        return Err(format!("İzin verilmeyen host: {}", host));
+    }
+
+    dbg_log!("[LinkSolver][AnimeCix] bölüm listesi build() öncesi: label={} url={}", label, season_url);
+    let win_builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(parsed))
+        .inner_size(800.0, 600.0)
+        .visible(true)
+        .focused(false)
+        .skip_taskbar(true)
+        .decorations(false)
+        .user_agent(platform_user_agent());
+    #[cfg(target_os = "windows")]
+    let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
+
+    let win = win_builder
+        .build()
+        .map_err(|e| format!("Solver penceresi açılamadı: {}", e))?;
+    let _close_guard = WindowCloseGuard(win.clone());
+    let _ = win.hide();
+
+    let loaded = wait_for_js_condition(
+        &win,
+        label,
+        "document.readyState === 'complete' && !/just a moment|attention required|checking your browser/i.test(document.title)",
+        20000,
+    )
+    .await;
+    if !loaded {
+        return Err("AnimeCix sezon sayfası yüklenemedi (Cloudflare meydan okuması geçilemedi)".to_string());
+    }
+
+    let has_cards = wait_for_js_condition(
+        &win,
+        label,
+        "document.querySelectorAll('.episode-card-container').length > 0",
+        15000,
+    )
+    .await;
+    if !has_cards {
+        return Err("Bu sezon için bölüm kartı bulunamadı".to_string());
+    }
+
+    let raw = eval_once(&win, ANIMECIX_EPISODE_LIST_JS, 2000)
+        .await
+        .ok_or_else(|| "Bölüm listesi okunamadı".to_string())?;
+    let cards: Vec<AnimecixEpisodeCard> = serde_json::from_str(&raw)
+        .map_err(|e| format!("Bölüm listesi JSON'u ayrıştırılamadı: {}", e))?;
+
+    let mut out: Vec<AnimecixEpisodeRef> = cards
+        .into_iter()
+        .map(|c| AnimecixEpisodeRef {
+            episode_number: c.episode_number,
+            title: if c.title.is_empty() {
+                format!("{}. Bölüm", c.episode_number)
+            } else {
+                c.title
+            },
+            url: format!(
+                "https://animecix.tv/titles/{}/season/{}/episode/{}",
+                title_id, season_number, c.episode_number
+            ),
+        })
+        .collect();
+    out.sort_by_key(|e| e.episode_number);
+    out.dedup_by_key(|e| e.episode_number);
+
+    if out.is_empty() {
+        return Err("Bu sezon için bölüm bulunamadı".to_string());
+    }
+    Ok(out)
 }
 
 /// Link Ayıklayıcı — bir oynatıcı linkinin gerçekten erişilebilir olup
@@ -2527,6 +3122,7 @@ pub fn run() {
                         let st = app_handle.state::<PerfState>();
                         st.player_playing.lock().unwrap().remove(&label);
                         st.suspended.lock().unwrap().remove(&label);
+                        st.bg_since.lock().unwrap().remove(&label);
                     }
                 }
                 _ => {}
@@ -2580,6 +3176,8 @@ pub fn run() {
             // 🔗 Link Ayıklayıcı — kaynak site sayfası çekme + şifreli embed çözme + link durum testi
             fetch_external_html,
             resolve_turkanime_embed,
+            resolve_animecix_episode,
+            list_animecix_season_episodes,
             check_link_status,
             go_online,
             go_offline,

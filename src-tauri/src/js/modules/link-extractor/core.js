@@ -38,7 +38,7 @@
   }
 
   // Bir linkin gerçekten erişilebilir olup olmadığını Rust'ta (reqwest ile)
-  // test eder — eski `fetch(url, {mode:"no-cors"})` yöntemi HER ZAMAN
+  // test eder — eski fetch(url, {mode:"no-cors"}) yöntemi HER ZAMAN
   // "çalışıyor" döndürdüğü için kasıtlı olarak kullanılmıyor (bkz. proje notu).
   function checkLinkStatus(url, referer) {
     return invoke("check_link_status", { url: url, referer: referer || undefined });
@@ -158,7 +158,15 @@
     links: []               // {episodeTitle?, player, url, host, encrypted, status}
   };
 
+  // Her kaynak kendi URL desenini tanır (bkz. sources/animecix.js —
+  // turkanime'nin /video// /anime/ desenleriyle uyuşmuyor). Kaynak kendi
+  // detectMode'unu sağlamazsa turkanime'nin bilinen desenlerine düşülür
+  // (geriye dönük uyumluluk — turkanime.js bu fonksiyonu hiç dışa vermiyor).
   function detectMode(url) {
+    var source = currentSource();
+    if (source && source.extractor && typeof source.extractor.detectMode === "function") {
+      return source.extractor.detectMode(url);
+    }
     if (/\/video\//.test(url)) return "episode";
     if (/\/anime\//.test(url)) return "season";
     return null;
@@ -528,6 +536,9 @@
         state.sourceId = id;
         Array.prototype.forEach.call(sourceRow.children, function (b) { b.classList.remove("active"); });
         btn.classList.add("active");
+        if (urlInputEl && src.extractor.urlPlaceholder) {
+          urlInputEl.placeholder = src.extractor.urlPlaceholder;
+        }
       });
       sourceRow.appendChild(btn);
     });

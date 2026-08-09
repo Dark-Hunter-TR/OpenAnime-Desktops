@@ -33,6 +33,8 @@
     "allow-fetch-css",
     "allow-fetch-external-html",
     "allow-resolve-turkanime-embed",
+    "allow-resolve-animecix-episode",
+    "allow-list-animecix-season-episodes",
     "allow-check-link-status",
     "allow-themes",
     "os:default",
