@@ -68,10 +68,74 @@
     }
   }
 
+  // ===== Video HEAD Boyut Cache =====
+  // Site her videoda HEAD isteğiyle dosya boyutunu sorgular (kalite seçimi).
+  // Aynı video için boşuna her seferinde tekrar gitmesin — session ömrünce
+  // Content-Length'i sessionStorage'da tutarız.
+  const VIDEO_HEAD_CACHE_PREFIX = "_oa_vh_";
+
+  function getVideoHeadCacheKey(url) {
+    // Cache anahtarı: path + method = HEAD → query string'siz path yeterli
+    try {
+      const u = new URL(url);
+      // Query'dekilerden yalnızca "big" parametresini dahil et (kalite seçimi için)
+      const big = u.searchParams.get("big") || "0";
+      return VIDEO_HEAD_CACHE_PREFIX + u.pathname.replace(/[^a-zA-Z0-9]/g, "_") + "_" + big;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function isVideoHeadRequest(url, init) {
+    if (!url) return false;
+    const method = (init && init.method) || "GET";
+    if (method !== "HEAD") return false;
+    try {
+      const u = new URL(url);
+      const host = u.hostname;
+      // Video CDN domain'leri — HEAD isteklerini cache'le
+      return host.includes("---")
+        || host.endsWith(".yeshi.eu.org")
+        || host.endsWith(".zyapbot.eu.org");
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Original fetch'ı sakla ve interceptor ekle
   const _origFetch = window.fetch.bind(window);
   window.fetch = function(input, init) {
     const url = typeof input === "string" ? input : (input.url || input.toString());
+
+    // ── Video HEAD Cache ──
+    // Site her videoda HEAD ile dosya boyutunu sorgular (kalite seçimi).
+    // Aynı video için her seferinde gitmesin — sessionStorage'da tutarız.
+    if (isVideoHeadRequest(url, init)) {
+      const cacheKey = getVideoHeadCacheKey(url);
+      if (cacheKey) {
+        try {
+          const cached = sessionStorage.getItem(cacheKey);
+          if (cached) {
+            // Cache'lenmiş Content-Length ile sahte Response döndür
+            const h = new Headers();
+            h.set("content-length", cached);
+            console.debug("[VideoHeadCache] HEAD cache hit:", url.substring(0, 80));
+            return Promise.resolve(new Response(null, { status: 200, statusText: "OK", headers: h }));
+          }
+        } catch (e) {}
+      }
+      // Cache miss — git, sonucu cache'le
+      return _origFetch(input, init).then(function(resp) {
+        if (resp && resp.ok && cacheKey) {
+          const cl = resp.headers.get("content-length");
+          if (cl) {
+            try { sessionStorage.setItem(cacheKey, cl); } catch (e) {}
+          }
+        }
+        return resp;
+      });
+    }
+
     if (isOpenaniUrl(url)) {
       return _origFetch(input, init).then(function(resp) {
         // Yanıt GELDİYSE yol açıktır — 401/403 (Vanguard/Cloudflare) bile

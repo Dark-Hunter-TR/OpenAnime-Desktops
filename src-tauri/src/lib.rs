@@ -28,6 +28,7 @@ mod dpi_proxy;
 mod perf_mode;
 #[cfg(target_os = "windows")]
 mod perf_report;
+mod gpu_info;
 
 /// Performans modu kararı için paylaşılan durum.
 ///
@@ -878,6 +879,16 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n}\n",
 
     // ──────────────────────────────────────────────
+    // BLOK 6C: WebGPU ADAPTER ALGILAMA
+    // navigator.gpu.requestAdapter() ile WebGPU'nun hangi GPU'yu kullandığını
+    // tespit eder ve Rust tarafına bildirir. (Super Opening'den sonra, video
+    // bloklarından önce gelir — GPU seçiminin ekrandaki ilk içerikten önce
+    // yapılması içindir.)
+    // ──────────────────────────────────────────────
+    include_str!("js/modules/webgpu-detect.js"),
+    "\n",
+
+    // ──────────────────────────────────────────────
     // BLOK 7: SAYFA KURTARMA & VİDEO İYİLEŞTİRİCİ
     // ──────────────────────────────────────────────
     include_str!("js/modules/page-recovery.js"),
@@ -1717,7 +1728,8 @@ pub fn run() {
         .manage(ZoomState::default())
         .manage(PerfState::default())
         .manage(super_notifications::SuperNotifState::new())
-        .manage(local_video_state);
+        .manage(local_video_state)
+        .manage(gpu_info::GpuState::default());
 
     // DPI Proxy manager'ı oluştur (setup'tan önce olmalı)
     // .manage()'i setup'tan sonra kullanacağız
@@ -2096,6 +2108,10 @@ pub fn run() {
             oa_js_log,
             // Performans/verimlilik modu — JS oynatıcı durumunu bildirir
             oa_set_player_playing,
+            // GPU Bilgisi
+            gpu_info::oa_get_gpu_info,
+            gpu_info::oa_get_gpu_hint,
+            gpu_info::oa_set_webgpu_vendor,
             // Süper Bildirimler
             super_notifications::sn_set_enabled,
             super_notifications::sn_set_gateway_token,
