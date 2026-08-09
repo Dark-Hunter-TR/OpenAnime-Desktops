@@ -6,9 +6,11 @@
 //      Grup açık/kapalı durumu localStorage'da kalıcıdır (son durum hatırlanır).
 //   2. Form input'larının (text box, checkbox) değerlerini, aynı oturumda
 //      başka bir admin ekranına geçip geri dönüldüğünde geri yükler.
-//      YALNIZCA bellekte tutulur — sayfa yenilenince (F5) sıfırlanır,
-//      çünkü bu script her injection'da baştan çalışır.
-//   3. "Seçilebilir Çözünürlükler" checkbox satırlarının CSS Grid/Flex
+//      sessionStorage'a kaydedilir — sayfa yenilenince (F5) sıfırlanır.
+//   3. Oynatıcı seçimini (player adı + drive/bilgi) DOM'dan okuyup
+//      sessionStorage'da saklar; geri dönüşte otomatik olarak aynı oynatıcıyı
+//      seçip form alanlarını yükler.
+//   4. "Seçilebilir Çözünürlükler" checkbox satırlarının CSS Grid/Flex
 //      stretch yüzünden tüm satır genişliğini kaplayıp boş alana
 //      tıklamayı checkbox'a basmış gibi davranmasını düzeltir.
 //      Kök sebep: .input-grid tek çocuklu olunca Grid'in 1fr track'i o

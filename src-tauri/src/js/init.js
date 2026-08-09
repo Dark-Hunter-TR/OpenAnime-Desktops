@@ -4,10 +4,10 @@
 // lib.rs'deki tek IIFE wrapper sayesinde shared scope'ta mevcuttur.
 
 {
-  console.log("[OpenAnime Init] JavaScript init script başlatıldı");
-  console.log("[OpenAnime Init] Tarayıcı: " + navigator.userAgent.substring(0, 80));
-  console.log("[OpenAnime Init] Sayfa URL: " + window.location.href.substring(0, 100));
-  console.log("[OpenAnime Init] __TAURI__ mevcut:", typeof window.__TAURI__ !== "undefined");
+  console.debug("[OpenAnime Init] JavaScript init script başlatıldı");
+  console.debug("[OpenAnime Init] Tarayıcı: " + navigator.userAgent.substring(0, 80));
+  console.debug("[OpenAnime Init] Sayfa URL: " + window.location.href.substring(0, 100));
+  console.debug("[OpenAnime Init] __TAURI__ mevcut:", typeof window.__TAURI__ !== "undefined");
   console.log("[OpenAnime Init] __TAURI_INTERNALS__ mevcut:", typeof window.__TAURI_INTERNALS__ !== "undefined");
 
   // ===== DPI Auto-Bypass: fetch interceptor =====
@@ -136,6 +136,21 @@
       });
     }
 
+    // ── Sitenin kendi /health ping'ini sustur ──
+    // api.openani.me/health Cloudflare/Vanguard tarafından 403 dönüyor
+    // ve konsola "Failed to load resource: the server responded with
+    // a status of 403" spam'i basıyor. Bizim DPI health check'imiz
+    // (openani.me/?health=1) zaten bağlantıyı doğruluyor — bu çağrıyı
+    // sessizce başarılı sayıp ağa gitmeden yanıtlayalım.
+    if (typeof url === "string" && url.includes("/health")) {
+      try {
+        const u = new URL(url);
+        if (u.hostname.endsWith("openani.me") && u.pathname.endsWith("/health")) {
+          return Promise.resolve(new Response(null, { status: 200, statusText: "OK" }));
+        }
+      } catch (_) {}
+    }
+
     if (isOpenaniUrl(url)) {
       return _origFetch(input, init).then(function(resp) {
         // Yanıt GELDİYSE yol açıktır — 401/403 (Vanguard/Cloudflare) bile
@@ -161,7 +176,34 @@
     return _origFetch(input, init);
   };
 
-  console.log("[DPI-Init] 🔵 Fetch interceptor aktif. Eşik:", DPI_FAIL_THRESHOLD, "hata");
+  console.debug("[DPI-Init] 🔵 Fetch interceptor aktif. Eşik:", DPI_FAIL_THRESHOLD, "hata");
+
+  // ===== EventSource Susturucu =====
+  // Sitenin kendi /user/notifications/sse EventSource'u sunucu tarafından
+  // ERR_HTTP2_PROTOCOL_ERROR ile sürekli kesiliyor ve konsola "Failed to
+  // load resource: net::ERR_HTTP2_PROTOCOL_ERROR" spam'i basıyor. Rust
+  // tarafındaki super_notifications zaten aynı SSE'yi yönetiyor — sitenin
+  // EventSource'u gereksiz. Sessizce iptal edelim.
+  const _origEventSource = window.EventSource;
+  window.EventSource = function(url, init) {
+    if (typeof url === "string" && url.includes("/user/notifications/sse")) {
+      console.debug("[DPI-Init] SSE intercept: site kendi EventSource'u susturuldu");
+      return {
+        CONNECTING: 0, OPEN: 1, CLOSED: 2,
+        readyState: 2, url: url, withCredentials: false,
+        onopen: null, onmessage: null, onerror: null,
+        close: function() {},
+        addEventListener: function() {},
+        removeEventListener: function() {},
+        dispatchEvent: function() { return false; }
+      };
+    }
+    return new _origEventSource(url, init);
+  };
+  window.EventSource.CONNECTING = 0;
+  window.EventSource.OPEN = 1;
+  window.EventSource.CLOSED = 2;
+  window.EventSource.prototype = _origEventSource.prototype;
 
   // Periodik kontrol (her 15 sn'de bir)
   // oaBgInterval: tepsiye gizlenince durur — kullanıcı görmezken 15 sn'de bir
@@ -181,10 +223,10 @@
         // (Vanguard) da sunucuya ulaştığımızın kanıtıdır. Eski kodda bunlar
         // "başarısız" sayılmıyordu ama sayacı da sıfırlamıyordu; site bot
         // koruması gösterirken sayaç tek yönlü doluyordu.
+        // Sağlıklı akışta sessiz ol — konsol şişmesin. Hata/sorun varsa
+        // aşağıdaki `else` ve `catch` kolları zaten log basıyor.
         noteHealthy("Health check");
-        if (r.ok) {
-          console.log("[DPI-Init] ✅ Health check başarılı (", r.status, ")");
-        } else {
+        if (!r.ok) {
           console.warn("[DPI-Init] ⚠️ Health check yanıt: ", r.status, "(sunucuya ulaşıldı, ağ sorunu değil)");
         }
       })

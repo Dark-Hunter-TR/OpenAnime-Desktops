@@ -12,8 +12,8 @@
   };
 
   let pingTimer = null;
-  const PING_INTERVAL_ONLINE = 15000;  // 15 saniyede bir periyodik kontrol
-  const PING_INTERVAL_OFFLINE = 4000;  // Çevrim dışıyken 4 saniyede bir hızlı kontrol
+  const PING_INTERVAL_ONLINE = 60000;  // 60 sn — browser online/offline olayı zaten var
+  const PING_INTERVAL_OFFLINE = 8000;  // Çevrim dışıyken 8 sn'de bir hızlı kontrol
 
   function notify() {
     for (const fn of listeners) {
@@ -35,12 +35,15 @@
     let reason = null;
 
     try {
-      // Lightweight HEAD/GET ping
+      // Lightweight HEAD/GET ping — site root kullanılır çünkü
+      // api.openani.me/health Cloudflare/Vanguard tarafından 403
+      // dönüyor (bkz. konsol "Failed to load resource" spam'i).
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3500);
 
-      const pingUrl = "https://api.openani.me/health";
-      const resp = await fetch(pingUrl, {
+      // no-cors ile hata yalnızca ağ kesintisinde oluşur; 403/401
+      // sunucuya ulaştığımız anlamına gelir.
+      await fetch("https://openani.me/?health=1", {
         method: "HEAD",
         mode: "no-cors",
         cache: "no-store",
@@ -75,7 +78,7 @@
     if (currentState.isOnline !== online || currentState.reason !== reason) {
       currentState.isOnline = online;
       currentState.reason = reason;
-      console.log(`[networkStore] Ağ durumu güncellendi: ${online ? "ONLINE" : "OFFLINE"} (${reason || "Tamam"})`);
+      console.log(`[networkStore] Ağ durumu: ${online ? "ONLINE" : "OFFLINE"}${reason ? " (" + reason + ")" : ""}`);
       notify();
     }
 
