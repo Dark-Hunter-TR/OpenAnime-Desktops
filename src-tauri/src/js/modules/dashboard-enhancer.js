@@ -62,7 +62,8 @@
     { id: "fansub-altyazi", label: "Fansub & Altyazı", items: ["Fansub Oluştur", "Fansub Düzenle", "Altyazı Oluştur"] },
     { id: "listeler", label: "Listeler", items: ["Anime Listesi Oluştur", "Anime Listesi Düzenle"] },
     { id: "cekilis", label: "Çekiliş", items: ["Çekiliş Oluştur", "Çekiliş Yönet"] },
-    { id: "kod-uyelik", label: "Kod & Üyelik", items: ["Kod Oluştur", "Kod Yönet", "Premium Ata"] }
+    { id: "kod-uyelik", label: "Kod & Üyelik", items: ["Kod Oluştur", "Kod Yönet", "Premium Ata"] },
+    { id: "araclar", label: "Araçlar", items: ["Link Ayıklayıcı"] }
   ];
   // Site ileride yeni bir sidebar öğesi eklerse (yukarıdaki listede yoksa)
   // kaybolmasın diye bir yedek grup.

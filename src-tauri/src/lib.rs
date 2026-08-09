@@ -524,6 +524,21 @@ fn update_background_mode(app: &tauri::AppHandle, label: &str) {
         mode = BgMode::Foreground;
     }
 
+    // LİNK AYIKLAYICI SOLVER İSTİSNASI: bu pencereler `resolve_turkanime_embed`
+    // tarafından `.hide()` ile gizlenir gizlenmez bu fonksiyon (Resized/Focused
+    // olayı üzerinden) otomatik çağrılıyor ve `playing=false` olduğu için
+    // DeepSleep'e düşürüyordu — motor donuyor, bölüm sayfası hiç yüklenemiyordu
+    // (canlı testte doğrulandı: #videodetay 8 saniyede hiç oluşmadı). Süper
+    // Bildirim istisnasıyla aynı mekanizma: HWND gizli kalır, motor çalışmaya
+    // devam eder.
+    if mode != BgMode::Foreground && label.starts_with(LINK_SOLVER_LABEL_PREFIX) {
+        dbg_log!(
+            "[PerfMode] Link Ayıklayıcı solver → {} penceresi canlı tutuluyor (render sürüyor)",
+            label
+        );
+        mode = BgMode::Foreground;
+    }
+
     // JS'e ÖNCE haber ver: DeepSleep'te motor donduğu için sinyal sonradan
     // gönderilseydi sayfaya hiç ulaşmazdı.
     emit_background_state(app, label, js_mode_name(mode));
@@ -924,6 +939,20 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n",
 
     // ──────────────────────────────────────────────
+    // BLOK 7E: LİNK AYIKLAYICI
+    // Dashboard'a kaynak site (turkanime.tv) linklerini toplayan bir sekme
+    // ekler. Ağ istekleri fetch_external_html/resolve_turkanime_embed Rust
+    // komutları üzerinden yapılır (turkanime CORS başlığı göndermiyor).
+    // ──────────────────────────────────────────────
+    "{\nconst LINK_EXTRACTOR_CSS = String.raw`",
+    include_str!("js/modules/link-extractor/link-extractor.css"),
+    "`;\n",
+    include_str!("js/modules/link-extractor/core.js"),
+    "\n",
+    include_str!("js/modules/link-extractor/sources/turkanime.js"),
+    "\n}\n",
+
+    // ──────────────────────────────────────────────
     // BLOK 8: TEMA SİSTEMİ
     // ──────────────────────────────────────────────
     "{\n",
@@ -1222,11 +1251,50 @@ async fn close_window_label(app: tauri::AppHandle, label: Option<String>) -> Res
 
 // (proxy_request kaldırıldı — hiçbir JS/frontend tarafından çağrılmıyordu.)
 
+/// `host` bir loopback/özel-ağ/link-local adresi mi? IP literal ise oktetlere
+/// bakar; "localhost" gibi hostname'leri de reddeder (DNS çözümü burada
+/// yapılmıyor — asıl SSRF koruması reqwest'in kendi bağlantısında değil,
+/// çağıranın bariz özel adres yazmasını engellemekte).
+fn is_private_or_loopback_host(host: &str) -> bool {
+    let lower = host.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(ip) = lower.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xfe00) == 0xfc00
+            }
+        };
+    }
+    false
+}
+
+/// Dışarıya giden her fetch komutu için ortak kapı: yalnızca `https` şeması ve
+/// yalnızca genel (özel/loopback olmayan) hostlar. Host allowlist BURADA
+/// uygulanmaz — çağıranlar (ör. `fetch_external_html`) kendi allowlist'ini
+/// bunun üstüne ekler.
+fn is_https_and_not_private(url: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("Geçersiz URL: {e}"))?;
+    if parsed.scheme() != "https" {
+        return Err("Yalnızca https izinli".to_string());
+    }
+    let host = parsed.host_str().ok_or_else(|| "Host yok".to_string())?;
+    if is_private_or_loopback_host(host) {
+        return Err("Özel/yerel adreslere istek yasak".to_string());
+    }
+    Ok(parsed)
+}
 
 #[tauri::command]
 async fn fetch_css(url: String) -> Result<String, String> {
+    is_https_and_not_private(&url)?;
+
     let client = reqwest::Client::builder()
-        .user_agent("OpenAnime-Desktop/1.0")
+        .user_agent(platform_user_agent())
         .build()
         .map_err(|e| format!("Client build error: {}", e))?;
 
@@ -1271,6 +1339,418 @@ async fn check_connection() -> bool {
         }
     } else {
         false
+    }
+}
+
+/// Link Ayıklayıcı — kaynak site sayfalarını Rust tarafında çeker. Tarayıcıdan
+/// doğrudan fetch imkânsız: turkanime.tv hiç Access-Control-Allow-* göndermiyor.
+/// Yalnızca turkanime.tv (ve alt alan adları) için host allowlist uygulanır —
+/// `is_https_and_not_private` şema/private-IP kontrolünün üstüne eklenir.
+#[derive(serde::Serialize)]
+struct ExternalPage {
+    status: u16,
+    body: String,
+}
+
+fn is_allowed_link_extractor_host(host: &str) -> bool {
+    host == "turkanime.tv" || host.ends_with(".turkanime.tv")
+}
+
+#[tauri::command]
+async fn fetch_external_html(
+    url: String,
+    referer: Option<String>,
+    ajax: Option<bool>,
+) -> Result<ExternalPage, String> {
+    let parsed = is_https_and_not_private(&url)?;
+    let host = parsed.host_str().unwrap_or("");
+    if !is_allowed_link_extractor_host(host) {
+        return Err(format!("İzin verilmeyen host: {}", host));
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent(platform_user_agent())
+        .build()
+        .map_err(|e| format!("Client build error: {}", e))?;
+
+    let mut req = client.get(&url);
+    if let Some(r) = referer {
+        req = req.header("Referer", r);
+    }
+    if ajax.unwrap_or(false) {
+        req = req.header("X-Requested-With", "XMLHttpRequest");
+    }
+
+    let response = req.send().await.map_err(|e| format!("Fetch error: {}", e))?;
+    let status = response.status().as_u16();
+    let body = response.text().await.map_err(|e| format!("Read error: {}", e))?;
+    Ok(ExternalPage { status, body })
+}
+
+/// Link Ayıklayıcı — turkanime'in AES ile şifrelediği embed'lerini çözer.
+/// Anahtarı reverse-engineer ETMEZ (turkanime'in embed JS paketi içerik-hash'li
+/// dosya adına sahip, her derlemede değişir). Bunun yerine gerçek bir kullanıcı
+/// gibi davranır:
+///   1. Gizli pencereyi BÖLÜM SAYFASININ KENDİSİNE açar (düz URL, hash yok —
+///      önceki tasarım embed URL'sine DOĞRUDAN top-level navigasyon yapıyordu
+///      ve `#/url/<base64>` parçası bazen `#/`'ye düşüyordu; canlı testte
+///      doğrulandı, kök sebep hâlâ net değil ama bölüm sayfasının hash'i yok,
+///      bu riski tamamen ortadan kaldırıyor).
+///   2. Sitenin KENDİ `IndexIcerik(ajaxPath, 'videodetay')` fonksiyonunu
+///      çağırarak gerçek buton tıklamasını birebir simüle eder (fansub sonra
+///      oynatıcı sırasıyla, `click_paths` listesi kadar).
+///   3. Sonuçtaki `#videodetay .video-icerik iframe` şifreliyse, ONUN
+///      `contentDocument`'ine iner (aynı origin — kullanıcının kendi canlı
+///      konsol testiyle doğrulandı: erişim engellenmiyor) ve içindeki gerçek
+///      `/player/<token>` linkini okur.
+/// `build_init_script()` bu pencereye BİLEREK enjekte EDİLMEZ — openani.me'ye
+/// özel (ör. network-cache.js window.fetch/XHR override ediyor).
+pub(crate) const LINK_SOLVER_LABEL_PREFIX: &str = "oa_link_solver_";
+/// Aynı milisaniyeye denk gelen paralel çözümler aynı etikete sahip olabiliyordu
+/// (canlı testte doğrulandı) — zaman damgasının yanına atomik sayaç eklenir.
+static LINK_SOLVER_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Aynı anda kaç solver penceresi açılabilir. Canlı testte doğrulandı: bir
+/// bölümdeki tüm şifreli oynatıcılar (4+) paralel açılınca yerel DPI-atlatma
+/// proxy'si (127.0.0.1:1453) + WebView2 başlatma tıkanıyor — bazı pencereler
+/// #videodetay'ı bile 8 saniyede oluşturamıyordu. Kullanıcı isteğiyle TAM
+/// SIRALI yapıldı (limit 1) — hem tıkanmayı önler hem de aynı anda birden
+/// fazla pencerenin (kısa süreliğine de olsa) art arda görünmesi ihtimalini
+/// azaltır. Sınırlama JS tarafındaki Promise.all paralelliğini bozmaz,
+/// yalnızca gerçek eşzamanlı pencere sayısını kısar (fazlası kuyrukta bekler).
+static LINK_SOLVER_SEMAPHORE: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+fn link_solver_semaphore() -> &'static tokio::sync::Semaphore {
+    LINK_SOLVER_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
+/// SIRALAMANIN KANITI: log satır sırasına güvenmek yerine gerçek eşzamanlı
+/// aktif pencere sayısını sayar. permit alındığı anda +1, fonksiyon
+/// (herhangi bir çıkış yolundan — Drop garanti eder) bittiğinde -1. Eğer
+/// sıralama gerçekten bozuksa, `active_now` bir noktada 1'i geçtiğini
+/// dbg_log!'da gösterir; hiç geçmiyorsa sıralama kanıtlanmış olur (varsayım
+/// değil, ölçüm).
+static LINK_SOLVER_ACTIVE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+struct ActiveGuard;
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        LINK_SOLVER_ACTIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Bir tek eval_with_callback çağrısını oneshot kanalıyla Result'a çevirir —
+/// tüm poll döngülerinde tekrarlanan boilerplate'i tekilleştirir.
+async fn eval_once(win: &tauri::WebviewWindow, js: &str, timeout_ms: u64) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    let tx = Arc::new(Mutex::new(Some(tx)));
+    let tx_cb = tx.clone();
+    let _ = win.eval_with_callback(js, move |r: String| {
+        if let Ok(mut g) = tx_cb.lock() {
+            if let Some(t) = g.take() {
+                let _ = t.send(r);
+            }
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx)
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+}
+
+const SOLVER_DIAG_JS: &str = r#"(function () {
+    try {
+        var cf = !!document.querySelector('#challenge-running, .cf-browser-verification, #cf-wrapper, iframe[src*="challenges.cloudflare.com"], #cf-turnstile');
+        var b = document.body;
+        return JSON.stringify({
+            href: location.href,
+            ready: document.readyState,
+            title: (document.title || '').slice(0, 80),
+            cf: cf,
+            videodetay: !!document.querySelector('#videodetay'),
+            indexIcerikFn: typeof IndexIcerik === 'function',
+            bodyLen: b ? b.innerHTML.length : -1
+        });
+    } catch (e) { return 'DIAG_ERR:' + String(e); }
+})()"#;
+
+/// Belirli bir JS boolean ifadesi doğru olana kadar (ya da zaman aşımına kadar)
+/// `eval_with_callback` ile yoklar. Sayfanın #videodetay gibi bir öğe
+/// oluşturmasını beklemek için kullanılır. Her yoklamada ayrıca gerçek sayfa
+/// durumunu (href/ready/başlık/Cloudflare işareti) `label` etiketiyle loglar —
+/// tek bir "loaded=false" yerine bekleme boyunca NE OLDUĞU görünür kılınır.
+async fn wait_for_js_condition(win: &tauri::WebviewWindow, label: &str, js_bool_expr: &str, timeout_ms: u64) -> bool {
+    let probe = format!(
+        "(function(){{ try {{ return !!({}); }} catch (e) {{ return false; }} }})()",
+        js_bool_expr
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    let mut tick: u32 = 0;
+    while std::time::Instant::now() < deadline {
+        tick += 1;
+        if let Some(r) = eval_once(win, &probe, 600).await {
+            if r.trim() == "true" {
+                return true;
+            }
+        }
+        if tick % 4 == 0 {
+            if let Some(diag) = eval_once(win, SOLVER_DIAG_JS, 600).await {
+                dbg_log!("[LinkSolver] DIAG label={} tick={} => {}", label, tick, diag);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    false
+}
+
+#[tauri::command]
+async fn resolve_turkanime_embed(
+    app: tauri::AppHandle,
+    episode_url: String,
+    click_paths: Vec<String>,
+) -> Result<String, String> {
+    let parsed = is_https_and_not_private(&episode_url)?;
+    let host = parsed.host_str().unwrap_or("").to_string();
+    if !is_allowed_link_extractor_host(&host) {
+        return Err(format!("İzin verilmeyen host: {}", host));
+    }
+
+    let counter = LINK_SOLVER_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = format!(
+        "{}{}_{}",
+        LINK_SOLVER_LABEL_PREFIX,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        counter
+    );
+
+    dbg_log!("[LinkSolver] kuyrukta bekliyor: label={}", label);
+    // TEK SEFERDE BİR PENCERE: canlı testte doğrulandı — birden fazla solver
+    // penceresi aynı anda açılınca yerel DPI-atlatma proxy'si + WebView2
+    // başlatma tıkanıyor, bazı pencereler #videodetay'ı bile oluşturamıyordu.
+    // Semafor limiti 1'e indirildi (bkz. link_solver_semaphore).
+    let _permit = link_solver_semaphore().acquire().await;
+    let active_now = LINK_SOLVER_ACTIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let _active_guard = ActiveGuard;
+    if active_now > 1 {
+        dbg_log!("[LinkSolver] !!! SIRALAMA BOZUK !!! label={} active_now={}", label, active_now);
+    }
+    dbg_log!("[LinkSolver] build() öncesi: label={} active_now={} episode={} clicks={:?}", label, active_now, episode_url, click_paths);
+    // GÖRÜNMEZLİK: pencere GÖRÜNÜR oluşturulur (WebView2'nin gerçekten
+    // başlaması için — `.visible(false)` ile Windows'ta motor hiç
+    // başlamıyordu, canlı CDP testiyle doğrulandı), hemen ardından `hide()`
+    // ile gizlenir. `hide()` normalde EcoQoS'u tetikleyip motoru donduruyordu
+    // (DeepSleep) — bunu `update_background_mode`'daki solver istisnası
+    // (LINK_SOLVER_LABEL_PREFIX ile başlayan pencereler her zaman Foreground'da
+    // tutulur) engeller; motor "hide" sonrası da çalışmaya devam eder, kullanıcı
+    // hiçbir şey görmez, ekranda parlama olmaz (önceki off-screen-konum
+    // denemesi WM'nin pencereyi kısa süreliğine varsayılan konumda göstermesine
+    // yol açıyordu — canlı testte 2 saniyelik görünme olarak doğrulandı).
+    // NOT: Reklam/analitik-budama init script'i (MutationObserver ile DOM'dan
+    // kaldırma) DENENDİ, ardından TÜM pencereler #videodetay'ı hiç oluşturamadı
+    // (canlı testte doğrulandı — bir önceki denemede EN AZ bir pencere
+    // başarıyla çözülüyordu, bu değişiklikten sonra sıfıra düştü). `.
+    // initialization_script()` eklemek de `additional_browser_args` gibi
+    // WebView2'nin farklı bir ortam/profil kullanmasına yol açıyor olabilir —
+    // ispatlanmadan tekrar denenmeyecek. GERİ ALINDI; bu pencereye hiçbir
+    // ek script enjekte edilmiyor.
+    let win_builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+        .inner_size(800.0, 600.0)
+        .visible(true)
+        .focused(false)
+        .skip_taskbar(true)
+        .decorations(false)
+        .user_agent(platform_user_agent());
+
+    // ÖNEMLİ: Ana pencere ve open_new_window/spawn_tray_session_window İLE
+    // AYNI proxy args'ı uygular (DPI-atlatma proxy'si olmadan turkanime.tv'ye
+    // doğrudan bağlanmaya çalışıyordu — canlı testte doğrulandı).
+    //
+    // NOT: `--blink-settings=imagesEnabled=false` denendi ("gereksiz render'ı
+    // azalt" isteği için) ama canlı testte GERÇEK BİR GERİLEMEYE yol açtı —
+    // browser-args string'i değişince WebView2 muhtemelen bu kombinasyon için
+    // YENİ bir ortam kurmak zorunda kaldı ve bu, sayfa yüklemesini 15sn
+    // içinde tamamlayamayacak kadar yavaşlattı (TÜM pencereler #videodetay
+    // beklerken zaman aşımına uğradı). Derleyip test edemeden bunu tekrar
+    // denemek riskli — WINDOWS_PROXY_ARGS'a DOKUNULMADAN bırakılıyor.
+    #[cfg(target_os = "windows")]
+    let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
+
+    let win = win_builder
+        .build()
+        .map_err(|e| format!("Solver penceresi açılamadı: {}", e))?;
+    dbg_log!("[LinkSolver] build() TAMAM: label={}", label);
+    match win.hide() {
+        Ok(()) => dbg_log!("[LinkSolver] hide() TAMAM: label={}", label),
+        Err(e) => dbg_log!("[LinkSolver] hide() HATA (devam ediliyor): label={} err={}", label, e),
+    }
+
+    // `#videodetay` VE `IndexIcerik` fonksiyonunun İKİSİNİ birden bekle.
+    // Canlı testte doğrulandı: #videodetay DOM'da hazır olduğunda site
+    // scriptleri (jQuery + kendi JS'i) henüz yüklenmemiş olabiliyor ve ilk
+    // tıklama denemesi "no-fn" dönüp sessizce kayboluyordu — sayfa varsayılan
+    // oynatıcıda kalıyor, sonuç yanlış oluyordu.
+    let loaded = wait_for_js_condition(
+        &win,
+        &label,
+        "document.querySelector('#videodetay') && typeof IndexIcerik === 'function'",
+        15000,
+    )
+    .await;
+    dbg_log!("[LinkSolver] sayfa+IndexIcerik bekleme sonucu: label={} loaded={}", label, loaded);
+    if !loaded {
+        if let Some(diag) = eval_once(&win, SOLVER_DIAG_JS, 1500).await {
+            dbg_log!("[LinkSolver] SON DIAG (yükleme başarısız): label={} => {}", label, diag);
+        }
+        let _ = win.close();
+        return Err("Bölüm sayfası yüklenemedi (#videodetay / IndexIcerik yok)".to_string());
+    }
+
+    for (i, path) in click_paths.iter().enumerate() {
+        let path_json = serde_json::to_string(path).map_err(|e| e.to_string())?;
+        let click_js = format!(
+            "(function(){{ if (typeof IndexIcerik === 'function') {{ IndexIcerik({}, 'videodetay'); return 'clicked'; }} return 'no-fn'; }})()",
+            path_json
+        );
+        let click_result = eval_once(&win, &click_js, 1000).await;
+        dbg_log!("[LinkSolver] tıklama {}/{}: label={} sonuç={:?}", i + 1, click_paths.len(), label, click_result);
+
+        // Ajax'ın #videodetay'ı yeniden kurmasını bekle. Sabit uyku yerine
+        // gerçek koşul yoklanır: ara adımlarda (fansub seçimi) bir sonraki
+        // IndexIcerik butonunun, son adımda ise oynatıcı iframe'inin gelmesi
+        // beklenir. Böylece yavaş yanıtlarda erken devam edilip yanlış
+        // sonuç okunmaz.
+        let is_last = i + 1 == click_paths.len();
+        let cond = if is_last {
+            "document.querySelector('#videodetay .video-icerik iframe')"
+        } else {
+            "document.querySelector('#videodetay button[onclick*=\"IndexIcerik\"]')"
+        };
+        let settled = wait_for_js_condition(&win, &label, cond, 6000).await;
+        dbg_log!("[LinkSolver] tıklama {} sonrası bekleme: label={} settled={}", i + 1, label, settled);
+    }
+
+    // JSON.stringify ile döner — `eval_with_callback` bunu bir JS string'i
+    // olarak zaten JSON'a saracağından, gövde ÇİFT JSON-kodlu gelir. Önceki
+    // `trim_matches('"')` yaklaşımı iç kaçış karakterlerini (\") doğru
+    // çözmüyordu — burada gerçek serde_json ile iki kez çözülür.
+    const READ_JS: &str = r#"(function () {
+        function j(o) { return JSON.stringify(o); }
+        var ifr = document.querySelector('#videodetay .video-icerik iframe');
+        if (!ifr) return j({found: false, reason: 'no-outer-iframe'});
+        var src = ifr.src || '';
+        if (src.indexOf('/embed/') === -1) return j({found: true, link: src, reason: 'outer-not-encrypted'});
+        var doc;
+        try { doc = ifr.contentDocument; } catch (e) { return j({found: false, reason: 'contentDocument-throw: ' + String(e)}); }
+        if (!doc) return j({found: false, reason: 'contentDocument-null'});
+        var inner = doc.querySelector('#app iframe[src]');
+        if (!inner) {
+            return j({
+                found: false,
+                reason: 'no-inner-iframe',
+                innerReady: doc.readyState,
+                innerTitle: doc.title,
+                innerBodyLen: doc.body ? doc.body.innerHTML.length : -1
+            });
+        }
+        return j({found: true, link: inner.src, reason: 'ok'});
+    })()"#;
+
+    #[derive(serde::Deserialize, Debug)]
+    struct ReadDiag {
+        found: bool,
+        #[serde(default)]
+        link: Option<String>,
+        // Yalnızca dbg_log!'daki {:?} çıktısı için tutulur (tanı amaçlı) —
+        // koddan doğrudan okunmuyor, derleyici bunu "hiç okunmuyor" sanıp
+        // uyarı veriyor.
+        #[allow(dead_code)]
+        #[serde(default)]
+        reason: Option<String>,
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut result: Option<String> = None;
+    let mut tick: u32 = 0;
+    while std::time::Instant::now() < deadline {
+        tick += 1;
+        if let Some(r) = eval_once(&win, READ_JS, 1200).await {
+            let inner_json: Option<String> = serde_json::from_str(&r).ok();
+            let diag: Option<ReadDiag> = inner_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
+            dbg_log!("[LinkSolver] READ label={} tick={} raw={} diag={:?}", label, tick, r, diag);
+            if let Some(d) = diag {
+                if d.found {
+                    if let Some(link) = d.link {
+                        result = Some(link);
+                        break;
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+
+    let _ = win.close();
+    result.ok_or_else(|| "Zaman aşımı: embed çözülemedi".to_string())
+}
+
+/// Link Ayıklayıcı — bir oynatıcı linkinin gerçekten erişilebilir olup
+/// olmadığını sunucu tarafında (reqwest ile) kontrol eder. Önceki denemedeki
+/// `fetch(url, { mode: "no-cors" })` yöntemi promise'i HER ZAMAN başarıyla
+/// çözdüğü için yanıltıcıydı (kırık linkler bile "çalışıyor" gösteriyordu) —
+/// burada gerçek bir HTTP durum kodu okunur. Host allowlist YOK: çözülen
+/// linkler rastgele CDN'lerden gelir (dood.watch, voe.sx, media.cm, vb.),
+/// bu yüzden `fetch_css` ile aynı gerekçeyle yalnızca şema/private-IP
+/// kısıtı uygulanır.
+#[derive(serde::Serialize)]
+struct LinkStatus {
+    ok: bool,
+    status: Option<u16>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn check_link_status(url: String, referer: Option<String>) -> Result<LinkStatus, String> {
+    is_https_and_not_private(&url)?;
+
+    let client = reqwest::Client::builder()
+        .user_agent(platform_user_agent())
+        .timeout(std::time::Duration::from_secs(6))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| format!("Client build error: {}", e))?;
+
+    let mut head_req = client.head(&url);
+    if let Some(r) = &referer {
+        head_req = head_req.header("Referer", r.clone());
+    }
+    if let Ok(resp) = head_req.send().await {
+        let status = resp.status();
+        // Bazı CDN'ler HEAD desteklemiyor (405/501) — bu durumda küçük bir
+        // GET (Range ile, video gövdesini indirmeden) dener.
+        if status.as_u16() != 405 && status.as_u16() != 501 {
+            return Ok(LinkStatus {
+                ok: status.is_success() || status.is_redirection(),
+                status: Some(status.as_u16()),
+                error: None,
+            });
+        }
+    }
+
+    let mut get_req = client.get(&url).header("Range", "bytes=0-1023");
+    if let Some(r) = &referer {
+        get_req = get_req.header("Referer", r.clone());
+    }
+    match get_req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            Ok(LinkStatus {
+                ok: status.is_success() || status.is_redirection(),
+                status: Some(status.as_u16()),
+                error: None,
+            })
+        }
+        Err(e) => Ok(LinkStatus { ok: false, status: None, error: Some(e.to_string()) }),
     }
 }
 
@@ -2085,6 +2565,10 @@ pub fn run() {
             // 🎥 Local video server — videoId ↔ dosya yolu eşlemesi kaydet
             fetch_css,
             check_connection,
+            // 🔗 Link Ayıklayıcı — kaynak site sayfası çekme + şifreli embed çözme + link durum testi
+            fetch_external_html,
+            resolve_turkanime_embed,
+            check_link_status,
             go_online,
             go_offline,
             list_themes,

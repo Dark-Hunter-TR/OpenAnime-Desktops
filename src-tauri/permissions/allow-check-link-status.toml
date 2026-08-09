@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-check-link-status"
+description = "Allows the frontend to invoke the check_link_status command (Link Ayıklayıcı — gerçek erişilebilirlik testi)"
+
+[permission.commands]
+allow = [
+    "check_link_status"
+]
