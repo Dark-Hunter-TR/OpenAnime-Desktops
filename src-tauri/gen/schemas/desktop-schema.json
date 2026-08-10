@@ -345,6 +345,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Allows the frontend to invoke the check_link_status command (Link Ayıklayıcı — gerçek erişilebilirlik testi)",
+          "type": "string",
+          "const": "allow-check-link-status",
+          "markdownDescription": "Allows the frontend to invoke the check_link_status command (Link Ayıklayıcı — gerçek erişilebilirlik testi)"
+        },
+        {
           "description": "Allows invoking Discord RPC commands",
           "type": "string",
           "const": "allow-discord-rpc",
@@ -361,6 +367,12 @@
           "type": "string",
           "const": "allow-fetch-css",
           "markdownDescription": "Allows the frontend to invoke the fetch_css command"
+        },
+        {
+          "description": "Allows the frontend to invoke the fetch_external_html command (Link Ayıklayıcı — turkanime.tv allowlist)",
+          "type": "string",
+          "const": "allow-fetch-external-html",
+          "markdownDescription": "Allows the frontend to invoke the fetch_external_html command (Link Ayıklayıcı — turkanime.tv allowlist)"
         },
         {
           "description": "Allows invoking the open_new_window command",
@@ -385,6 +397,12 @@
           "type": "string",
           "const": "allow-read-local-video",
           "markdownDescription": "Allows frontend to control local video streaming server (get port, register video routes)"
+        },
+        {
+          "description": "Allows the frontend to invoke the resolve_turkanime_embed command (Link Ayıklayıcı — hidden webview embed decrypt)",
+          "type": "string",
+          "const": "allow-resolve-turkanime-embed",
+          "markdownDescription": "Allows the frontend to invoke the resolve_turkanime_embed command (Link Ayıklayıcı — hidden webview embed decrypt)"
         },
         {
           "description": "Oturum log dosyasını frontend'den okumaya izin verir",

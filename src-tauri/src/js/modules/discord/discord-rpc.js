@@ -89,8 +89,17 @@ function getUserProfileUrl() {
 
 function notifyFocusToRust(label) {
   if (!window.__TAURI__ || !window.__TAURI__.core) return;
+  // Throttle: son bildirimden sonra 2sn geçmediyse atla
+  const now = Date.now();
+  if (notifyFocusToRust._last && (now - notifyFocusToRust._last) < 2000) return;
+  notifyFocusToRust._last = now;
   window.__TAURI__.core.invoke("set_focused_window", { label: label }).catch(() => {});
 }
+
+// clear_discord_presence debounce flag'leri
+// _clearLock: bir kere temizledik mi? (updatePresenceFromDOM içinde sıfırlanır)
+// _clearReason: en son hangi nedenle temizlendi (debug)
+var _discordClearSent = false;
 
 window.addEventListener("focus", () => {
   const label = getWindowLabel();
@@ -160,9 +169,12 @@ async function updatePresenceFromDOM() {
   
   const enabled = isDiscordRpcEnabled();
   if (!enabled) {
-    try {
-      await window.__TAURI__.core.invoke("clear_discord_presence");
-    } catch (e) {}
+    if (!_discordClearSent) {
+      _discordClearSent = true;
+      try {
+        await window.__TAURI__.core.invoke("clear_discord_presence");
+      } catch (e) {}
+    }
     lastHref = "";
     lastTitle = "";
     lastVideoPresence = false;
@@ -419,9 +431,12 @@ async function updatePresenceFromDOM() {
 
     // watch_only modunda sadece izleme sayfasında presence gönder
     if (visibilityMode === "watch_only" && page !== "watch") {
-      try {
-        await window.__TAURI__.core.invoke("clear_discord_presence");
-      } catch (e) {}
+      if (!_discordClearSent) {
+        _discordClearSent = true;
+        try {
+          await window.__TAURI__.core.invoke("clear_discord_presence");
+        } catch (e) {}
+      }
       lastHref = href;
       lastTitle = "";
       lastVideoPresence = hasVideo;
@@ -431,6 +446,9 @@ async function updatePresenceFromDOM() {
     }
 
     await window.__TAURI__.core.invoke("update_discord_presence", { page, metadata, windowLabel: getWindowLabel() });
+
+    // Presence başarıyla gönderildi → bir sonraki clear'ın gerçekten gitmesine izin ver
+    _discordClearSent = false;
 
     lastHref = href;
     lastTitle = windowTitle;
@@ -495,12 +513,18 @@ if (document.body) {
 }
 
 // Periyodik kontrol: 5 saniyede bir
-// Oynuyorken timer senkronizasyonu için günceller
-// Pause'da sadece state metni güncellenir (forceUpdate olmadan timer gönderilmez)
-// Özel olaylar (play/pause/seek/sayfa değişimi) forceUpdate ile ayrıca tetiklenir
+// Oynuyorken timer senkronizasyonu için günceller.
+// Pause/diskap/disabled'da ATLANIR — değişen bir şey yokken
+// boşuna DOM taraması + IPC çağrısı yapılmaz.
+// Özel olaylar (play/pause/seek/sayfa değişimi) zaten forceUpdate ile ayrıca tetiklenir
 // oaBgInterval(..., keepInMedia=true): "hidden" modunda (tepside, video yok)
 // durur; "media" modunda (tepside ama video oynuyor) ÇALIŞMAYA DEVAM EDER —
 // kullanıcı fiilen izlediği için Discord'daki bölüm/ilerleme bilgisi canlı kalmalı.
 oaBgInterval(() => {
+  // Discord kapalıysa boşuna çağırma
+  if (!isDiscordRpcEnabled()) return;
+  // Paused'daysa da atla (clear zaten bir kere gitti)
+  // Sadece video oynuyorken timer senkronizasyonu gerekli
+  if (document.hidden) return;
   updatePresenceFromDOM();
 }, 5000, true);
