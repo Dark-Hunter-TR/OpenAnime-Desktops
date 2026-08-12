@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-resolve-tranimeizle-episode"
+description = "Allows the frontend to invoke the resolve_tranimeizle_episode command (Link Ayıklayıcı — TR Anime İzle hidden webview resolver)"
+
+[permission.commands]
+allow = [
+    "resolve_tranimeizle_episode"
+]

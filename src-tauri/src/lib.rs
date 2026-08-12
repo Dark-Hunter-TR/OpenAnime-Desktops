@@ -952,6 +952,10 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     include_str!("js/modules/link-extractor/sources/turkanime.js"),
     "\n",
     include_str!("js/modules/link-extractor/sources/animecix.js"),
+    "\n",
+    include_str!("js/modules/link-extractor/sources/anizm.js"),
+    "\n",
+    include_str!("js/modules/link-extractor/sources/tranimeizle.js"),
     "\n}\n",
 
     // ──────────────────────────────────────────────
@@ -1982,12 +1986,13 @@ async fn resolve_animecix_episode_core(
     // Cloudflare meydan okumasının geçmesini bekle (turkanime'de #videodetay
     // beklerken burada "sayfa başlığı artık CF challenge metni değil" beklenir
     // — canlı testte "Just a moment...", "Attention Required!", "Checking your
-    // browser" başlıkları görüldü).
+    // browser" başlıkları görüldü). Ayrıca sayfada gerçek içerik olup olmadığını
+    // da kontrol et (episode-card-container veya title içeriği).
     let loaded = wait_for_js_condition(
         &win,
         label,
-        "document.readyState === 'complete' && !/just a moment|attention required|checking your browser/i.test(document.title)",
-        20000,
+        "document.readyState === 'complete' && document.title && document.title.length > 0 && !/just a moment|attention required|checking your browser/i.test(document.title) && (document.querySelector('router-outlet') || document.querySelector('.video-icerik') || document.querySelector('.episode-card-container') || document.querySelector('.title-header') || document.querySelector('app-root'))",
+        25000,
     )
     .await;
     dbg_log!("[LinkSolver][AnimeCix] CF geçiş bekleme sonucu: label={} loaded={}", label, loaded);
@@ -2024,7 +2029,14 @@ async fn resolve_animecix_episode_core(
     if let Some(err) = read.error {
         return Err(format!("AnimeCix fetch hatası: {}", err));
     }
-    let titles_raw = read.titles.ok_or_else(|| "AnimeCix başlık verisi boş döndü".to_string())?;
+    let titles_raw = match read.titles {
+        Some(t) => t,
+        None => {
+            // Başlık verisi boş — fallback: sayfadaki iframe'leri tara
+            dbg_log!("[LinkSolver][AnimeCix] titles boş, iframe fallback deneniyor: label={}", label);
+            return resolve_animecix_episode_fallback(&win, label, episode_url).await;
+        }
+    };
     let translators_raw = read.translators.unwrap_or_default();
 
     let titles_resp: AnimecixTitlesResponse = serde_json::from_str(&titles_raw)
@@ -2134,8 +2146,74 @@ async fn resolve_animecix_episode_core(
     }
 
     if out.is_empty() {
-        return Err("Bu bölüm için çözülebilir video bulunamadı".to_string());
+        // tau-video.xyz API'si çalışmadı — fallback olarak sayfadaki iframe'leri tara
+        dbg_log!("[LinkSolver][AnimeCix] tau-video sonuçsuz, iframe fallback deneniyor: label={}", label);
+        return resolve_animecix_episode_fallback(&win, label, episode_url).await;
     }
+    Ok(out)
+}
+
+/// Fallback: Eğer `/secure/titles/...` API'si veya `tau-video.xyz` çalışmazsa,
+/// sayfadaki `<iframe>` elementlerini tara ve src'lerini direkt link olarak döndür.
+/// Bu, turkanime'nin embed çözme desenine benzer bir yaklaşımdır.
+async fn resolve_animecix_episode_fallback(
+    win: &tauri::WebviewWindow,
+    label: &str,
+    _episode_url: String,
+) -> Result<Vec<AnimecixVideoLink>, String> {
+    dbg_log!("[LinkSolver][AnimeCix][Fallback] iframe taranıyor: label={}", label);
+
+    const FALLBACK_JS: &str = r#"(function () {
+        var frames = Array.prototype.slice.call(document.querySelectorAll('iframe'));
+        var out = [];
+        frames.forEach(function (f) {
+            var src = f.getAttribute('src') || f.src || '';
+            if (!src) return;
+            out.push({ src: src, title: f.title || '' });
+        });
+        // video-icerik içindeki iframe'e de bak
+        var vi = document.querySelector('.video-icerik iframe');
+        if (vi) {
+            var s = vi.getAttribute('src') || vi.src || '';
+            if (s && !out.some(function(o) { return o.src === s; })) {
+                out.unshift({ src: s, title: 'Video' });
+            }
+        }
+        return JSON.stringify(out);
+    })()"#;
+
+    let raw = eval_once(win, FALLBACK_JS, 3000)
+        .await
+        .ok_or_else(|| "Fallback: iframe listesi okunamadı".to_string())?;
+
+    #[derive(serde::Deserialize)]
+    struct IframeEntry {
+        src: String,
+    }
+
+    let frames: Vec<IframeEntry> = serde_json::from_str(&raw)
+        .map_err(|e| format!("Fallback: iframe JSON ayrıştırılamadı: {}", e))?;
+
+    if frames.is_empty() {
+        return Err("Bu bölüm için video iframe'i bulunamadı (API + fallback başarısız)".to_string());
+    }
+
+    let mut out: Vec<AnimecixVideoLink> = Vec::new();
+    for (i, f) in frames.iter().enumerate() {
+        out.push(AnimecixVideoLink {
+            translator_id: 0,
+            translator_name: format!("Kaynak #{}", i + 1),
+            rating: None,
+            quality: String::new(),
+            urls: vec![AnimecixQualityUrl {
+                label: "İframe".to_string(),
+                url: f.src.clone(),
+                size: None,
+            }],
+        });
+    }
+
+    dbg_log!("[LinkSolver][AnimeCix][Fallback] {} iframe bulundu: label={}", out.len(), label);
     Ok(out)
 }
 
@@ -2160,6 +2238,7 @@ struct AnimecixEpisodeCard {
     #[serde(default)]
     title: String,
     #[serde(default)]
+    #[allow(dead_code)]
     href: String,
 }
 
@@ -2299,6 +2378,717 @@ async fn list_animecix_season_episodes_core(
         return Err("Bu sezon için bölüm bulunamadı".to_string());
     }
     Ok(out)
+}
+
+// ──────────────────────────────────────────────
+// Link Ayıklayıcı — Anizm (anizm.net) kaynağı
+//
+// anizm.net Cloudflare koruması altındadır. Gizli WebviewWindow ile
+// sayfa yüklenir, CF geçilir, ardından video kaynakları DOM'dan taranır.
+// ──────────────────────────────────────────────
+
+#[derive(serde::Serialize, Clone)]
+struct GenericLinkEntry {
+    fansub: Option<String>,
+    player: String,
+    url: String,
+    host: String,
+    encrypted: bool,
+    status: String,
+    error: Option<String>,
+    referer_url: Option<String>,
+}
+
+#[tauri::command]
+async fn resolve_anizm_episode(app: tauri::AppHandle, url: String) -> Result<Vec<GenericLinkEntry>, String> {
+    let label = format!(
+        "{}{}_{}",
+        LINK_SOLVER_LABEL_PREFIX,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        LINK_SOLVER_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
+    dbg_log!("[AnizmSolver] episode başlıyor label={} url={}", label, url);
+
+    let _permit = link_solver_semaphore().acquire().await;
+
+    let parsed = is_https_and_not_private(&url)?;
+    let win_builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+        .inner_size(800.0, 600.0)
+        .visible(true)
+        .focused(false)
+        .skip_taskbar(true)
+        .decorations(false)
+        .user_agent(platform_user_agent());
+
+    #[cfg(target_os = "windows")]
+    let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
+
+    let win = win_builder
+        .build()
+        .map_err(|e| format!("Anizm penceresi açılamadı: {}", e))?;
+    let _close_guard = WindowCloseGuard(win.clone());
+    let _ = win.hide();
+
+    // Cloudflare + sayfa yüklenmesini bekle
+    let loaded = wait_for_js_condition(
+        &win,
+        &label,
+        "document.readyState !== 'loading' && !/just a moment|attention required|checking your browser/i.test(document.title) && document.querySelector('[data-translatorclick], iframe, video, .episodePlayerContent')",
+        25000,
+    )
+    .await;
+    dbg_log!("[AnizmSolver] sayfa yükleme: label={} loaded={}", label, loaded);
+
+    if !loaded {
+        if let Some(diag) = eval_once(&win, SOLVER_DIAG_JS, 1500).await {
+            dbg_log!("[AnizmSolver] DIAG label={} => {}", label, diag);
+        }
+        return Err("Anizm sayfası yüklenemedi (Cloudflare)".to_string());
+    }
+
+    // ANA STRATEJİ — tıklama zinciri (turkanime'deki IndexIcerik deseniyle aynı):
+    // 1. Varsa ilk çevirmene tıkla → [data-translatorclick] → AJAX → player listesi
+    // 2. Her player'a sırayla tıkla → [data-playerclick] → AJAX → .episodePlayerContent iframe
+    // 3. iframe src'lerini oku
+
+    const CLICK_FIRST_TRANSLATOR_JS: &str = r#"(function() {
+        var t = document.querySelector('[data-translatorclick]');
+        if (t) { t.click(); return 'clicked-translator'; }
+        return 'no-translator';
+    })()"#;
+
+    // Çevirmene tıkla
+    let click_res = eval_once(&win, CLICK_FIRST_TRANSLATOR_JS, 2000).await;
+    dbg_log!("[AnizmSolver] çevirmen tıklama: label={} res={:?}", label, click_res);
+
+    // Player butonlarının yüklenmesini bekle
+    let players_ready = wait_for_js_condition(
+        &win,
+        &label,
+        "document.querySelectorAll('[data-playerclick]').length > 0",
+        10000,
+    )
+    .await;
+    dbg_log!("[AnizmSolver] player yükleme: label={} ready={}", label, players_ready);
+
+    // Tüm player butonlarını bul ve her birine tıkla
+    const GET_PLAYER_COUNT_JS: &str = r#"(function() {
+        return document.querySelectorAll('[data-playerclick]').length;
+    })()"#;
+
+    let player_count: usize = eval_once(&win, GET_PLAYER_COUNT_JS, 1500).await
+        .and_then(|s| s.parse().ok().or_else(|| serde_json::from_str::<serde_json::Value>(&s).ok().and_then(|v| v.as_u64().map(|n| n as usize))))
+        .unwrap_or(0);
+    dbg_log!("[AnizmSolver] player sayısı: label={} count={}", label, player_count);
+
+    let mut links: Vec<GenericLinkEntry> = Vec::new();
+
+    for pi in 0..player_count.max(1) {
+        // Her player'a tıkla
+        let click_player_js = format!(
+            r#"(function() {{
+                var ps = document.querySelectorAll('[data-playerclick]');
+                if (ps[{}]) {{ ps[{}].click(); return 'clicked'; }}
+                return 'no-player';
+            }})()"#,
+            pi, pi
+        );
+
+        let cp_res = eval_once(&win, &click_player_js, 2000).await;
+        dbg_log!("[AnizmSolver] player[{}] tıklama: label={} res={:?}", pi, label, cp_res);
+
+        // iframe'in yüklenmesini bekle
+        let iframe_ready = wait_for_js_condition(
+            &win,
+            &label,
+            "document.querySelector('.episodePlayerContent iframe[src], .episodePlayerContent video[src], .episodePlayerContent video source[src]')",
+            8000,
+        )
+        .await;
+        dbg_log!("[AnizmSolver] player[{}] iframe: label={} ready={}", pi, label, iframe_ready);
+
+        // iframe/src'leri oku
+        const READ_PLAYER_JS: &str = r#"(function () {
+            function j(o) { return JSON.stringify(o); }
+            var results = [];
+            var pc = document.querySelector('.episodePlayerContent');
+            if (!pc) return j([]);
+
+            // iframe
+            var ifr = pc.querySelector('iframe[src]');
+            if (ifr) results.push({type: 'iframe', src: ifr.src, label: 'Player'});
+
+            // video source
+            var sources = pc.querySelectorAll('video source[src]');
+            for (var i = 0; i < sources.length; i++) {
+                results.push({type: 'video-source', src: sources[i].src, label: 'Video-' + (i+1)});
+            }
+
+            // video[src]
+            var vids = pc.querySelectorAll('video[src]');
+            for (var i = 0; i < vids.length; i++) {
+                results.push({type: 'video', src: vids[i].src, label: 'Video-' + (i+1)});
+            }
+
+            return j(results);
+        })()"#;
+
+        if let Some(r) = eval_once(&win, READ_PLAYER_JS, 1500).await {
+            let inner: Option<serde_json::Value> = serde_json::from_str(&r).ok()
+                .and_then(|v: serde_json::Value| serde_json::from_str(v.as_str().unwrap_or("[]")).ok());
+            if let Some(arr) = inner.and_then(|v| v.as_array().cloned()) {
+                for item in arr {
+                    let src = item["src"].as_str().unwrap_or("").to_string();
+                    let p_label = item["label"].as_str().unwrap_or("Player").to_string();
+                    if !src.is_empty() {
+                        let host = url::Url::parse(&src)
+                            .map(|u| u.host_str().unwrap_or("").to_string())
+                            .unwrap_or_default();
+                        links.push(GenericLinkEntry {
+                            fansub: None,
+                            player: p_label,
+                            url: src,
+                            host,
+                            encrypted: false,
+                            status: "ok".to_string(),
+                            error: None,
+                            referer_url: Some(url.clone()),
+                        });
+                    }
+                }
+            }
+        }
+
+        // DEBUG: ilk 5 player'ı dene    
+    }
+    
+    // İlk denemede hiç link bulunamadıysa tüm player'ları tekrar dene (daha uzun bekleme ile)
+    if links.is_empty() {
+        dbg_log!("[AnizmSolver] tüm player'lar tekrar taranıyor: label={}", label);
+        for pi in 0..player_count.min(10) {
+            let click_js = format!(
+                r#"(function() {{
+                    var ps = document.querySelectorAll('[data-playerclick]');
+                    if (ps[{}]) {{ ps[{}].click(); return 'clicked'; }}
+                    return 'no-player';
+                }})()"#,
+                pi, pi
+            );
+            let _ = eval_once(&win, &click_js, 2000).await;
+            let _ = wait_for_js_condition(&win, &label,
+                "document.querySelector('.episodePlayerContent iframe[src], .episodePlayerContent video[src]')",
+                6000).await;
+
+            const READ2_JS: &str = r#"(function(){
+                var pc = document.querySelector('.episodePlayerContent');
+                if(!pc) return '[]';
+                var r = [];
+                var ifr = pc.querySelector('iframe[src]');
+                if(ifr) r.push({type:'iframe', src:ifr.src, label:'Player'});
+                return JSON.stringify(r);
+            })()"#;
+
+            if let Some(r) = eval_once(&win, READ2_JS, 1000).await {
+                let inner: Option<serde_json::Value> = serde_json::from_str(&r).ok()
+                    .and_then(|v: serde_json::Value| serde_json::from_str(v.as_str().unwrap_or("[]")).ok());
+                if let Some(arr) = inner.and_then(|v| v.as_array().cloned()) {
+                    for item in arr {
+                        let src = item["src"].as_str().unwrap_or("").to_string();
+                        if !src.is_empty() {
+                            let host = url::Url::parse(&src)
+                                .map(|u| u.host_str().unwrap_or("").to_string())
+                                .unwrap_or_default();
+                            links.push(GenericLinkEntry {
+                                fansub: None,
+                                player: format!("Player-{}", pi + 1),
+                                url: src,
+                                host,
+                                encrypted: false,
+                                status: "ok".to_string(),
+                                error: None,
+                                referer_url: Some(url.clone()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: tıklama zinciri çalışmadıysa DOM taraması
+    if links.is_empty() {
+        dbg_log!("[AnizmSolver] tıklama zinciri sonuçsuz, DOM taraması: label={}", label);
+        const FALLBACK_JS: &str = r#"(function () {
+            function j(o) { return JSON.stringify(o); }
+            var results = [];
+            var iframes = document.querySelectorAll('iframe[src]');
+            for (var i = 0; i < iframes.length; i++) {
+                if (iframes[i].src && iframes[i].src.indexOf('anizm.com') === -1 && iframes[i].src.indexOf('anizm.net') === -1) {
+                    results.push({type: 'iframe', src: iframes[i].src, label: 'Iframe-' + (i+1)});
+                }
+            }
+            var sources = document.querySelectorAll('video source[src]');
+            for (var i = 0; i < sources.length; i++) {
+                results.push({type: 'video-source', src: sources[i].src, label: 'Video-' + (i+1)});
+            }
+            return j(results);
+        })()"#;
+        if let Some(r) = eval_once(&win, FALLBACK_JS, 1500).await {
+            let inner: Option<serde_json::Value> = serde_json::from_str(&r).ok()
+                .and_then(|v: serde_json::Value| serde_json::from_str(v.as_str().unwrap_or("[]")).ok());
+            if let Some(arr) = inner.and_then(|v| v.as_array().cloned()) {
+                for item in arr {
+                    let src = item["src"].as_str().unwrap_or("").to_string();
+                    if !src.is_empty() {
+                        let host = url::Url::parse(&src)
+                            .map(|u| u.host_str().unwrap_or("").to_string())
+                            .unwrap_or_default();
+                        links.push(GenericLinkEntry {
+                            fansub: None,
+                            player: "Fallback".to_string(),
+                            url: src,
+                            host,
+                            encrypted: false,
+                            status: "ok".to_string(),
+                            error: None,
+                            referer_url: Some(url.clone()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    dbg_log!("[AnizmSolver] tamam label={} link_sayisi={}", label, links.len());
+    Ok(links)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct AnizmEpisodeRef {
+    title: String,
+    url: String,
+}
+
+#[tauri::command]
+async fn list_anizm_season_episodes(app: tauri::AppHandle, url: String) -> Result<Vec<AnizmEpisodeRef>, String> {
+    let label = format!(
+        "{}{}_{}",
+        LINK_SOLVER_LABEL_PREFIX,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        LINK_SOLVER_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
+    dbg_log!("[AnizmSolver] sezon başlıyor label={} url={}", label, url);
+
+    let _permit = link_solver_semaphore().acquire().await;
+    let parsed = is_https_and_not_private(&url)?;
+
+    let win_builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+        .inner_size(800.0, 600.0)
+        .visible(true)
+        .focused(false)
+        .skip_taskbar(true)
+        .decorations(false)
+        .user_agent(platform_user_agent());
+
+    #[cfg(target_os = "windows")]
+    let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
+
+    let win = win_builder
+        .build()
+        .map_err(|e| format!("Anizm penceresi açılamadı: {}", e))?;
+    let _close_guard = WindowCloseGuard(win.clone());
+    let _ = win.hide();
+
+    let loaded = wait_for_js_condition(
+        &win,
+        &label,
+        "document.readyState !== 'loading' && !/just a moment|attention required|checking your browser/i.test(document.title)",
+        25000,
+    )
+    .await;
+    if !loaded {
+        return Err("Anizm sayfası yüklenemedi (Cloudflare)".to_string());
+    }
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    // Bölüm listesini bul - tüm -bolum-izle linklerini direkt al
+    const LIST_JS: &str = r#"(function () {
+        function j(o) { return JSON.stringify(o); }
+        var results = [];
+        var seen = {};
+
+        // TÜM -bolum-izle linkleri (hiyerarşiden bağımsız)
+        var allLinks = document.querySelectorAll('a[href*="-bolum-izle"]');
+        for (var i = 0; i < allLinks.length; i++) {
+            var href = allLinks[i].href || '';
+            var title = (allLinks[i].textContent || allLinks[i].getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+            if (href && !seen[href]) {
+                seen[href] = true;
+                results.push({ title: title || 'Bölüm ' + (i+1), url: href });
+            }
+        }
+
+        return j(results);
+    })()"#;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut episodes: Vec<AnizmEpisodeRef> = Vec::new();
+
+    while std::time::Instant::now() < deadline && episodes.is_empty() {
+        if let Some(r) = eval_once(&win, LIST_JS, 2000).await {
+            if let Ok(list) = serde_json::from_str::<Vec<AnizmEpisodeRef>>(&r) {
+                episodes = list;
+                break;
+            }
+            if let Ok(inner) = serde_json::from_str::<String>(&r) {
+                if let Ok(list) = serde_json::from_str::<Vec<AnizmEpisodeRef>>(&inner) {
+                    episodes = list;
+                    break;
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    dbg_log!("[AnizmSolver] sezon tamam label={} bolum_sayisi={}", label, episodes.len());
+    Ok(episodes)
+}
+
+// ──────────────────────────────────────────────
+// Link Ayıklayıcı — TR Anime İzle (tranimeizle.io) kaynağı
+//
+// tranimeizle.io iconCaptcha kullanır: 6 ikon gösterilir, farklı olanı seçilir.
+// CAPTCHA çözülmeden GERÇEK İÇERİK GELMEZ — CAPTCHA sayfası sadece ikonları gösterir,
+// video.js oynatıcısı falan yoktur. Bu yüzden:
+//   1. Gizli pencere açılır, CAPTCHA algılanırsa pencere görünür yapılır
+//   2. Kullanıcı CAPTCHA'yı çözer → redirect → gerçek sayfa yüklenir
+//   3. Gerçek sayfada video.js/iframe taranır
+// ──────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct TranimeizleEpisodeRef {
+    title: String,
+    url: String,
+}
+
+async fn resolve_tranimeizle_episode_inner(
+    app: &tauri::AppHandle,
+    url: &str,
+) -> Result<Vec<GenericLinkEntry>, String> {
+    let label = format!(
+        "{}{}_{}",
+        LINK_SOLVER_LABEL_PREFIX,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        LINK_SOLVER_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
+    dbg_log!("[TranimeizleSolver] episode başlıyor label={} url={}", label, url);
+
+    let _permit = link_solver_semaphore().acquire().await;
+
+    let parsed = is_https_and_not_private(url)?;
+    let win_builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(parsed))
+        .inner_size(800.0, 600.0)
+        .visible(true)
+        .focused(false)
+        .skip_taskbar(true)
+        .decorations(false)
+        .user_agent(platform_user_agent());
+
+    #[cfg(target_os = "windows")]
+    let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
+
+    let win = win_builder
+        .build()
+        .map_err(|e| format!("Tranimeizle penceresi açılamadı: {}", e))?;
+    let _close_guard = WindowCloseGuard(win.clone());
+    let _ = win.hide();
+
+    // Sayfanın yüklenmesini bekle
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    // CAPTCHA kontrolü: iconCaptcha, "Bot Kontrol" başlık, captcha-holder
+    let is_captcha = eval_once(
+        &win,
+        "document.title.indexOf('Bot Kontrol') > -1 || !!document.querySelector('.captcha-holder, .iconCaptcha, .icon-captcha')",
+        1500,
+    )
+    .await
+    .map(|r| r.contains("true"))
+    .unwrap_or(false);
+
+    if is_captcha {
+        dbg_log!("[TranimeizleSolver] CAPTCHA tespit edildi! Pencere görünür yapılıyor label={}", label);
+        let _ = win.show();
+        let _ = win.set_focus();
+
+        // CAPTCHA çözülene kadar URL değişimini bekle
+        let cap_deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let mut captcha_solved = false;
+
+        while std::time::Instant::now() < cap_deadline {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let current_url = eval_once(&win, "window.location.href", 1000).await.unwrap_or_default();
+            // CAPTCHA redirect'ten sonra URL'de /api/CaptchaChallenge/ olmamalı
+            if !current_url.contains("CaptchaChallenge") && current_url.contains("tranimeizle") && !current_url.contains("Bot%20Kontrol") {
+                captcha_solved = true;
+                dbg_log!("[TranimeizleSolver] CAPTCHA çözüldü! Yeni URL: {} label={}", current_url, label);
+                break;
+            }
+        }
+
+        if captcha_solved {
+            let _ = win.hide();
+            // Gerçek sayfanın yüklenmesi için bekle
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        } else {
+            let _ = win.hide();
+            return Err("Tranimeizle CAPTCHA çözülmedi (120sn timeout)".to_string());
+        }
+    } else {
+        dbg_log!("[TranimeizleSolver] CAPTCHA yok, devam label={}", label);
+    }
+
+    // Video/iframe kaynaklarını bul
+    const READ_JS: &str = r#"(function () {
+        function j(o) { return JSON.stringify(o); }
+        var results = [];
+
+        // 1. #videoPlayer içindeki iframe
+        var vp = document.querySelector('#videoPlayer iframe');
+        if (vp && vp.src) results.push({ type: 'iframe', src: vp.src, label: 'VideoPlayer' });
+
+        // 2. .videoSource-video içindeki iframe
+        var vs = document.querySelector('.videoSource-video iframe');
+        if (vs && vs.src) results.push({ type: 'iframe', src: vs.src, label: 'VideoSource' });
+
+        // 3. video.js <video> içindeki <source> etiketleri
+        var sources = document.querySelectorAll('video source[src]');
+        for (var i = 0; i < sources.length; i++) {
+            results.push({ type: 'video-source', src: sources[i].src, label: 'VideoJS-' + (i+1) });
+        }
+
+        // 4. <video> elementinin src attribute'u
+        var vids = document.querySelectorAll('video[src]');
+        for (var i = 0; i < vids.length; i++) {
+            results.push({ type: 'video', src: vids[i].src, label: 'Video-' + (i+1) });
+        }
+
+        // 5. Sayfadaki tüm iframe'ler (player olabilecek)
+        var iframes = document.querySelectorAll('iframe[src*="embed"], iframe[src*="player"], iframe[src*="video"], iframe[src*="stream"]');
+        for (var i = 0; i < iframes.length; i++) {
+            var s = iframes[i].src || '';
+            if (s && !results.some(function(r) { return r.src === s; })) {
+                results.push({ type: 'embed-iframe', src: s, label: 'Embed-' + (i+1) });
+            }
+        }
+
+        return j(results);
+    })()"#;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut links: Vec<GenericLinkEntry> = Vec::new();
+
+    while std::time::Instant::now() < deadline && links.is_empty() {
+        if let Some(r) = eval_once(&win, READ_JS, 1500).await {
+            // r çift JSON: eval_with_callback JSON'a sarar, içteki JSON da bizim JSON.stringify
+            let inner: Option<serde_json::Value> = serde_json::from_str(&r).ok()
+                .and_then(|v: serde_json::Value| serde_json::from_str(v.as_str().unwrap_or("[]")).ok());
+            if let Some(arr) = inner.and_then(|v| v.as_array().cloned()) {
+                for item in arr {
+                    let src = item["src"].as_str().unwrap_or("").to_string();
+                    let label = item["label"].as_str().unwrap_or("Player").to_string();
+                    if !src.is_empty() {
+                        let host = url::Url::parse(&src)
+                            .map(|u| u.host_str().unwrap_or("").to_string())
+                            .unwrap_or_default();
+                        links.push(GenericLinkEntry {
+                            fansub: None,
+                            player: label,
+                            url: src,
+                            host,
+                            encrypted: false,
+                            status: "ok".to_string(),
+                            error: None,
+                            referer_url: Some(url.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+        if links.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    dbg_log!("[TranimeizleSolver] tamam label={} link_sayisi={}", label, links.len());
+    Ok(links)
+}
+
+#[tauri::command]
+async fn resolve_tranimeizle_episode(app: tauri::AppHandle, url: String) -> Result<Vec<GenericLinkEntry>, String> {
+    resolve_tranimeizle_episode_inner(&app, &url).await
+}
+
+#[tauri::command]
+async fn list_tranimeizle_season_episodes(app: tauri::AppHandle, url: String) -> Result<Vec<TranimeizleEpisodeRef>, String> {
+    let label = format!(
+        "{}{}_{}",
+        LINK_SOLVER_LABEL_PREFIX,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        LINK_SOLVER_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
+    dbg_log!("[TranimeizleSolver] sezon başlıyor label={} url={}", label, url);
+
+    let _permit = link_solver_semaphore().acquire().await;
+
+    let parsed = is_https_and_not_private(&url)?;
+    let win_builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+        .inner_size(800.0, 600.0)
+        .visible(true)
+        .focused(false)
+        .skip_taskbar(true)
+        .decorations(false)
+        .user_agent(platform_user_agent());
+
+    #[cfg(target_os = "windows")]
+    let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
+
+    let win = win_builder
+        .build()
+        .map_err(|e| format!("Tranimeizle penceresi açılamadı: {}", e))?;
+    let _close_guard = WindowCloseGuard(win.clone());
+    let _ = win.hide();
+
+    // Sayfanın yüklenmesini bekle - .animeDetail-playlist veya bölüm listesini ara
+    let loaded = wait_for_js_condition(
+        &win,
+        &label,
+        "document.querySelector('.animeDetail-playlist ol, .videoSource-playlist ol, .animeDetail-items, .videoSource-items')",
+        20000,
+    )
+    .await;
+    dbg_log!("[TranimeizleSolver] sezon sayfa yükleme: label={} loaded={}", label, loaded);
+
+    if !loaded {
+        // CAPTCHA nedeniyle sayfa yüklenmemiş olabilir, tanı logla
+        if let Some(diag) = eval_once(&win, SOLVER_DIAG_JS, 1500).await {
+            dbg_log!("[TranimeizleSolver] sezon DIAG label={} => {}", label, diag);
+        }
+        return Err("Sezon sayfası yüklenemedi (CAPTCHA veya zaman aşımı)".to_string());
+    }
+
+    // Ekstra bekleme - bölüm listesinin JS ile oluşturulması için
+    // Bölüm linkleri görünene kadar bekle (15sn timeout)
+    let episodes_ready = wait_for_js_condition(
+        &win,
+        &label,
+        "document.querySelector('a[href*=\"-bolum-izle\"]') !== null",
+        20000,
+    )
+    .await;
+    if !episodes_ready {
+        return Err("Anizm sayfasında bölüm linki bulunamadı".to_string());
+    }
+
+    // Tüm bölümlerin render olması için ek süre
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Bölüm linklerini bul
+    const LIST_JS: &str = r#"(function () {
+        function j(o) { return JSON.stringify(o); }
+        var results = [];
+        var seen = {};
+
+        // 1. .animeDetail-playlist ol li a (sezon sayfası)
+        var links1 = document.querySelectorAll('.animeDetail-playlist ol li a[href]');
+        for (var i = 0; i < links1.length; i++) {
+            var href = links1[i].href || '';
+            var title = (links1[i].textContent || '').replace(/\s+/g, ' ').trim();
+            if (href && !seen[href]) {
+                seen[href] = true;
+                results.push({ title: title || 'Bölüm ' + (i+1), url: href });
+            }
+        }
+
+        // 2. .videoSource-playlist ol li a (bölüm sayfası playlist)
+        var links2 = document.querySelectorAll('.videoSource-playlist ol li a[href]');
+        for (var i = 0; i < links2.length; i++) {
+            var href = links2[i].href || '';
+            var title = (links2[i].textContent || '').replace(/\s+/g, ' ').trim();
+            if (href && !seen[href]) {
+                seen[href] = true;
+                results.push({ title: title || 'Bölüm ' + (i+1), url: href });
+            }
+        }
+
+        // 3. episode-li sınıfına sahip linkler
+        var links3 = document.querySelectorAll('.episode-li a[href]');
+        for (var i = 0; i < links3.length; i++) {
+            var href = links3[i].href || '';
+            var title = (links3[i].textContent || '').replace(/\s+/g, ' ').trim();
+            if (href && !seen[href]) {
+                seen[href] = true;
+                results.push({ title: title || 'Bölüm ' + (i+1), url: href });
+            }
+        }
+
+        // 4. Belirli desendeki tüm linkler (bolum-izle-hd)
+        var allLinks = document.querySelectorAll('a[href*="bolum-izle-hd"]');
+        for (var i = 0; i < allLinks.length; i++) {
+            var href = allLinks[i].href || '';
+            var title = (allLinks[i].textContent || allLinks[i].getAttribute('title') || '').replace(/\s+/g, ' ').trim();
+            if (href && !seen[href]) {
+                seen[href] = true;
+                results.push({ title: title || 'Bölüm ' + (i+1), url: href });
+            }
+        }
+
+        return j(results);
+    })()"#;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut episodes: Vec<TranimeizleEpisodeRef> = Vec::new();
+
+    while std::time::Instant::now() < deadline && episodes.is_empty() {
+        if let Some(r) = eval_once(&win, LIST_JS, 1500).await {
+            let inner: Option<Vec<TranimeizleEpisodeRef>> = serde_json::from_str(&r).ok()
+                .or_else(|| serde_json::from_str(r.trim_matches('"')).ok());
+            if let Some(list) = inner {
+                episodes = list;
+                dbg_log!("[TranimeizleSolver] sezon bulunan bolum: label={} sayi={}", label, episodes.len());
+                break;
+            }
+        }
+        if episodes.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    if episodes.is_empty() {
+        // Son bir kez daha dene - diğer format
+        if let Some(r) = eval_once(&win, r#"(function(){return JSON.stringify(Array.from(document.querySelectorAll('a[href*="bolum-izle-hd"]')).map(function(a,i){return{title:a.textContent||('Bölüm '+(i+1)),url:a.href}}));})()"#, 2000).await {
+            if let Ok(list) = serde_json::from_str::<Vec<TranimeizleEpisodeRef>>(&r) {
+                episodes = list;
+                dbg_log!("[TranimeizleSolver] sezon son deneme: label={} sayi={}", label, episodes.len());
+            }
+        }
+    }
+
+    dbg_log!("[TranimeizleSolver] sezon tamam label={} bolum_sayisi={}", label, episodes.len());
+    Ok(episodes)
 }
 
 /// Link Ayıklayıcı — bir oynatıcı linkinin gerçekten erişilebilir olup
@@ -3178,6 +3968,10 @@ pub fn run() {
             resolve_turkanime_embed,
             resolve_animecix_episode,
             list_animecix_season_episodes,
+            resolve_anizm_episode,
+            list_anizm_season_episodes,
+            resolve_tranimeizle_episode,
+            list_tranimeizle_season_episodes,
             check_link_status,
             go_online,
             go_offline,

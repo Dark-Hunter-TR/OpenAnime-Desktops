@@ -19,6 +19,7 @@
 // ═══════════════════════════════════════════════════════════
 
 (function () {
+  try {
   var LOG = "[Dashboard]";
 
   function onDashboardRoute() {
@@ -224,15 +225,63 @@
   }
 
   // ────────────────────────────────────────────────────────
-  // 3) FORM STATE HAFIZASI (yalnızca bellekte, F5'te sıfırlanır)
+  // 3) FORM STATE HAFIZASI (sessionStorage + RAM, F5 dayanıklı)
   // ────────────────────────────────────────────────────────
   // Site sidebar tıklamalarında sayfa navigasyonu YAPMIYOR (li href=""),
   // Svelte içeride bileşeni değiştiriyor — bu da eski formun local state'ini
-  // unmount ile birlikte siliyor. Burada input değerlerini DOM sırasına göre
-  // (sahne adı + index) anahtarlayıp saklıyor, sahne yeniden monte olunca
-  // native input/change event'i tetikleyerek Svelte'in kendi bound state'ini
-  // de güncelliyoruz (yalnızca görsel değer değil, gerçek reaktif değer).
-  var formMemory = {};
+  // unmount ile birlikte siliyor. Burada input değerlerini sahne adı + input
+  // adı/id/index anahtarıyla sessionStorage'da saklıyor, sahne yeniden monte
+  // olunca native input/change event'i tetikleyerek Svelte'in kendi bound
+  // state'ini de güncelliyoruz (yalnızca görsel değer değil, gerçek reaktif
+  // değer). Maksimum 50 input kaydı (en eski silinir).
+  var FORM_MEMORY_KEY = "oa_form_memory";
+  var FORM_MEMORY_MAX = 50;
+
+  function loadFormMemory() {
+    var raw;
+    try { raw = JSON.parse(sessionStorage.getItem(FORM_MEMORY_KEY) || "{}"); }
+    catch (e) { return {}; }
+    // Eski format migration: { "scene::idx::placeholder": value } → { "scene": { scene, fields } }
+    var needsMigrate = false;
+    Object.keys(raw).forEach(function (k) {
+      if (k.indexOf("::") > 0) {
+        needsMigrate = true;
+      }
+    });
+    if (needsMigrate) {
+      var migrated = {};
+      Object.keys(raw).forEach(function (k) {
+        var parts = k.split("::");
+        var scene = parts[0];
+        if (!migrated[scene]) migrated[scene] = { scene: scene, count: 0, fields: {} };
+        migrated[scene].fields[k] = raw[k];
+      });
+      try { sessionStorage.setItem(FORM_MEMORY_KEY, JSON.stringify(migrated)); } catch (e) {}
+      return migrated;
+    }
+    // Yeni format: sadece snapshot'ları tut (scene → { scene, fields })
+    var clean = {};
+    Object.keys(raw).forEach(function (k) {
+      if (raw[k] && typeof raw[k] === "object" && raw[k].fields) {
+        clean[k] = raw[k];
+      }
+    });
+    return clean;
+  }
+
+  function saveFormMemory(data) {
+    try {
+      // Max 50 scene snapshot
+      var keys = Object.keys(data);
+      if (keys.length > FORM_MEMORY_MAX) {
+        var oldest = keys[0];
+        delete data[oldest];
+      }
+      sessionStorage.setItem(FORM_MEMORY_KEY, JSON.stringify(data));
+    } catch (e) {}
+  }
+
+  var formMemory = loadFormMemory();
 
   function sceneRoot() {
     return document.querySelector(".scene-inner-content") || null;
@@ -240,9 +289,16 @@
 
   function currentSceneName(root) {
     var h4 = root && root.querySelector("h4.text-block.type-subtitle");
-    if (h4) return h4.textContent.replace(/\s+/g, " ").trim();
-    var sel = document.querySelector(".sidebar li.list-item.selected .text-block");
-    return sel ? sel.textContent.replace(/\s+/g, " ").trim() : "scene";
+    var name;
+    if (h4) {
+      name = h4.textContent.replace(/\s+/g, " ").trim();
+    } else {
+      var sel = document.querySelector(".sidebar li.list-item.selected .text-block");
+      name = sel ? sel.textContent.replace(/\s+/g, " ").trim() : "scene";
+    }
+    // Input sayısını da ekleyerek aynı başlıklı farklı formları ayırt et
+    var count = fieldables(root).length;
+    return name + " [" + count + "]";
   }
 
   function fieldables(root) {
@@ -250,50 +306,163 @@
       .filter(function (el) { return el.type !== "hidden"; });
   }
 
+  function formFieldKey(el) {
+    return el.name || el.id || "";
+  }
+
   function onFieldChange(e) {
     if (!onDashboardRoute()) return;
     var el = e.target;
     if (!el || !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.type === "hidden") return;
     var root = sceneRoot();
-    if (!root || !root.contains(el)) return; // üstteki genel arama kutusunu hariç tutar
-
-    var all = fieldables(root);
-    var idx = all.indexOf(el);
-    if (idx === -1) return;
-    var key = currentSceneName(root) + "::" + idx + "::" + (el.placeholder || el.type || "");
-    formMemory[key] = (el.type === "checkbox" || el.type === "radio") ? el.checked : el.value;
+    if (!root || !root.contains(el)) return;
+    saveFormSnapshot(root);
   }
 
-  function restoreScene(root) {
+  function saveFormSnapshot(root) {
+    root = root || sceneRoot();
+    if (!root) return;
+    var scene = currentSceneName(root);
+    var all = fieldables(root);
+    var snapshot = { scene: scene, count: all.length, fields: {} };
+    all.forEach(function (el, idx) {
+      var fieldKey = formFieldKey(el);
+      var stableKey = scene + "::" + (fieldKey || idx) + "::" + (el.placeholder || el.type || "");
+      snapshot.fields[stableKey] = (el.type === "checkbox" || el.type === "radio") ? el.checked : el.value;
+    });
+    formMemory[scene] = snapshot;
+    saveFormMemory(formMemory);
+
+    // Seçili oynatıcıyı ayrıca sakla (scene adındaki "Oynatıcı N" kısmı)
+    var playerMatch = scene.match(/^Oynatıcı\s+(\d+)/i);
+    if (playerMatch) {
+      try { sessionStorage.setItem("oa_last_player", playerMatch[1]); } catch (e) {}
+    }
+  }
+
+  function restorePlayerSelection(step) {
+    step = step || 0;
+    if (step === 0) {
+      // "Oynatıcı Seç" butonu DOM'da var mı kontrol et
+      var root = sceneRoot();
+      if (!root) return false;
+      var openBtn = null;
+      root.querySelectorAll('button').forEach(function (b) {
+        if ((b.textContent || "").trim() === "Oynatıcı Seç") openBtn = b;
+      });
+      if (!openBtn) return false;
+      var lastPlayer = null;
+      try { lastPlayer = sessionStorage.getItem("oa_last_player"); } catch (e) {}
+      if (!lastPlayer) return false;
+
+      console.log(LOG, "ADIM 1: Oynatıcı Seç butonuna tıklanıyor");
+      openBtn.click();
+      setTimeout(function () { restorePlayerSelection(1); }, 200);
+      return true;
+    }
+
+    if (step === 1) {
+      var lastPlayer = null;
+      try { lastPlayer = sessionStorage.getItem("oa_last_player"); } catch (e) {}
+      if (!lastPlayer) { _restoringPlayer = false; return false; }
+      var items = document.querySelectorAll('li.player-item');
+      var found = false;
+      items.forEach(function (li) {
+        var t = (li.textContent || "").replace(/\s+/g, " ").trim();
+        if (new RegExp("Oynatıcı\\s*" + lastPlayer, "i").test(t)) {
+          console.log(LOG, "ADIM 2: Oynatıcı bulundu, tıklanıyor:", t);
+          li.click();
+          found = true;
+        }
+      });
+      if (!found) { console.warn(LOG, "ADIM 2: Oynatıcı bulunamadı"); _restoringPlayer = false; return false; }
+      setTimeout(function () { restorePlayerSelection(2); }, 200);
+      return true;
+    }
+
+    if (step === 2) {
+      var closeBtn = document.getElementById('close-button');
+      if (!closeBtn) {
+        console.warn(LOG, "ADIM 3: Kapatma butonu bulunamadı");
+        _restoringPlayer = false;
+        return false;
+      }
+      console.log(LOG, "ADIM 3: Dialog kapatılıyor");
+      closeBtn.click();
+      _restoringPlayer = false;
+      return true;
+    }
+
+    return false;
+  }
+
+  function restoreScene(root, attempt) {
+    attempt = attempt || 0;
     var all = fieldables(root);
     var scene = currentSceneName(root);
-    all.forEach(function (el, idx) {
-      var key = scene + "::" + idx + "::" + (el.placeholder || el.type || "");
-      if (!Object.prototype.hasOwnProperty.call(formMemory, key)) return;
-      var val = formMemory[key];
-      if (el.type === "checkbox" || el.type === "radio") {
-        if (el.checked !== val) {
-          el.checked = val;
-          el.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Eğer input bulunamadıysa ve max denemeye ulaşılmadıysa, Svelte render'ını bekle
+    if (all.length === 0 && attempt < 10) {
+      setTimeout(function () { restoreScene(root, attempt + 1); }, 100 * (attempt + 1));
+      return;
+    }
+    if (all.length === 0) return;
+
+    var snapshot = formMemory[scene];
+    if (!snapshot) return;
+    if (typeof snapshot === "object" && snapshot.fields) {
+      all.forEach(function (el, idx) {
+        var fieldKey = formFieldKey(el);
+        var stableKey = scene + "::" + (fieldKey || idx) + "::" + (el.placeholder || el.type || "");
+        var val = snapshot.fields[stableKey];
+        if (val === undefined || val === null) return;
+        if (el.type === "checkbox" || el.type === "radio") {
+          if (el.checked !== val) {
+            el.checked = val;
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        } else if (el.value !== val) {
+          el.value = val;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
         }
-      } else if (el.value !== val) {
-        el.value = val;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-    });
+      });
+    }
   }
+
+  var _restoringPlayer = false;
+var _pendingNav = false;
 
   function startFormMemoryWatcher() {
     var lastSceneKey = null;
+    var restoreTimer = null;
+    var snapshotTimer = null;
+
+    // Sidebar tıklamalarını yakala (sayfa değişimi)
+    document.addEventListener("click", function (e) {
+      var li = e.target.closest && e.target.closest(".sidebar li.list-item");
+      if (li && onDashboardRoute()) _pendingNav = true;
+    }, true);
 
     function check() {
-      if (!onDashboardRoute()) { lastSceneKey = null; return; }
+      if (!onDashboardRoute()) { lastSceneKey = null; _restoringPlayer = false; return; }
+      if (_restoringPlayer) return;
       var root = sceneRoot();
       if (!root) return;
       var key = currentSceneName(root);
       if (key !== lastSceneKey) {
         lastSceneKey = key;
-        restoreScene(root);
+        if (restoreTimer) clearTimeout(restoreTimer);
+        restoreTimer = setTimeout(function () {
+          // Yalnızca sayfa değişiminden sonra oynatıcı geri yüklemeyi dene
+          if (_pendingNav) {
+            _pendingNav = false;
+            var playerRestored = restorePlayerSelection(0);
+            if (playerRestored) { _restoringPlayer = true; return; }
+          }
+          // Form input'larını geri yükle
+          restoreScene(root, 0);
+          restoreTimer = null;
+        }, 50);
       }
     }
     check();
@@ -307,6 +476,12 @@
 
     document.addEventListener("input", onFieldChange, true);
     document.addEventListener("change", onFieldChange, true);
+
+    // Periyodik snapshot: her 2sn'de bir tüm form durumunu kaydet
+    // (Svelte custom komponentleri input/change event'i fırlatmayabilir)
+    snapshotTimer = setInterval(function () {
+      if (onDashboardRoute()) saveFormSnapshot();
+    }, 2000);
   }
 
   // ────────────────────────────────────────────────────────
@@ -325,4 +500,5 @@
   } else {
     init();
   }
+  } catch (e) { console.error("[Dashboard] Yükleme hatası:", e); }
 })();
