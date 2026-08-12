@@ -18,6 +18,7 @@
 // ═══════════════════════════════════════════════════════════
 
 (function () {
+  try {
   "use strict";
   var LOG = "[LinkExtractor]";
 
@@ -727,7 +728,12 @@
 
     if (!panelEl) {
       panelEl = buildPanel();
-      scene.parentNode.appendChild(panelEl);
+      if (scene.parentNode) {
+        scene.parentNode.appendChild(panelEl);
+      } else {
+        console.warn(LOG, "scene.parentNode null, panel eklenemedi");
+        return;
+      }
     } else if (!panelEl.isConnected && scene.parentNode) {
       scene.parentNode.appendChild(panelEl);
     }
@@ -755,4 +761,5 @@
   } else {
     init();
   }
+  } catch (e) { console.error("[LinkExtractor] Yükleme hatası:", e); }
 })();

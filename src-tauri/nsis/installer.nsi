@@ -86,12 +86,14 @@ Var OaInstalledVersion
 Var OaInstallMode
 Var OaChkShortcut
 Var OaChkAutoUpdate
+Var OaChkForceLocal
 Var OaDirRequest
 Var OaDirButton
 Var OaDescText
 Var OaRadio1
 Var OaRadio2
 Var OaRadio3
+Var OaChkOnlineLatest
 Var OaStatusText
 Var OaSetsukiImage
 Var OaSetsukiHandle
@@ -274,6 +276,11 @@ Function OaCustomPage
   Pop $OaChkAutoUpdate
   SendMessage $OaChkAutoUpdate ${BM_SETCHECK} ${BST_CHECKED} 0
 
+  ; "Yerel sürümü kur" seçeneği — işaretlenirse CheckOnlineLatest atlanır
+  ${NSD_CreateCheckbox} 10u 115u 100% 12u "Bu sürümü kur (çevrimdışı, en son sürümü kontrol etme)"
+  Pop $OaChkOnlineLatest
+  SendMessage $OaChkOnlineLatest ${BM_SETCHECK} ${BST_UNCHECKED} 0
+
   nsDialogs::Show
 FunctionEnd
 
@@ -309,6 +316,14 @@ Function OaCustomPageLeave
     StrCpy $NoShortcutMode 1
   ${Else}
     StrCpy $NoShortcutMode 0
+  ${EndIf}
+
+  ; Yerel sürüm seçeneği — işaretliyse CheckOnlineLatest atlanır
+  ${NSD_GetState} $OaChkOnlineLatest $0
+  ${If} $0 == ${BST_CHECKED}
+    StrCpy $OaChkForceLocal 1
+  ${Else}
+    StrCpy $OaChkForceLocal 0
   ${EndIf}
 
   ; Not: OaChkAutoUpdate değeri tauri.conf.json üzerinden yönetiliyor ama
@@ -986,6 +1001,10 @@ Function CheckOnlineLatest
     Return
   ${EndIf}
   ${If} ${Silent}
+    Return
+  ${EndIf}
+  ; Kullanıcı "Bu sürümü kur" seçtiyse online kontrolü atla
+  ${If} $OaChkForceLocal = 1
     Return
   ${EndIf}
 

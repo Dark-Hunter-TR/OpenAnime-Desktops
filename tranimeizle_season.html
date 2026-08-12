@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="tr-TR">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bot Kontrol - Anime izle</title>
+    <script>
+        $('.captcha-holder').iconCaptcha({
+            captchaTheme: ["dark"],
+            captchaClickDelay: 500,
+            captchaHoverDetection: true,
+            enableLoadingAnimation: true,
+            loadingAnimationDelay: 1500,
+            showCredits: 'disabled',
+            requestIconsDelay: 1500,
+            validationPath: '/api/Captcha/',
+            messages: {
+                header: "Devam edebilmek için farklı olanı seçiniz.",
+                correct: { top: "İyi seyirler!", bottom: "Doğrulamanız için teşekkürler." },
+                incorrect: { top: "Oops!", bottom: "Doğrulama yapılamadı, tekrar deneyiniz." }
+            }
+        }).bind('success.iconCaptcha', function (e, id) {
+            window.location.replace('%2Fmerc-storia-mukiryoku-no-shounen-to-bin-no-naka-no-shoujo-izle');
+        });
+    </script>
+</head>
+<body class="boxed-layout" id="mainBody">
+    <header>...</header>
+    <main class="page_main_wrapper"><form action="#" method="post"><div class="captcha-holder"></div></form></main>
+    <footer>...</footer>
+</body>
+</html>

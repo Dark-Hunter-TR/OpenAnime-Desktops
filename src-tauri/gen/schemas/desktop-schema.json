@@ -375,6 +375,24 @@
           "markdownDescription": "Allows the frontend to invoke the fetch_external_html command (Link Ayıklayıcı — turkanime.tv allowlist)"
         },
         {
+          "description": "Allows the frontend to invoke the list_animecix_season_episodes command (Link Ayıklayıcı — AnimeCix hidden webview episode listing)",
+          "type": "string",
+          "const": "allow-list-animecix-season-episodes",
+          "markdownDescription": "Allows the frontend to invoke the list_animecix_season_episodes command (Link Ayıklayıcı — AnimeCix hidden webview episode listing)"
+        },
+        {
+          "description": "Allows the frontend to invoke the list_anizm_season_episodes command (Link Ayıklayıcı — Anizm hidden webview episode listing)",
+          "type": "string",
+          "const": "allow-list-anizm-season-episodes",
+          "markdownDescription": "Allows the frontend to invoke the list_anizm_season_episodes command (Link Ayıklayıcı — Anizm hidden webview episode listing)"
+        },
+        {
+          "description": "Allows the frontend to invoke the list_tranimeizle_season_episodes command (Link Ayıklayıcı — TR Anime İzle hidden webview episode listing)",
+          "type": "string",
+          "const": "allow-list-tranimeizle-season-episodes",
+          "markdownDescription": "Allows the frontend to invoke the list_tranimeizle_season_episodes command (Link Ayıklayıcı — TR Anime İzle hidden webview episode listing)"
+        },
+        {
           "description": "Allows invoking the open_new_window command",
           "type": "string",
           "const": "allow-open-new-window",
@@ -397,6 +415,24 @@
           "type": "string",
           "const": "allow-read-local-video",
           "markdownDescription": "Allows frontend to control local video streaming server (get port, register video routes)"
+        },
+        {
+          "description": "Allows the frontend to invoke the resolve_animecix_episode command (Link Ayıklayıcı — AnimeCix hidden webview + tau-video.xyz resolver)",
+          "type": "string",
+          "const": "allow-resolve-animecix-episode",
+          "markdownDescription": "Allows the frontend to invoke the resolve_animecix_episode command (Link Ayıklayıcı — AnimeCix hidden webview + tau-video.xyz resolver)"
+        },
+        {
+          "description": "Allows the frontend to invoke the resolve_anizm_episode command (Link Ayıklayıcı — Anizm hidden webview resolver)",
+          "type": "string",
+          "const": "allow-resolve-anizm-episode",
+          "markdownDescription": "Allows the frontend to invoke the resolve_anizm_episode command (Link Ayıklayıcı — Anizm hidden webview resolver)"
+        },
+        {
+          "description": "Allows the frontend to invoke the resolve_tranimeizle_episode command (Link Ayıklayıcı — TR Anime İzle hidden webview resolver)",
+          "type": "string",
+          "const": "allow-resolve-tranimeizle-episode",
+          "markdownDescription": "Allows the frontend to invoke the resolve_tranimeizle_episode command (Link Ayıklayıcı — TR Anime İzle hidden webview resolver)"
         },
         {
           "description": "Allows the frontend to invoke the resolve_turkanime_embed command (Link Ayıklayıcı — hidden webview embed decrypt)",
