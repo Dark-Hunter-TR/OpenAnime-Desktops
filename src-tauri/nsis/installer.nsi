@@ -276,10 +276,12 @@ Function OaCustomPage
   Pop $OaChkAutoUpdate
   SendMessage $OaChkAutoUpdate ${BM_SETCHECK} ${BST_CHECKED} 0
 
-  ; "Yerel sürümü kur" seçeneği — işaretlenirse CheckOnlineLatest atlanır
+  ; "Yerel sürümü kur" seçeneği — işaretlenirse CheckOnlineLatest atlanır.
+  ; Varsayılan İŞARETLİ: kullanıcı aksini istemezse offline/bundled kurulur,
+  ; online kontrol yalnızca bu kutu kaldırıldığında devreye girer.
   ${NSD_CreateCheckbox} 10u 115u 100% 12u "Bu sürümü kur (çevrimdışı, en son sürümü kontrol etme)"
   Pop $OaChkOnlineLatest
-  SendMessage $OaChkOnlineLatest ${BM_SETCHECK} ${BST_UNCHECKED} 0
+  SendMessage $OaChkOnlineLatest ${BM_SETCHECK} ${BST_CHECKED} 0
 
   nsDialogs::Show
 FunctionEnd
