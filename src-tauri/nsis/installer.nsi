@@ -1076,6 +1076,15 @@ Function CheckOnlineLatest
     Return                        ; eşit / daha eski → gömülü sürümü kur
   ${EndIf}
 
+  ; Kullanıcıya sor — otomatik zorunlu indirme yerine onay iste.
+  ; Evet → en son sürümü indir + başlat; Hayır → gömülü sürümle devam et.
+  MessageBox MB_YESNO|MB_ICONQUESTION "Yeni sürüm mevcut: $OaOnlineVersion (şu anki: ${VERSION}).$\r$\nİndirip kurmak ister misiniz?" IDYES oa_download_latest
+  ; Hayır → gömülü sürümü kur
+  Push "OpenAnime Kuruluyor... Lütfen Bekleyin."
+  Call OaSetInstText
+  Return
+  oa_download_latest:
+
   ; 4) En son setup.exe URL'sini kur:
   ;    <base>/v<ver>/<ProductName>_<ver>_<arch>-setup.exe
   StrCpy $8 "${PRODUCTNAME}_"      ; OpenAnime_
