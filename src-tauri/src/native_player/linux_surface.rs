@@ -45,7 +45,7 @@ fn make_test_frame(frame_count: u32) -> Vec<u8> {
 
 /// winit + wgpu'yu kurup render döngüsünü başlatır. Bloklayan giriş noktası.
 pub fn run() {
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoop::new().expect("olay döngüsü oluşturulamadı");
     let window = Arc::new(
         WindowBuilder::new()
             .with_title("OpenAnime Native Player (test)")
@@ -111,32 +111,35 @@ pub fn run() {
     );
     let mut frame_count: u32 = 0;
 
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => *control_flow = ControlFlow::Exit,
-            Event::WindowEvent {
-                event: WindowEvent::RedrawRequested,
-                ..
-            } => {
-                frame_count += 1;
-                let frame = make_test_frame(frame_count);
-                if let Ok(st) = surface.get_current_texture() {
-                    let view = st
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
-                    if let Err(e) = player.render(&device, &queue, &view, &frame, frame_count, false)
-                    {
-                        eprintln!("[NativePlayer] render hatası: {e}");
+    event_loop
+        .run(move |event, elwt| {
+            elwt.set_control_flow(ControlFlow::Wait);
+            match event {
+                Event::WindowEvent {
+                    event: WindowEvent::CloseRequested,
+                    ..
+                } => elwt.exit(),
+                Event::WindowEvent {
+                    event: WindowEvent::RedrawRequested,
+                    ..
+                } => {
+                    frame_count += 1;
+                    let frame = make_test_frame(frame_count);
+                    if let Ok(st) = surface.get_current_texture() {
+                        let view = st
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
+                        if let Err(e) =
+                            player.render(&device, &queue, &view, &frame, frame_count, false)
+                        {
+                            eprintln!("[NativePlayer] render hatası: {e}");
+                        }
+                        st.present();
                     }
-                    st.present();
+                    window.request_redraw();
                 }
-                window.request_redraw();
+                _ => {}
             }
-            _ => {}
-        }
-    });
+        })
+        .unwrap();
 }
