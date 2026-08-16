@@ -131,9 +131,9 @@ Resmî uygulamadaki temel RPC entegrasyonunun kat kat ötesinde, gerçek zamanl�
 ### <img src="https://api.iconify.design/fluent/rocket-24-filled.svg?color=%2362cdfe&width=22&height=22" width="22" />&nbsp; Süper Açılış *(Yakında)*
 
 > [!NOTE]
-> Bu özellik henüz geliştirme aşamasındadır — yakında eklenecektir.
+> Bu özellik henüz geliştirme aşamasındadır — Teknik hatalar meydana gelebilir!
 
-Sitenin varsayılan yükleme ekranının yerine, uygulamaya özel, **animasyonlu ve şık bir açılış/yükleme ekranı** getirmeyi hedefler. Sizi düz bir boş ekranla değil, akıcı bir karşılama animasyonuyla karşılamak amacıyla **video/MP4 tabanlı** animasyonlar da desteklenecek.
+Sitenin varsayılan yükleme ekranının yerine, uygulamaya özel, **animasyonlu ve şık bir açılış/yükleme ekranı** getirmeyi hedefler. Sizi düz bir yükleme ekranı değil, akıcı bir karşılama animasyonuyla karşılamak amacıyla **mp4 tabanlı** animasyonlar da destekler.
 
 ### <img src="https://api.iconify.design/fluent/apps-24-filled.svg?color=%2362cdfe&width=22&height=22" width="22" />&nbsp; Sistem Tepsisi (Tray) Entegrasyonu
 
