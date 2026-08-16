@@ -1,8 +1,0 @@
-[[permission]]
-identifier = "allow-resolve-turkanime-embed"
-description = "Allows the frontend to invoke the resolve_turkanime_embed command (Link Ayıklayıcı — hidden webview embed decrypt)"
-
-[permission.commands]
-allow = [
-    "resolve_turkanime_embed"
-]

@@ -1,8 +1,0 @@
-[[permission]]
-identifier = "allow-resolve-anizm-episode"
-description = "Allows the frontend to invoke the resolve_anizm_episode command (Link Ayıklayıcı — Anizm hidden webview resolver)"
-
-[permission.commands]
-allow = [
-    "resolve_anizm_episode"
-]

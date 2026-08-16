@@ -1,8 +1,0 @@
-[[permission]]
-identifier = "allow-list-tranimeizle-season-episodes"
-description = "Allows the frontend to invoke the list_tranimeizle_season_episodes command (Link Ayıklayıcı — TR Anime İzle hidden webview episode listing)"
-
-[permission.commands]
-allow = [
-    "list_tranimeizle_season_episodes"
-]

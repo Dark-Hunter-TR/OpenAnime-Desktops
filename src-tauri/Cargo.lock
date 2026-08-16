@@ -2650,7 +2650,7 @@ dependencies = [
 
 [[package]]
 name = "openanime"
-version = "1.1.1-alpha.1"
+version = "1.1.2"
 dependencies = [
  "base64 0.22.1",
  "discord-rich-presence",

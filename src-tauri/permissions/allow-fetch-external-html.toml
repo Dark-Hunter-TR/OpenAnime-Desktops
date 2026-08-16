@@ -1,8 +1,0 @@
-[[permission]]
-identifier = "allow-fetch-external-html"
-description = "Allows the frontend to invoke the fetch_external_html command (Link Ayıklayıcı — turkanime.tv allowlist)"
-
-[permission.commands]
-allow = [
-    "fetch_external_html"
-]

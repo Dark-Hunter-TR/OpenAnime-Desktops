@@ -132,7 +132,15 @@
   // ── Ana geçiş ──────────────────────────────────────────────────
   function applyBackgroundState(mode) {
     if (mode !== "foreground" && mode !== "media" && mode !== "hidden") return;
-    if (_bgMode === mode) return; // yinelenen sinyal — iş yapma
+    // "foreground" sinyali için guard ATLANIR: X ile kapatıldığında sayfa
+    // /settings'e navigasyon yapılıyor ve yeni JS context'inde _bgMode varsayılan
+    // "foreground" ile başlıyor. Ardından TrySuspend motoru donduruyor. Geri
+    // açılınca Resume() + emit("foreground") gönderildiğinde _bgMode zaten
+    // "foreground" olduğu için eski guard syncTimers'ı ATLIYORDU — sonuç:
+    // TrySuspend ile donmuş timer'lar yeniden başlamıyordu ve inject bozuluyordu.
+    // "foreground" için HER ZAMAN syncTimers çalışmalı; fazladan çağrı sadece
+    // _bgTimers dizisini tarar, performans etkisi yok.
+    if (mode !== "foreground" && _bgMode === mode) return;
     _bgMode = mode;
 
     if (mode === "hidden") {

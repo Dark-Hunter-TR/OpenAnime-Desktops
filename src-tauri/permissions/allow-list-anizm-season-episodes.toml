@@ -1,8 +1,0 @@
-[[permission]]
-identifier = "allow-list-anizm-season-episodes"
-description = "Allows the frontend to invoke the list_anizm_season_episodes command (Link Ayıklayıcı — Anizm hidden webview episode listing)"
-
-[permission.commands]
-allow = [
-    "list_anizm_season_episodes"
-]

@@ -1,8 +1,0 @@
-[[permission]]
-identifier = "allow-resolve-animecix-episode"
-description = "Allows the frontend to invoke the resolve_animecix_episode command (Link Ayıklayıcı — AnimeCix hidden webview + tau-video.xyz resolver)"
-
-[permission.commands]
-allow = [
-    "resolve_animecix_episode"
-]
