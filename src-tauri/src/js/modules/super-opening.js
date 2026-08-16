@@ -409,7 +409,7 @@
    * @returns {Promise<void>} animasyon (dönüş + bekleme) bitince resolve olur
    */
   function playLogoAnimatorIntro(overlay) {
-    return new Promise((resolveRaw) => {
+    return new Promise(async (resolveRaw) => {
       // Güvenlik zaman aşımı: video varyantındaki 15sn'lik watchdog'un eşi.
       // engine.ready (waitForLink) kendi içinde 3sn'de pes ediyor olsa da,
       // burası son çare — WebGL zincirinde öngörülemeyen bir yerde (texture
@@ -448,7 +448,7 @@
       `;
       overlay.appendChild(canvas);
 
-      const engine = initOpenAnimeLogoAnimator(canvas);
+      const engine = await initOpenAnimeLogoAnimator(canvas);
       if (!engine) {
         console.warn("[Süper Açılış] WebGL başlatılamadı, açılış geçiliyor.");
         resolve();

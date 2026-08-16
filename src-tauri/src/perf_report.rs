@@ -8,7 +8,7 @@
 
 #![cfg(target_os = "windows")]
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use tauri::{AppHandle, Manager};
@@ -76,26 +76,29 @@ pub fn report(app: &AppHandle) {
     // çocukları (renderer/GPU/utility) — perf_mode.rs'teki yaklaşımla aynı.
     let mut pids = vec![std::process::id()];
 
-    let browser_pids: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+    // WebView2 browser PID'lerini topla. `with_webview` closure'ı ana thread'e
+    // ASENKRON gönderdiği için sonucu Arc<Mutex> üzerinden SENKRON okumak boş
+    // döner (closure henüz çalışmadan okunur → rapor hep "1 süreç" gösterirdi).
+    // Kanal kurup TÜM closure'lar bitene kadar bekleriz.
+    let (tx, rx) = std::sync::mpsc::channel::<u32>();
     for (_, win) in app.webview_windows() {
-        let bp = browser_pids.clone();
+        let tx = tx.clone();
         let _ = win.with_webview(move |webview| unsafe {
             use windows_core::Interface;
             let controller = webview.controller();
-            if Interface::as_raw(&controller).is_null() {
-                return;
-            }
-            if let Ok(core) = controller.CoreWebView2() {
+            let pid = if Interface::as_raw(&controller).is_null() {
+                0
+            } else if let Ok(core) = controller.CoreWebView2() {
                 let mut pid: u32 = 0;
-                if core.BrowserProcessId(&mut pid).is_ok() && pid != 0 {
-                    if let Ok(mut v) = bp.lock() {
-                        v.push(pid);
-                    }
-                }
-            }
+                if core.BrowserProcessId(&mut pid).is_ok() { pid } else { 0 }
+            } else {
+                0
+            };
+            let _ = tx.send(pid);
         });
     }
-    let browsers: Vec<u32> = browser_pids.lock().map(|v| v.clone()).unwrap_or_default();
+    drop(tx);
+    let browsers: Vec<u32> = rx.iter().filter(|&p| p != 0).collect();
     for bpid in &browsers {
         pids.extend(perf_mode::webview_process_tree(*bpid));
     }

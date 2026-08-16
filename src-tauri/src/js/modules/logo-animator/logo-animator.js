@@ -192,7 +192,22 @@ void main() {
  * @param {HTMLCanvasElement} canvas
  * @returns {{ ready: Promise<void>, renderFrame: (progress: number) => void } | null}
  */
-function initOpenAnimeLogoAnimator(canvas) {
+async function loadLogoTextures() {
+  try {
+    const src = await window.__TAURI__.core.invoke("oa_get_logo_textures");
+    // src = textures.js içeriği (iki `const ..._B64 = "data:..."` bildirimi).
+    const fn = new Function(
+      src +
+      "\nreturn { spin: OPENANIME_LOGO_SPIN_TEXTURE_B64, center: OPENANIME_LOGO_CENTER_TEXTURE_B64 };"
+    );
+    return fn();
+  } catch (e) {
+    console.warn("[Logo Animator] Doku yüklenemedi:", e);
+    return null;
+  }
+}
+
+async function initOpenAnimeLogoAnimator(canvas) {
   const gl = canvas.getContext("webgl", {
     alpha: true,
     premultipliedAlpha: false,
@@ -276,10 +291,17 @@ function initOpenAnimeLogoAnimator(canvas) {
     return { texture, ready };
   }
 
-  // data: URI'ler — ağ isteği değildir, WebView2'nin Private Network Access
-  // korumasına takılmaz (bkz. textures.js).
-  const spin = loadTexture(OPENANIME_LOGO_SPIN_TEXTURE_B64);
-  const centerTex = loadTexture(OPENANIME_LOGO_CENTER_TEXTURE_B64);
+  // Dokular init script'te gömülü DEĞİL — "Muptezel Anime" varyantı ilk kez
+  // çalıştığında Rust'tan lazy çekilir. Böylece ~244KB base64 her webview'da
+  // parse edilip bellekte tutulmaz (bkz. oa_get_logo_textures). data: URI
+  // oldukları için ağ isteği değildir, WebView2 PNA korumasına takılmaz.
+  const textures = await loadLogoTextures();
+  if (!textures) {
+    console.warn("[Logo Animator] Dokular alınamadı, açılış geçiliyor.");
+    return null;
+  }
+  const spin = loadTexture(textures.spin);
+  const centerTex = loadTexture(textures.center);
 
   const uniformNames = [
     "u_resolution", "u_spinTexture", "u_centerTexture", "u_time",

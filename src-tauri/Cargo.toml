@@ -46,6 +46,16 @@ windows = { version = "0.61", features = [
   "Win32_System_Console",
 ] }
 
+# Native WebGPU oynatıcı (yalnızca Linux). Windows/macOS'ta WebView2/WebKit
+# zaten WebGPU sunar; Linux'ta WebKitGTK sunmadığı için openani.me'nin render
+# pipeline'ını native wgpu ile kopyalarız. Bkz. src/native_player/.
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = "24"
+bytemuck = { version = "1", features = ["derive"] }
+half = "2"
+pollster = "0.4"
+gtk4 = { version = "0.9", features = ["v4_10"] }
+
 # panic = "abort" KULLANILMAZ: async Tauri komutundaki bir panic tüm uygulamayı
 # öldürmesin diye unwinding açık kalır — panic yalnızca o task'ı düşürür.
 [profile.release]

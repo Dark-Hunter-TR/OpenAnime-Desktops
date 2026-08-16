@@ -28,6 +28,8 @@ mod dpi_proxy;
 mod perf_mode;
 #[cfg(target_os = "windows")]
 mod perf_report;
+#[cfg(target_os = "linux")]
+mod native_player;
 mod gpu_info;
 
 /// Performans modu kararı için paylaşılan durum.
@@ -210,6 +212,14 @@ mod gpu_switch_macos {
 /// WebGPU'yu native sağladığından ek bayrağa gerek yok.)
 fn build_init_script() -> String {
     COMMON_INIT_SCRIPT.to_string()
+}
+
+/// Logo animatörü ("Muptezel Anime" splash) base64 dokularını lazy döndürür.
+/// Eskiden COMMON_INIT_SCRIPT'e ~244KB gömülüp her webview'da parse ediliyordu;
+/// artık yalnızca ilgili varyant çalıştığında istenir (bkz. logo-animator.js).
+#[tauri::command]
+fn oa_get_logo_textures() -> String {
+    include_str!("js/modules/logo-animator/textures.js").to_string()
 }
 
 /// Performans modunu mevcut duruma göre yeniden uygula.
@@ -901,17 +911,33 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // "Muptezel Anime" varyantının Canvas render motoru, super-opening.js'in
     // kendi IIFE'sinden de erişilebilmesi için AYNI blokta ondan önce
     // enjekte edilir (sloppy-mode function hoisting sayesinde görünür).
+    // NOT: textures.js (~244KB base64) artık BURAYA gömülmez — yalnızca ilgili
+    // varyant çalıştığında `oa_get_logo_textures` komutuyla lazy çekilir.
     // ──────────────────────────────────────────────
     "{\n",
-    include_str!("js/modules/logo-animator/textures.js"),
-    "\n",
     include_str!("js/modules/logo-animator/logo-animator.js"),
     "\n",
     include_str!("js/modules/super-opening.js"),
     "\n}\n",
 
     // ──────────────────────────────────────────────
-    // BLOK 6C: WebGPU ADAPTER ALGILAMA
+    // BLOK 6C: WEBGPU PIPELINE TEŞHİS ARACI (yalnızca window.__oaInspectWebGPU=true)
+    // openani.me'nin kendi WebGPU oynatıcısını tersine mühendislik için GEÇİCİ
+    // bir teşhis aracı. GPUDevice/GPUCanvasContext/GPUCommandEncoder üzerindeki
+    // shader/doku/pass çağrılarını yakalar. Varsayılan KAPALI — hook'lar her
+    // sayfada kurulur ama yalnızca bayrak açıkken kayıt üretir (sıfır yan etki).
+    //
+    // NEDEN BURADA: site kendi device'ını isteyip ht.init()'i çalıştırmadan ÖNCE
+    // hook'ların kurulu olması şart. Bu blok document-start'ta çalışır ve
+    // webgpu-detect'ten bile önce gelir (adapter seçiminden önce). Log'lar
+    // oa_js_log → dbg_log! üzerinden gider, yani yalnızca dev build'de ya da
+    // OA_DEBUG=1 ile session loguna düşer (bkz. logger.rs).
+    // ──────────────────────────────────────────────
+    include_str!("js/modules/webgpu-inspector.js"),
+    "\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 6D: WebGPU ADAPTER ALGILAMA
     // navigator.gpu.requestAdapter() ile WebGPU'nun hangi GPU'yu kullandığını
     // tespit eder ve Rust tarafına bildirir. (Super Opening'den sonra, video
     // bloklarından önce gelir — GPU seçiminin ekrandaki ilk içerikten önce
@@ -993,11 +1019,11 @@ const COMMON_INIT_SCRIPT: &str = concat!(
 );
 
 #[cfg(target_os = "windows")]
-pub const WINDOWS_BASE_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=1024\" --force-gpu-selection=high-performance --force_high_performance_gpu";
+pub const WINDOWS_BASE_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=134217728 --media-cache-size=67108864 --js-flags=\"--max-old-space-size=512\" --force-gpu-selection=high-performance --force_high_performance_gpu";
 
 /// Proxy aktifken kullanılacak browser args
 #[cfg(target_os = "windows")]
-pub const WINDOWS_PROXY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling,CanvasOopRasterization --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=1073741824 --media-cache-size=536870912 --js-flags=\"--max-old-space-size=1024\" --force-gpu-selection=high-performance --force_high_performance_gpu --proxy-server=http://127.0.0.1:1453";
+pub const WINDOWS_PROXY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=134217728 --media-cache-size=67108864 --js-flags=\"--max-old-space-size=512\" --force-gpu-selection=high-performance --force_high_performance_gpu --proxy-server=http://127.0.0.1:1453";
 
 pub(crate) fn platform_user_agent() -> &'static str {
     #[cfg(target_os = "windows")]
@@ -1469,6 +1495,44 @@ fn oa_js_log(level: String, msg: String) {
             dbg_log!("[JS] mesaj limiti (300) doldu — sonraki JS logları bastırılıyor");
         }
     }
+}
+
+/// WebGPU teşhis aracının (webgpu-inspector.js) yakaladığı binary veriyi
+/// (ör. 512×512 LUT renk tablosu) base64 string olarak alıp dosyaya yazar.
+/// Dönen yol app_local_data_dir/captures/ altındadır — böylece büyük binary
+/// veri chat'e yapıştırılmadan doğrudan dosyadan okunabilir.
+#[tauri::command]
+fn oa_save_webgpu_capture(
+    name: String,
+    data_base64: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    use base64::Engine as _;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| format!("base64 çözülemedi: {}", e))?;
+
+    let dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("veri dizini alınamadı: {}", e))?
+        .join("captures");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("captures dizini oluşturulamadı: {}", e))?;
+
+    // Dosya adını güvenli tut (yalnızca alfanumerik + -_. ; yol gezintisini önler).
+    let safe: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .take(64)
+        .collect();
+    let safe = if safe.is_empty() { "capture.bin".to_string() } else { safe };
+
+    let path = dir.join(safe);
+    std::fs::write(&path, &bytes).map_err(|e| format!("dosya yazılamadı: {}", e))?;
+
+    dbg_log!("[WebGPU Inspect] Capture kaydedildi: {}", path.display());
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -2167,6 +2231,10 @@ pub fn run() {
             read_file_head,
             // JS hata köprüsü (webview console/onerror → terminal log)
             oa_js_log,
+            // WebGPU teşhis — binary capture (LUT) dosyaya yaz
+            oa_save_webgpu_capture,
+            // Logo animatörü base64 dokuları (lazy — bkz. oa_get_logo_textures)
+            oa_get_logo_textures,
             // Performans/verimlilik modu — JS oynatıcı durumunu bildirir
             oa_set_player_playing,
             // GPU Bilgisi
