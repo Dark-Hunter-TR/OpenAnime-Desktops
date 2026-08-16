@@ -172,6 +172,9 @@ Sitenin varsayılan yükleme ekranının yerine, uygulamaya özel, **animasyonlu
 > [!WARNING]
 > Bu özellik **deneysel geliştirme aşamasındadır**, henüz kararlı sürümde yer almamaktadır. Arayüz ve işlevsellik detayları değişebilir.
 
+> [!NOTE]
+> Yakında **OpenAnime** topluluğunun kendisine veya başkalarına özel temalar oluşturmasını kolaylaştıracak bir araç yayınlayacağız. Böylece herkes kendi temasını daha rahat oluşturabilecek.
+
 OpenAnime topluluğunun geliştirdiği siteye özel temaları uygulama içinden keşfedip yükleyebileceğiniz bir **Tema Sayfası** hedeflenmektedir:
 
 - Temalar bir **GitHub reposu** yapısında barındırılır; uygulama JSON tema tanımlarını yerel veriden (`themes/`) okuyup uygular.
