@@ -6,6 +6,7 @@
 // Bu yöntem Windows API tip uyumsuzluklarından etkilenmez.
 
 use std::sync::Mutex;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::process::Command;
 
 use serde::Serialize;

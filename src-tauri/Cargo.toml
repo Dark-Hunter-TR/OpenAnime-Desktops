@@ -54,7 +54,7 @@ wgpu = "24"
 bytemuck = { version = "1", features = ["derive"] }
 half = "2"
 pollster = "0.4"
-gtk4 = { version = "0.9", features = ["v4_10"] }
+winit = "0.29"
 
 # panic = "abort" KULLANILMAZ: async Tauri komutundaki bir panic tüm uygulamayı
 # öldürmesin diye unwinding açık kalır — panic yalnızca o task'ı düşürür.
