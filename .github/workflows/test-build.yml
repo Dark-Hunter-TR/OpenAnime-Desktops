@@ -12,6 +12,7 @@ on:
           - all
           - windows-latest
           - macos-latest
+          - ubuntu-latest
       build_mode:
         description: 'Build modu (test-release = hızlı, release = full opt)'
         required: true
@@ -171,6 +172,85 @@ jobs:
         with:
           name: macOS-Universal-${{ github.event.inputs.build_mode }}
           path: src-tauri/target/universal-apple-darwin/${{ github.event.inputs.build_mode }}/bundle
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux:
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ubuntu-latest'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Tauri v2 (webkit2gtk-4.1) + native_player (gtk4 + wgpu) için sistem bağımlılıkları.
+      # libegl1-mesa-dev: wgpu'nun GLES arka ucu (Vulkan ash ile dinamik yüklenir,
+      # ama EGL için başlık gerekebilir).
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-4-dev \
+            libglib2.0-dev \
+            libegl1-mesa-dev \
+            pkg-config
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: linux-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            linux-cargo-
+
+      - name: Cache Bun
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun
+          key: linux-bun-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            linux-bun-
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseDraft: false
+          prerelease: false
+          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
+
+      - name: Upload artifacts
+        if: github.event.inputs.upload_artifacts == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Linux-x64-${{ github.event.inputs.build_mode }}
+          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
 

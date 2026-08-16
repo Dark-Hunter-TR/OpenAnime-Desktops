@@ -19,7 +19,7 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["nsis", "dmg", "app"],
+    "targets": ["nsis", "dmg", "app", "deb", "appimage"],
     "resources": {
       "../static/superlogo.mp4": "superlogo.mp4"
     },
