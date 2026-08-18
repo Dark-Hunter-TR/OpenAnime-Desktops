@@ -1,0 +1,8 @@
+# JS hata köprüsü izni: webview (uzak origin dahil) console.error/warn,
+# window.onerror ve shim kilometre taşlarını oa_js_log ile terminal/session
+# loguna akıtabilsin. Bu izin YOKKEN tüm JS tanılama logları sessizce
+# reddediliyordu — sahadaki "loglarda hiç [JS] satırı yok" körlüğünün kökü.
+[[permission]]
+identifier = "allow-js-log"
+description = "Webview'ın JS hata/tanılama mesajlarını oturum loguna yazmasına izin verir"
+commands.allow = ["oa_js_log"]

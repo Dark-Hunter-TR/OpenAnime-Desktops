@@ -63,6 +63,17 @@
     } catch (e) {}
   }
 
+  // NATIVE-PRIMARY: navigator.gpu shim'i HİÇ kurulmaz — site düz HTML5 <video>
+  // kullanır (kırılgan/naga-uyumsuz site WebGPU'su, frame-gen çökmesi, f16/
+  // rgba16float sorunları tamamen devre dışı). Videoyu webgpu-bridge.js yakalar,
+  // GStreamer decode + kendi wgpu renderer'ımız overlay'e basar. JS log köprüsü
+  // (yukarıda) yine aktif kalır. Bu return'den SONRAKİ tüm WebGPU sınıfları ve
+  // navigator.gpu tanımı atlanır.
+  if (window.__OA_NATIVE_PRIMARY__ === true) {
+    oaMilestone("native-primary", "NATIVE-PRIMARY mod — navigator.gpu kurulmuyor; video GStreamer+wgpu native player ile render edilecek.");
+    return;
+  }
+
   // ─────────────────────────────────────────────────────────────────
   // ID Allocator & IPC Helpers
   // ─────────────────────────────────────────────────────────────────
@@ -106,6 +117,7 @@
   // shim'de implement edilmemiş olan üyeleri loglar — gerçek eksik listesi
   // tahmin yerine ölçümle çıkarılır.
   const AUDIT_MODE = (() => {
+    if (window.__OA_WEBGPU_AUDIT__) return true; // OPENANIME_WEBGPU_AUDIT=1 (env)
     try { return localStorage.getItem("openanime_webgpu_audit") === "1"; } catch (e) { return false; }
   })();
   const auditReported = new Set();
@@ -131,11 +143,38 @@
   }
 
   // Transport seviyesinde binary IPC arızası mı, uygulama hatası mı?
+  // "not allowed" (Tauri ACL reddi) de transport arızası sayılır: binary
+  // komut allowlist'te unutulursa base64 yoluna düşülür — aksi halde tek
+  // bir izin eksiği tüm kare/uniform yüklemelerini sessizce öldürüyordu
+  // (sahadaki "siyah ekran + ses var"ın kökü).
   function isBinaryTransportFailure(e) {
     const m = String(e);
     return m.includes("Expected raw binary body")
       || m.includes("Missing/invalid header")
-      || m.includes("invalid args");
+      || m.includes("invalid args")
+      || m.toLowerCase().includes("not allowed");
+  }
+
+  // Video karesi yükle (kaynak HER ZAMAN RGBA8). Hedef texture formatına
+  // (rgba8/bgra8/rgba16float) çevirme Rust'ta yapılır — copyExternalImage /
+  // external texture yolları için. Önce binary, transport arızasında base64.
+  function uploadVideoFrame(textureId, width, height, rgba8) {
+    if (!binaryIpcBroken) {
+      return orderedInvokeBinary("gpu_upload_frame_bin", rgba8, {
+        "x-texture-id": String(textureId),
+        "x-width": String(width),
+        "x-height": String(height)
+      }).catch(e => {
+        if (!isBinaryTransportFailure(e)) throw e;
+        console.warn("[WebGPU Shim] Binary frame upload unavailable, base64 fallback:", e);
+        binaryIpcBroken = true;
+        return uploadVideoFrame(textureId, width, height, rgba8);
+      });
+    }
+    return orderedInvoke("gpu_upload_frame", {
+      textureId, width, height,
+      dataBase64: arrayBufferToBase64(rgba8.buffer.slice(rgba8.byteOffset, rgba8.byteOffset + rgba8.byteLength))
+    });
   }
 
   // Texture'a byte yükle: önce binary, transport arızasında base64 fallback.
@@ -179,6 +218,39 @@
   }
 
   const activeCanvasContexts = new Set();
+
+  // ─────────────────────────────────────────────────────────────────
+  // Kare içerik probe'u — KESİN TEŞHİS
+  // ─────────────────────────────────────────────────────────────────
+  // Siyah ekranın kökü iki ihtimalden biri: (a) kareler texture'a hiç
+  // yazılmıyor, (b) webkit'in MSE/HLS <video>'su 2D canvas'a SİYAH okunuyor
+  // (dmabuf/GPU-decode CPU'ya map edilemiyor — webkit2gtk 2.52.5 + NVIDIA'da
+  // klasik). Bu probe, yakalanan ilk gerçek (siyah-olmayan) kareyi ya da 60
+  // denemede hep-siyah verdictini terminale yazar; hangi ihtimal olduğunu
+  // tahmin değil ÖLÇÜMLE söyler.
+  const __frameProbe = {};
+  function probeFrameContent(tag, u8, w, h) {
+    let st = __frameProbe[tag];
+    if (!st) st = __frameProbe[tag] = { done: false, attempts: 0 };
+    if (st.done) return;
+    st.attempts++;
+    let nonZero = 0;
+    const step = Math.max(4, Math.floor(u8.length / 4 / 1500) * 4);
+    for (let i = 0; i + 2 < u8.length; i += step) {
+      if ((u8[i] | u8[i + 1] | u8[i + 2]) > 8) { nonZero++; if (nonZero > 3) break; }
+    }
+    if (nonZero > 0) {
+      st.done = true;
+      const msg = `[Frame Probe:${tag}] ${w}x${h} deneme#${st.attempts} → GERÇEK KARE yakalandı (webkit video 2D canvas'a okunabiliyor).`;
+      console.log(msg);
+      try { window.__TAURI__.core.invoke("oa_js_log", { level: "info", msg }).catch(() => {}); } catch (e) {}
+    } else if (st.attempts >= 60) {
+      st.done = true;
+      const msg = `[Frame Probe:${tag}] ${w}x${h} 60 denemede kare HEP SİYAH → webkit videosu 2D canvas'a okunAMIYOR (dmabuf/GPU-decode). Native GStreamer decode gerekli.`;
+      console.warn(msg);
+      try { window.__TAURI__.core.invoke("oa_js_log", { level: "warn", msg }).catch(() => {}); } catch (e) {}
+    }
+  }
 
   // Tek pipeline kuralı: native GStreamer player aktifleştiğinde sitenin
   // canvas overlay'leri yıkılır — iki overlay aynı anda asla var olamaz.
@@ -561,9 +633,10 @@
       const id = nextId();
       orderedInvoke("gpu_create_compute_pipeline", {
         id,
-        pipelineLayoutId: descriptor.layout.__id,
+        // layout: "auto" → null (Rust tarafı wgpu otomatik layout kullanır).
+        pipelineLayoutId: (descriptor.layout && descriptor.layout.__id) || null,
         shaderModuleId: descriptor.compute.module.__id,
-        entryPoint: descriptor.compute.entryPoint
+        entryPoint: descriptor.compute.entryPoint || "main"
       }).catch(e => console.error("[WebGPU Shim] createComputePipeline IPC error:", e));
 
       return new GPUComputePipeline(id, this);
@@ -571,11 +644,15 @@
 
     createRenderPipeline(descriptor) {
       const id = nextId();
-      const pipelineLayoutId = descriptor.layout.__id;
+      // layout: "auto" → null (Rust tarafı wgpu otomatik layout kullanır;
+      // site türetilmiş layout'u pipeline.getBindGroupLayout ile alır).
+      const pipelineLayoutId = (descriptor.layout && descriptor.layout.__id) || null;
       const shaderModuleId = descriptor.vertex.module.__id;
-      const vs_entry = descriptor.vertex.entryPoint;
-      const fs_entry = descriptor.fragment.entryPoint;
-      const target_format = descriptor.fragment.targets[0].format;
+      // entryPoint spec'te opsiyonel (tek entry'li modülde atlanabilir) —
+      // undefined JSON'da düşüp "missing required key" hatası üretmesin.
+      const vsEntry = descriptor.vertex.entryPoint || "main";
+      const fsEntry = (descriptor.fragment && descriptor.fragment.entryPoint) || "main";
+      const targetFormat = descriptor.fragment.targets[0].format;
 
       // Vertex buffer layout'larını Rust tarafına aktar (önceden buffers:&[]
       // hardcode'du — vertex buffer kullanan her pipeline sessizce bozuktu).
@@ -589,18 +666,42 @@
         }))
       }));
 
+      // DİKKAT: Tauri v2 komut argümanlarını camelCase bekler — önceden
+      // vs_entry/fs_entry/target_format (snake_case) gönderiliyordu ve HER
+      // render pipeline "missing required key vsEntry" ile reddediliyordu
+      // (sitenin video pipeline'ının hiç kurulamamasının sebebi).
       orderedInvoke("gpu_create_render_pipeline", {
         id,
         pipelineLayoutId,
         shaderModuleId,
-        vs_entry,
-        fs_entry,
-        target_format,
+        vsEntry,
+        fsEntry,
+        targetFormat,
         vertexBuffers: vertexBuffers.length ? vertexBuffers : null,
         topology: (descriptor.primitive && descriptor.primitive.topology) || null
       }).catch(e => console.error("[WebGPU Shim] createRenderPipeline IPC error:", e));
 
       return new GPURenderPipeline(id, this);
+    }
+
+    // Spec'teki async varyantlar: sync kurulumun Promise sarımı. Bunlar
+    // eksikken site createRenderPipelineAsync().then(...) çağırdığı anda
+    // TypeError fırlıyor ve player init'i sessizce ölüyordu (oa_js_log da
+    // ACL'de engelli olduğundan iz bırakmadan).
+    createComputePipelineAsync(descriptor) {
+      try {
+        return Promise.resolve(this.createComputePipeline(descriptor));
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    }
+
+    createRenderPipelineAsync(descriptor) {
+      try {
+        return Promise.resolve(this.createRenderPipeline(descriptor));
+      } catch (e) {
+        return Promise.reject(e);
+      }
     }
 
     createCommandEncoder(descriptor) {
@@ -642,7 +743,12 @@
         const texture = this.createTexture({
           size: [w, h, 1],
           format: "rgba8unorm",
-          usage: 4 | 8 | 16 // COPY_SRC | COPY_DST | TEXTURE_BINDING
+          // WebGPU spec bit değerleri: COPY_SRC=1, COPY_DST=2, TEXTURE_BINDING=4.
+          // Önceden 4|8|16 yazılmıştı (= TEXTURE_BINDING|STORAGE_BINDING|
+          // RENDER_ATTACHMENT): COPY_DST eksik kalınca her kare yüklemesi
+          // "do not contain required usage flags COPY_DST" validation
+          // hatasıyla düşüyordu — siyah ekran + ses'in son halkası.
+          usage: 1 | 2 | 4 // COPY_SRC | COPY_DST | TEXTURE_BINDING
         });
         const textureView = texture.createView();
 
@@ -716,6 +822,7 @@
         cached.ctx2d.drawImage(video, 0, 0, w, h);
         const imgData = cached.ctx2d.getImageData(0, 0, w, h);
         const frameBytes = new Uint8Array(imgData.data.buffer);
+        probeFrameContent("importExternalTexture", frameBytes, w, h);
 
         cached.uploadInFlight = true;
         cached.lastUploadTs = now;
@@ -782,6 +889,65 @@
       uploadBufferBytes(buffer.__id, bufferOffset, subArray)
         .catch(e => console.error("[WebGPU Shim] queue writeBuffer IPC error:", e));
     }
+    // queue.copyExternalImageToTexture: video/canvas/ImageBitmap karesini
+    // texture'a kopyalar. Bu metod YOKKEN sessiz no-op kalıyordu — site bu
+    // yolu kullanıyorsa canvas hep siyah kalır (present akar ama piksel yok).
+    // Kareler 2D canvas üzerinden okunup IPC ile yüklenir; in-flight kapısı
+    // upload birikmesini engeller.
+    copyExternalImageToTexture(source, destination, copySize) {
+      const src = source && source.source;
+      const texture = destination && destination.texture;
+      if (!src || !texture || !texture.__id) return;
+      oaMilestone("ceitt", "copyExternalImageToTexture yolu aktif — kareler 2D canvas üzerinden kopyalanıyor");
+
+      let w = 0, h = 0;
+      if (copySize) {
+        w = copySize[0] || copySize.width || 0;
+        h = copySize[1] || copySize.height || 0;
+      }
+      if (!w) w = src.videoWidth || src.displayWidth || src.width || texture.width;
+      if (!h) h = src.videoHeight || src.displayHeight || src.height || texture.height;
+      w = Math.max(1, Math.min(w, texture.width));
+      h = Math.max(1, Math.min(h, texture.height));
+
+      // In-flight kilidi ve 2D canvas TEXTURE BAŞINA olmalı. Önceden queue'da
+      // tek paylaşımlı durum vardı: site aynı anda birden çok texture'a kopya
+      // yapınca (örn. 512x512 yardımcı + 1280x720 ANA video texture'ı `l`)
+      // biri diğerinin kilidini tutuyor, ana video karesi sürekli atlanıyordu
+      // → rgba16float video texture'ı boş → siyah. (Kaynak incelemesi:
+      // default yol copyExternalImageToTexture ile rgba16float `l`'yi besliyor.)
+      if (!this.__ceittStates) this.__ceittStates = new Map();
+      let st = this.__ceittStates.get(texture.__id);
+      if (!st) {
+        st = { inFlight: false, canvas: null, ctx: null };
+        this.__ceittStates.set(texture.__id, st);
+      }
+      if (st.inFlight) return;
+      try {
+        if (!st.canvas) {
+          st.canvas = document.createElement("canvas");
+          st.ctx = st.canvas.getContext("2d", { willReadFrequently: true });
+        }
+        if (st.canvas.width !== w || st.canvas.height !== h) {
+          st.canvas.width = w;
+          st.canvas.height = h;
+        }
+        // Kaynak kareyi RGBA8 olarak yakala; hedef texture formatına (rgba8/
+        // bgra8/rgba16float) çevirme Rust tarafında yapılır. Önceden burada
+        // sadece rgba8 destekleniyordu ve rgba16float (site HDR video texture'ı)
+        // atlanıyordu → o texture hep boş → siyah ekranın kökü buydu.
+        st.ctx.drawImage(src, 0, 0, w, h);
+        const frameU8 = new Uint8Array(st.ctx.getImageData(0, 0, w, h).data.buffer);
+        probeFrameContent(`copyExternalImage:${w}x${h}`, frameU8, w, h);
+        st.inFlight = true;
+        uploadVideoFrame(texture.__id, w, h, frameU8)
+          .catch(e => console.error("[WebGPU Shim] copyExternalImageToTexture upload error:", e))
+          .finally(() => { st.inFlight = false; });
+      } catch (err) {
+        st.inFlight = false;
+        console.error("[WebGPU Shim] copyExternalImageToTexture failed:", err);
+      }
+    }
     writeTexture(destination, data, dataLayout, size) {
       const textureId = destination.texture.__id;
       const width = size[0] || size.width || 1;
@@ -824,17 +990,30 @@
       const actualSize = size > 0 ? size : this.size - offset;
       try {
         if (!binaryIpcBroken && mode === 1 /* READ */) {
-          // Binary okuma yolu: ham ArrayBuffer yanıtı, base64 yok.
-          const buf = await orderedInvoke("gpu_buffer_read_bin", {
-            bufferId: this.__id,
-            offset,
-            size: actualSize
-          });
-          if (buf instanceof ArrayBuffer) {
-            this.__mappedData = buf;
-            return;
+          // Binary okuma yolu: ham ArrayBuffer yanıtı, base64 yok. Binary yol
+          // HERHANGİ bir sebeple reddedilirse (ACL/transport) base64 yoluna
+          // düşülür — önceden hata düz throw ediliyordu ve sitenin GPU
+          // özellik-tespit readback'i (frame-gen init) daha ilk adımda
+          // ölüyordu.
+          try {
+            const buf = await orderedInvoke("gpu_buffer_read_bin", {
+              bufferId: this.__id,
+              offset,
+              size: actualSize
+            });
+            if (buf instanceof ArrayBuffer) {
+              this.__mappedData = buf;
+              return;
+            }
+            // Beklenmedik yanıt tipi — base64 yoluna düş.
+          } catch (binErr) {
+            if (isBinaryTransportFailure(binErr)) {
+              console.warn("[WebGPU Shim] Binary buffer read unavailable, falling back to base64:", binErr);
+              binaryIpcBroken = true;
+            } else {
+              throw binErr;
+            }
           }
-          // Beklenmedik yanıt tipi — base64 yoluna düş.
         }
         const base64Data = await orderedInvoke("gpu_buffer_map_async", {
           bufferId: this.__id,
@@ -965,10 +1144,20 @@
     }
   }
 
+  // pipeline.getBindGroupLayout(i): layout "auto" kullanan siteler bind
+  // group'larını ancak bu türetilmiş layout ile kurabilir. Bu metod yokken
+  // site "getBindGroupLayout is not a function" TypeError'ıyla ölüyordu.
   class GPUComputePipeline {
     constructor(id, device) {
       this.__id = id;
       this.device = device;
+    }
+    getBindGroupLayout(index) {
+      const id = nextId();
+      orderedInvoke("gpu_pipeline_get_bind_group_layout", {
+        id, pipelineId: this.__id, kind: "compute", index
+      }).catch(e => console.error("[WebGPU Shim] getBindGroupLayout (compute) IPC error:", e));
+      return new GPUBindGroupLayout(id, this.device);
     }
   }
 
@@ -976,6 +1165,13 @@
     constructor(id, device) {
       this.__id = id;
       this.device = device;
+    }
+    getBindGroupLayout(index) {
+      const id = nextId();
+      orderedInvoke("gpu_pipeline_get_bind_group_layout", {
+        id, pipelineId: this.__id, kind: "render", index
+      }).catch(e => console.error("[WebGPU Shim] getBindGroupLayout (render) IPC error:", e));
+      return new GPUBindGroupLayout(id, this.device);
     }
   }
 
@@ -1152,12 +1348,54 @@
         return;
       }
 
+      // Hayalet context temizliği: React remount vb. eski canvas'ı DOM'dan
+      // koparıp yenisini yaratıyor; kopuk canvas'ların overlay'leri yıkılmazsa
+      // 2'lik overlay limiti hayaletlerle doluyor ve yeni player canvas'ı
+      // "canvas overlay limit reached" ile hiç kurulamıyordu.
+      activeCanvasContexts.forEach(ctx => {
+        if (ctx !== this && ctx.canvas && !ctx.canvas.isConnected) {
+          const staleId = ctx.__id;
+          ctx.__id = 0;
+          if (ctx.resizeObserver) {
+            ctx.resizeObserver.disconnect();
+            ctx.resizeObserver = null;
+          }
+          activeCanvasContexts.delete(ctx);
+          if (staleId) {
+            console.log(`[WebGPU Shim] DOM'dan kopmuş canvas context yıkıldı: ctx=${staleId}`);
+            orderedInvoke("gpu_destroy_resource", { kind: "canvas_context", id: staleId }).catch(() => {});
+          }
+        }
+      });
+
       const rect = this.canvas.getBoundingClientRect();
       const x = Math.round(rect.left);
       const y = Math.round(rect.top);
       const w = Math.round(rect.width);
       const h = Math.round(rect.height);
       oaMilestone("configure-start", `configure başladı — ${w}x${h} @ ${x},${y}, format=${this.format}`);
+
+      // Yeniden configure (spec: aynı context'te tekrar çağrılabilir):
+      // mevcut overlay penceresi KORUNUR, yalnız bounds+format güncellenir.
+      // Önceden her çağrı yeni overlay yaratıyordu — pencere sızıntısı ve
+      // aynı canvas için çift context (2'lik limitin anında dolması).
+      if (this.__id) {
+        try {
+          await window.__TAURI__.core.invoke("gpu_canvas_sync_bounds", {
+            contextId: this.__id, x, y, width: w, height: h
+          });
+          const actualFormat = await window.__TAURI__.core.invoke("gpu_canvas_configure", {
+            contextId: this.__id,
+            format: this.format
+          });
+          if (actualFormat && actualFormat !== this.format) {
+            this.format = actualFormat;
+          }
+        } catch (e) {
+          console.error("[WebGPU Shim] reconfigure failed:", e);
+        }
+        return;
+      }
 
       try {
         const id = await window.__TAURI__.core.invoke("gpu_canvas_get_context", {
@@ -1254,6 +1492,14 @@
       if (this.resizeObserver) {
         this.resizeObserver.disconnect();
         this.resizeObserver = null;
+      }
+      // Rust registry'deki context + overlay penceresini gerçekten serbest
+      // bırak — önceden yalnız JS set'inden çıkarılıyor, overlay sonsuza dek
+      // yaşıyor ve 2'lik limiti dolduruyordu.
+      const id = this.__id;
+      this.__id = 0;
+      if (id) {
+        orderedInvoke("gpu_destroy_resource", { kind: "canvas_context", id }).catch(() => {});
       }
     }
   }

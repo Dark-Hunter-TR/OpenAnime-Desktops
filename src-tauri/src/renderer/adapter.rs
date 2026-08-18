@@ -14,6 +14,13 @@ pub async fn select_adapter(
     // döner (Vulkan-only instance'ta GL no-op).
     let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::GL);
 
+    // HİBRİT PRIME PRESENT DÜZELTMESİ (native player yolu): iki GPU da sunum
+    // yapabildiğinde iGPU tercih edilir — compositor'un GPU'su odur; dGPU'dan
+    // present siyah/kilitli pencereye yol açıyordu. OPENANIME_PREFER_DGPU=1
+    // eski davranışa döndürür. (webgpu_bridge.rs'teki seçimle aynı mantık.)
+    let prefer_dgpu = std::env::var("OPENANIME_PREFER_DGPU")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let best_adapter = adapters
         .into_iter()
         .max_by_key(|a| {
@@ -27,8 +34,8 @@ pub async fn select_adapter(
                 _ => 0,
             };
             let type_score = match info.device_type {
-                wgpu::DeviceType::DiscreteGpu => 2,
-                wgpu::DeviceType::IntegratedGpu => 1,
+                wgpu::DeviceType::DiscreteGpu => if prefer_dgpu { 2 } else { 1 },
+                wgpu::DeviceType::IntegratedGpu => if prefer_dgpu { 1 } else { 2 },
                 _ => 0,
             };
             present_score + backend_score + type_score

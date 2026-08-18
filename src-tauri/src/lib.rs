@@ -140,11 +140,62 @@ mod gpu_switch_macos {
 /// __OA_OVERLAY_OK__: overlay pencereleri konumlandırılabiliyor mu
 /// (Wayland'da false → shim navigator.gpu'yu hiç kurmaz, site HTML5'e döner).
 fn build_init_script() -> String {
+    // OPENANIME_DISABLE_INJECT=1: tanılama bayrağı — COMMON_INIT_SCRIPT'in
+    // tamamı atlanır (çıplak webview). "WebProcess çökmesini bizim enjekte
+    // ettiğimiz JS mi tetikliyor?" sorusunu izole etmek için.
+    let inject_disabled = std::env::var("OPENANIME_DISABLE_INJECT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if inject_disabled {
+        println!("[Display] OPENANIME_DISABLE_INJECT=1 — init script enjeksiyonu KAPALI (tanılama modu)");
+        return "window.__OA_OVERLAY_OK__=false;".to_string();
+    }
+    // OPENANIME_DISABLE_WEBGPU=1: tanılama bayrağı — shim navigator.gpu'yu hiç
+    // kurmaz, dolayısıyla wgpu instance'ı/NVIDIA ICD'si proseste hiç yüklenmez.
+    // "Render donması WebGPU köprüsünden mi geliyor?" sorusunu izole etmek için.
+    let webgpu_disabled = std::env::var("OPENANIME_DISABLE_WEBGPU")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if webgpu_disabled {
+        println!("[Display] OPENANIME_DISABLE_WEBGPU=1 — WebGPU shim devre dışı (tanılama modu)");
+    }
     #[cfg(target_os = "linux")]
-    let overlay_flag = overlays_supported();
+    let overlay_flag = overlays_supported() && !webgpu_disabled;
     #[cfg(not(target_os = "linux"))]
-    let overlay_flag = true;
-    format!("window.__OA_OVERLAY_OK__={};\n{}", overlay_flag, COMMON_INIT_SCRIPT)
+    let overlay_flag = !webgpu_disabled;
+    // OPENANIME_WEBGPU_AUDIT=1: shim audit modu — sitenin erişip de shim'de
+    // implement edilmemiş olan üyeleri console.warn→oa_js_log ile terminale
+    // döker (localStorage bayrağının devtools'suz alternatifi).
+    let audit = std::env::var("OPENANIME_WEBGPU_AUDIT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if audit {
+        println!("[Display] OPENANIME_WEBGPU_AUDIT=1 — WebGPU shim audit modu AÇIK");
+    }
+    // NATIVE-PRIMARY MOD (Linux varsayılan): sitenin WebGPU shim'i (navigator.gpu)
+    // HİÇ kurulmaz → site düz HTML5 <video>'ya döner (kırılgan/naga-uyumsuz site
+    // shader'ları, frame-gen çökmesi, rgba16float/f16 sorunları tamamen devre
+    // dışı). Bunun yerine videoyu GStreamer decode edip KENDİ wgpu renderer'ımızla
+    // (upscale + frame-gen, hepsi naga-uyumlu) overlay'e basarız. webgpu-bridge.js
+    // video URL'sini yakalayıp native player'ı otomatik aktive eder.
+    // OPENANIME_NATIVE_PRIMARY=0 → eski site-WebGPU-shim yoluna döner.
+    // WebGPU tümüyle kapalıysa (overlay yok / OPENANIME_DISABLE_WEBGPU) anlamsız.
+    let native_primary = {
+        let disabled_env = std::env::var("OPENANIME_NATIVE_PRIMARY")
+            .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false);
+        overlay_flag && !disabled_env && cfg!(target_os = "linux")
+    };
+    if native_primary {
+        println!("[Display] NATIVE-PRIMARY mod AÇIK — site HTML5'e düşer, video GStreamer+wgpu overlay ile render edilir (site WebGPU shim'i kurulmaz)");
+    }
+    format!(
+        "window.__OA_OVERLAY_OK__={};window.__OA_NATIVE_PRIMARY__={};{}\n{}",
+        overlay_flag,
+        native_primary,
+        if audit { "window.__OA_WEBGPU_AUDIT__=true;" } else { "" },
+        COMMON_INIT_SCRIPT
+    )
 }
 
 const COMMON_INIT_SCRIPT: &str = concat!(
@@ -655,14 +706,14 @@ async fn webgpu_state_changed(window: tauri::WebviewWindow, active: bool, url: S
                     "GStreamer components missing: {:?}",
                     report.missing_elements
                 );
-                eprintln!("[WebGPU Bridge] start_player aborted: {}", err_msg);
+                crate::log!("[WebGPU Bridge] start_player aborted: {}", err_msg);
                 let _ = window.emit("openanime://gst-fallback", err_msg.clone());
                 return Err(err_msg);
             }
 
             let start_paused = paused.unwrap_or(false);
             if let Err(e) = native_render::inner::start_player(&url, window.clone(), start_paused).await {
-                eprintln!("[WebGPU Bridge] start_player failed: {}", e);
+                crate::log!("[WebGPU Bridge] start_player failed: {}", e);
                 // Trigger fallback to HTML5 immediately
                 let _ = window.emit("openanime://gst-fallback", e.clone());
                 return Err(e);
@@ -967,6 +1018,28 @@ pub fn overlays_supported() -> bool {
     *OVERLAYS_SUPPORTED.get().unwrap_or(&false)
 }
 
+/// Prosesin İLK Xlib çağrısı olarak XInitThreads() çalıştırır — GTK init'ten
+/// ve her türlü XOpenDisplay'den ÖNCE çağrılmalıdır. Gerekçe: GDK (GTK3)
+/// XInitThreads çağırmaz; Display kilitleri XOpenDisplay ANINDA thread
+/// desteğine göre kurulduğundan GTK'nın X bağlantısı kilitsiz açılır. Oysa
+/// wgpu/Vulkan WSI (canvas overlay surface'ları + swapchain present, hem
+/// webgpu_bridge hem renderer yolu) aynı GTK Display'ine tokio
+/// thread'lerinden dokunur — kilitsiz bağlantıda bu, GTK ana döngüsüyle veri
+/// yarışıdır ve sahada "uygulama bir anda çizmeyi bırakıyor" (UI donuk, JS/
+/// IPC yaşıyor) olarak görülüyordu. winit tam bu sebepten XInitThreads
+/// çağırır; tao'nun GTK backend'i çağırmaz — açığı burada kapatıyoruz.
+#[cfg(target_os = "linux")]
+fn init_xlib_threads() {
+    if let Ok(xlib) = x11_dl::xlib::Xlib::open() {
+        let status = unsafe { (xlib.XInitThreads)() };
+        println!("[Display] XInitThreads çağrıldı (status={status}) — Xlib çok-thread kilitleri aktif");
+    } else {
+        // libX11 yok (saf Wayland sistemi olabilir) — overlay'ler zaten devre
+        // dışı kalacağından sorun değil.
+        println!("[Display] libX11 açılamadı — XInitThreads atlandı");
+    }
+}
+
 /// Wayland oturumunda GTK'yı X11 backend'ine (XWayland) zorlar.
 /// GTK init'ten ÖNCE çağrılmalıdır. Gerekçe: tao/GTK'da set_position →
 /// gtk_window_move, Wayland'da belgeli no-op'tur; gst_overlay ve
@@ -1015,6 +1088,9 @@ fn configure_display_backend() {
 
 pub fn run() {
     install_crash_logger();
+
+    #[cfg(target_os = "linux")]
+    init_xlib_threads();
 
     #[cfg(target_os = "linux")]
     configure_display_backend();
@@ -1206,8 +1282,14 @@ pub fn run() {
             }
         });
 
-        let main_url = WebviewUrl::External("https://openani.me/".parse().unwrap());
-        log!("[Setup] Ana URL: https://openani.me/");
+        // OPENANIME_START_URL: tanılama — pencereyi doğrudan verilen sayfada
+        // (örn. bir bölüm/player URL'i) açar; player akışı etkileşimsiz test edilir.
+        let start_url = std::env::var("OPENANIME_START_URL")
+            .ok()
+            .and_then(|u| u.parse::<tauri::Url>().ok())
+            .unwrap_or_else(|| "https://openani.me/".parse().unwrap());
+        log!("[Setup] Ana URL: {}", start_url);
+        let main_url = WebviewUrl::External(start_url);
         log!("[Setup] Pencere oluşturuluyor (1280x848, decorations: false)...");
 
         let app_handle = app.handle().clone();
@@ -1245,6 +1327,44 @@ pub fn run() {
         log!("[Setup] Pencere build ediliyor...");
         match win_builder.build() {
             Ok(_window) => {
+                // WebProcess ölümlerini görünür kıl: webkit içerik prosesi
+                // çöktüğünde/öldürüldüğünde pencere "boş renk" kalıyordu ve
+                // wry bu sinyali hiç dinlemediğinden loglarda tek satır iz
+                // yoktu. Sebep (Crashed / ExceededMemoryLimit) loglanır ve
+                // sayfa otomatik yeniden yüklenir (oturum başına en çok 5).
+                #[cfg(target_os = "linux")]
+                {
+                    use webkit2gtk::WebViewExt;
+                    let _ = _window.with_webview(|pw| {
+                        let wv = pw.inner();
+                        // OPENANIME_DISABLE_WEBAUDIO=1 (tanılama): WebAudio'yu
+                        // kapat — sitenin AudioContext tabanlı yolu (audio
+                        // fingerprint + Ses Modları) webkit+gst kombinasyonunda
+                        // WebProcess'i asıp watchdog kill'e yol açabiliyor.
+                        if std::env::var("OPENANIME_DISABLE_WEBAUDIO").map(|v| v == "1").unwrap_or(false) {
+                            use webkit2gtk::SettingsExt;
+                            if let Some(settings) = wv.settings() {
+                                settings.set_enable_webaudio(false);
+                                crate::log!("[WebKit] WebAudio devre dışı bırakıldı (tanılama modu)");
+                            }
+                        }
+                        wv.connect_web_process_terminated(|wv, reason| {
+                            static RELOADS: std::sync::atomic::AtomicU32 =
+                                std::sync::atomic::AtomicU32::new(0);
+                            let n = RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            crate::log!(
+                                "[WebKit] ⚠️ WEB PROCESS SONLANDI — sebep: {:?} (olay #{})",
+                                reason, n + 1
+                            );
+                            if n < 5 {
+                                crate::log!("[WebKit] Sayfa otomatik yeniden yükleniyor...");
+                                wv.reload();
+                            } else {
+                                crate::log!("[WebKit] Reload limiti (5) doldu — otomatik kurtarma durduruldu");
+                            }
+                        });
+                    });
+                }
                 log!("[Setup] ✅ Ana pencere başarıyla oluşturuldu (label: main)");
                 log!("[Setup] WebView URL: https://openani.me/");
                 log!("===== OPENANIME SETUP TAMAM =====");
@@ -1281,10 +1401,20 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             {
                 if label == "main" {
-                    if let tauri::WindowEvent::Moved(_) = event {
-                        let app_for_repos = window.app_handle().clone();
-                        webgpu_bridge::inner::reposition_overlays(&app_for_repos);
-                        native_render::inner::reposition(&app_for_repos);
+                    match event {
+                        tauri::WindowEvent::Moved(_) => {
+                            let app_for_repos = window.app_handle().clone();
+                            webgpu_bridge::inner::reposition_overlays(&app_for_repos);
+                            native_render::inner::reposition(&app_for_repos);
+                        }
+                        // Odak kaybında overlay'leri gizle: always_on_top
+                        // overlay'ler ana pencere arkaya düşünce başka
+                        // uygulamaların üstünde siyah kutu olarak kalıyordu.
+                        tauri::WindowEvent::Focused(focused) => {
+                            webgpu_bridge::inner::set_overlays_visible(*focused);
+                            native_render::inner::set_overlay_visible(*focused);
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -1393,6 +1523,9 @@ pub fn run() {
             webgpu_bridge::inner::gpu_create_bind_group,
             webgpu_bridge::inner::gpu_create_compute_pipeline,
             webgpu_bridge::inner::gpu_create_render_pipeline,
+            webgpu_bridge::inner::gpu_pipeline_get_bind_group_layout,
+            webgpu_bridge::inner::gpu_upload_frame_bin,
+            webgpu_bridge::inner::gpu_upload_frame,
             webgpu_bridge::inner::gpu_create_command_encoder,
             webgpu_bridge::inner::gpu_encoder_begin_compute_pass,
             webgpu_bridge::inner::gpu_encoder_set_compute_pipeline,

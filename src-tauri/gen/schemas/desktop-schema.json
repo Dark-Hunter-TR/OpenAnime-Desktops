@@ -369,6 +369,12 @@
           "markdownDescription": "Allows invoking GPU/GStreamer diagnostics and report commands"
         },
         {
+          "description": "Webview'ın JS hata/tanılama mesajlarını oturum loguna yazmasına izin verir",
+          "type": "string",
+          "const": "allow-js-log",
+          "markdownDescription": "Webview'ın JS hata/tanılama mesajlarını oturum loguna yazmasına izin verir"
+        },
+        {
           "description": "Allows invoking native video player and GStreamer transport control commands (Linux native render overlay)",
           "type": "string",
           "const": "allow-native-render",
@@ -409,6 +415,12 @@
           "type": "string",
           "const": "allow-themes",
           "markdownDescription": "Tema oluşturma, yükleme, silme komutlarına izin verir"
+        },
+        {
+          "description": "Uygulama sürüm sorgusu ve güncelleme kontrol/indirme komutlarına izin verir",
+          "type": "string",
+          "const": "allow-updater",
+          "markdownDescription": "Uygulama sürüm sorgusu ve güncelleme kontrol/indirme komutlarına izin verir"
         },
         {
           "description": "Allows invoking the WebGPU IPC bridge commands (Linux WebGPU shim: adapter/device/buffer/texture/pipeline/canvas)",

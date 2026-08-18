@@ -176,7 +176,7 @@ pub mod inner {
 
         // Helper to cleanly close the overlay and reset manager references on errors
         let cleanup_on_error = |err_msg: String| -> String {
-            eprintln!("[Native Render] Error starting native player: {}", err_msg);
+            crate::log!("[Native Render] Error starting native player: {}", err_msg);
             let app_for_close = app.clone();
             let overlay_for_close = overlay.clone();
             let _ = app_for_close.run_on_main_thread(move || {
@@ -320,7 +320,7 @@ pub mod inner {
                     // OutOfMemory kurtarılamaz: HTML5 player'a temiz geçiş yap
                     // ve render döngüsünden çık.
                     Err(wgpu::SurfaceError::OutOfMemory) => {
-                        eprintln!("[Native Render] Surface out of memory — falling back to HTML5 player.");
+                        crate::log!("[Native Render] Surface out of memory — falling back to HTML5 player.");
                         let _ = main_window_for_thread.emit(
                             "openanime://gst-fallback",
                             "GPU out of memory".to_string(),
@@ -373,7 +373,7 @@ pub mod inner {
             manager.teardown_thread = Some(handle);
         }
 
-        println!("[Native Render] Native player stopped and overlay closed.");
+        crate::log!("[Native Render] Native player stopped and overlay closed.");
     }
 
     pub fn sync_bounds(x: i32, y: i32, width: u32, height: u32, main_window: WebviewWindow) {
@@ -421,6 +421,32 @@ pub mod inner {
                     }
                 }
             }
+        }
+    }
+
+    /// Odak kaybında gizlenen overlay'in geri gösterilmesi gerekip
+    /// gerekmediğini izler (hiç kare basmamış overlay yanlışlıkla
+    /// gösterilmesin diye yalnız "gizlediğimiz" overlay geri açılır).
+    static HIDDEN_BY_FOCUS: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Ana pencere odak kaybedince gst overlay'ini gizle / odak dönünce
+    /// geri göster — always_on_top overlay başka uygulamaların üstünde
+    /// siyah kutu olarak kalmasın. YALNIZCA ana thread'den çağrılmalı.
+    pub fn set_overlay_visible(visible: bool) {
+        let overlay = match get_manager().try_lock() {
+            Ok(g) => g.overlay_window.clone(),
+            Err(_) => return,
+        };
+        let Some(overlay) = overlay else { return };
+        if visible {
+            if HIDDEN_BY_FOCUS.swap(false, Ordering::Relaxed) {
+                let _ = overlay.show();
+                let _ = overlay.set_ignore_cursor_events(true);
+            }
+        } else if overlay.is_visible().unwrap_or(false) {
+            HIDDEN_BY_FOCUS.store(true, Ordering::Relaxed);
+            let _ = overlay.hide();
         }
     }
 

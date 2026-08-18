@@ -48,6 +48,10 @@ raw-window-handle = "0.6.2"
 # GPU probe penceresi: GTK'nın Xlib bağlantısı thread-safe olmadığından probe,
 # dlopen'la açılan AYRI bir X bağlantısı üzerinde koşar (link-time bağımlılık yok).
 x11-dl = "2.21"
+# web-process-terminated sinyali: WebProcess ölünce sebep (Crashed /
+# ExceededMemoryLimit) loglanır + otomatik reload. wry zaten bu crate'e
+# bağımlı; sürüm Cargo.lock'takiyle aynı tutulur.
+webkit2gtk = "2.0"
 
 # panic = "abort" KULLANILMAZ: wgpu doğrulama hataları ve GStreamer panic'leri
 # tüm uygulamayı öldürmesin diye unwinding açık kalır. Async Tauri komutundaki

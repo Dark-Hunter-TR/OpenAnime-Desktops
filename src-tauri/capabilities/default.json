@@ -35,6 +35,8 @@
     "os:default",
     "allow-dpi-proxy",
     "allow-session-log",
+    "allow-js-log",
+    "allow-updater",
     "allow-read-local-video",
     "allow-webgpu-bridge",
     "allow-native-render",

@@ -1,0 +1,7 @@
+# Updater komutları: uzak origin'deki updater-ui.js başlangıçta sürüm
+# kontrolü yapar. Bu izin yokken "check_for_updates not allowed" ile
+# otomatik güncelleme kontrolü sessizce ölüyordu.
+[[permission]]
+identifier = "allow-updater"
+description = "Uygulama sürüm sorgusu ve güncelleme kontrol/indirme komutlarına izin verir"
+commands.allow = ["get_app_version", "check_for_updates", "start_update_download"]

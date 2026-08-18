@@ -400,6 +400,16 @@ pub mod inner {
         // Score and choose the best hardware adapter.
         // Sunum yeteneği HER ŞEYDEN önce gelir (+100): sunum yapamayan
         // "güçlü" GPU yerine sunum yapabilen iGPU tercih edilir.
+        // HİBRİT PRIME PRESENT DÜZELTMESİ: iki GPU da sunum yapabildiğinde
+        // (present=true) hangisi seçilmeli? Sahada NVIDIA dGPU seçiliyordu
+        // (skorda Discrete>Integrated) ama AMD+NVIDIA laptop'ta ekranı iGPU
+        // (AMD) sürüyor; NVIDIA'dan XWayland penceresine present edilen kare
+        // KWin'in (AMD) composite ettiği yüzeyde SİYAH kalıyor + pencere
+        // etkileşimi kilitleniyordu. Compositor'un GPU'su olan iGPU'yu tercih
+        // et. OPENANIME_PREFER_DGPU=1 eski davranışa (dGPU) döndürür.
+        let prefer_dgpu = std::env::var("OPENANIME_PREFER_DGPU")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
         let chosen_idx = all_adapters
             .iter()
             .enumerate()
@@ -412,8 +422,8 @@ pub mod inner {
                     _ => 0,
                 };
                 let type_score = match info.device_type {
-                    wgpu::DeviceType::DiscreteGpu => 2,
-                    wgpu::DeviceType::IntegratedGpu => 1,
+                    wgpu::DeviceType::DiscreteGpu => if prefer_dgpu { 2 } else { 1 },
+                    wgpu::DeviceType::IntegratedGpu => if prefer_dgpu { 1 } else { 2 },
                     _ => 0,
                 };
                 present_score + backend_score + type_score
@@ -960,17 +970,24 @@ pub mod inner {
     #[tauri::command]
     pub async fn gpu_create_compute_pipeline(
         id: u64,
-        pipeline_layout_id: u64,
+        pipeline_layout_id: Option<u64>,
         shader_module_id: u64,
         entry_point: String,
     ) -> Result<(), String> {
         let dev = device()?;
         let state = lock();
-        let layout = state
-            .registries
-            .pipeline_layouts
-            .get(&pipeline_layout_id)
-            .ok_or("Unknown pipeline layout id")?;
+        // layout: "auto" desteği — id gelmezse wgpu'nun otomatik layout'u
+        // kullanılır (site sonra getBindGroupLayout ile türetilmişi alır).
+        let layout = match pipeline_layout_id {
+            Some(lid) => Some(
+                state
+                    .registries
+                    .pipeline_layouts
+                    .get(&lid)
+                    .ok_or("Unknown pipeline layout id")?,
+            ),
+            None => None,
+        };
         let module = state
             .registries
             .shader_modules
@@ -978,7 +995,7 @@ pub mod inner {
             .ok_or("Unknown shader module id")?;
         let pipeline = dev.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
-            layout: Some(layout),
+            layout,
             module,
             entry_point: &entry_point,
             compilation_options: Default::default(),
@@ -986,6 +1003,37 @@ pub mod inner {
         });
         drop(state);
         lock().registries.compute_pipelines.insert(id, pipeline);
+        Ok(())
+    }
+
+    /// pipeline.getBindGroupLayout(index) karşılığı: (auto ya da açık)
+    /// pipeline'dan türetilmiş bind group layout'u registry'ye kaydeder.
+    /// layout:"auto" kullanan siteler bind group'larını ancak bu yolla
+    /// kurabilir.
+    #[tauri::command]
+    pub async fn gpu_pipeline_get_bind_group_layout(
+        id: u64,
+        pipeline_id: u64,
+        kind: String,
+        index: u32,
+    ) -> Result<(), String> {
+        let state = lock();
+        let layout = match kind.as_str() {
+            "compute" => state
+                .registries
+                .compute_pipelines
+                .get(&pipeline_id)
+                .ok_or("Unknown compute pipeline id")?
+                .get_bind_group_layout(index),
+            _ => state
+                .registries
+                .render_pipelines
+                .get(&pipeline_id)
+                .ok_or("Unknown render pipeline id")?
+                .get_bind_group_layout(index),
+        };
+        drop(state);
+        lock().registries.bind_group_layouts.insert(id, layout);
         Ok(())
     }
 
@@ -1030,7 +1078,7 @@ pub mod inner {
     #[tauri::command]
     pub async fn gpu_create_render_pipeline(
         id: u64,
-        pipeline_layout_id: u64,
+        pipeline_layout_id: Option<u64>,
         shader_module_id: u64,
         vs_entry: String,
         fs_entry: String,
@@ -1040,11 +1088,17 @@ pub mod inner {
     ) -> Result<(), String> {
         let dev = device()?;
         let state = lock();
-        let layout = state
-            .registries
-            .pipeline_layouts
-            .get(&pipeline_layout_id)
-            .ok_or("Unknown pipeline layout id")?;
+        // layout: "auto" desteği — id gelmezse wgpu otomatik layout üretir.
+        let layout = match pipeline_layout_id {
+            Some(lid) => Some(
+                state
+                    .registries
+                    .pipeline_layouts
+                    .get(&lid)
+                    .ok_or("Unknown pipeline layout id")?,
+            ),
+            None => None,
+        };
         let module = state
             .registries
             .shader_modules
@@ -1094,7 +1148,7 @@ pub mod inner {
 
         let pipeline = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
-            layout: Some(layout),
+            layout,
             vertex: wgpu::VertexState {
                 module,
                 entry_point: &vs_entry,
@@ -1500,6 +1554,133 @@ pub mod inner {
         Ok(())
     }
 
+    /// f32 → IEEE 754 half (f16) bit deseni. 0..1 aralığındaki video değerleri
+    /// için yeterli (subnormal'lar sıfıra yuvarlanır — bu aralıkta önemsiz).
+    fn f32_to_f16_bits(f: f32) -> u16 {
+        let bits = f.to_bits();
+        let sign = ((bits >> 16) & 0x8000) as u16;
+        let exp = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+        let mant = bits & 0x7f_ffff;
+        if exp <= 0 {
+            sign // sıfır / subnormal → 0 (işaretli)
+        } else if exp >= 0x1f {
+            sign | 0x7c00 // inf/NaN → inf
+        } else {
+            sign | ((exp as u16) << 10) | ((mant >> 13) as u16)
+        }
+    }
+
+    /// Video karesini (kaynak HER ZAMAN RGBA8) hedef texture'ın GERÇEK
+    /// formatına çevirerek yazar. Site video canvas'ını rgba16float (HDR) gibi
+    /// >4-byte formatlarda oluşturabiliyor; JS getImageData yalnız RGBA8 verir,
+    /// bu yüzden dönüşüm Rust'ta yapılır (JS'te per-piksel f16 dönüşümü kareyi
+    /// düşürecek kadar yavaş). bgra8'de kanal takası da burada.
+    fn write_video_frame_to_texture(
+        q: &wgpu::Queue,
+        tex: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        rgba8: &[u8],
+    ) -> Result<(), String> {
+        let expected = (width * height * 4) as usize;
+        if rgba8.len() < expected {
+            return Err(format!("frame too small: {} < {}", rgba8.len(), expected));
+        }
+        let px = (width * height) as usize;
+        let fmt = tex.format();
+        let (bytes, bpr): (std::borrow::Cow<[u8]>, u32) = match fmt {
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => {
+                (std::borrow::Cow::Borrowed(rgba8), width * 4)
+            }
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
+                let mut out = vec![0u8; px * 4];
+                for p in 0..px {
+                    out[p * 4] = rgba8[p * 4 + 2];
+                    out[p * 4 + 1] = rgba8[p * 4 + 1];
+                    out[p * 4 + 2] = rgba8[p * 4];
+                    out[p * 4 + 3] = rgba8[p * 4 + 3];
+                }
+                (std::borrow::Cow::Owned(out), width * 4)
+            }
+            wgpu::TextureFormat::Rgba16Float => {
+                let mut out = vec![0u8; px * 8];
+                for p in 0..px {
+                    for c in 0..4 {
+                        let v = rgba8[p * 4 + c] as f32 / 255.0;
+                        let h = f32_to_f16_bits(v).to_le_bytes();
+                        out[p * 8 + c * 2] = h[0];
+                        out[p * 8 + c * 2 + 1] = h[1];
+                    }
+                }
+                (std::borrow::Cow::Owned(out), width * 8)
+            }
+            other => return Err(format!("unsupported video texture format: {:?}", other)),
+        };
+        q.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(bpr),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        Ok(())
+    }
+
+    /// Video karesi yükleme (binary). Gövde RGBA8; hedef texture formatına
+    /// çevrilerek yazılır. Shim'in copyExternalImageToTexture / external
+    /// texture yolları bunu kullanır.
+    #[tauri::command]
+    pub fn gpu_upload_frame_bin(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+        // Native player aktifken IPC kare yazımlarını at (bant genişliği).
+        if let Ok(manager) = crate::native_render::inner::get_manager().try_lock() {
+            if manager.player.is_some() {
+                return Ok(());
+            }
+        }
+        let texture_id = header_u64(&request, "x-texture-id")?;
+        let width = header_u64(&request, "x-width")? as u32;
+        let height = header_u64(&request, "x-height")? as u32;
+        let rgba8 = raw_body(&request)?;
+        let q = queue()?;
+        let state = lock();
+        let tex = state.registries.textures.get(&texture_id).ok_or("Unknown texture id")?;
+        write_video_frame_to_texture(&q, tex, width, height, rgba8)
+    }
+
+    /// Video karesi yükleme (base64 fallback). Gövde RGBA8; formata çevrilir.
+    #[tauri::command]
+    pub async fn gpu_upload_frame(
+        texture_id: u64,
+        width: u32,
+        height: u32,
+        data_base64: String,
+    ) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(manager) = crate::native_render::inner::get_manager().try_lock() {
+                if manager.player.is_some() {
+                    return Ok(());
+                }
+            }
+        }
+        use base64::Engine;
+        let rgba8 = base64::engine::general_purpose::STANDARD
+            .decode(data_base64)
+            .map_err(|e| e.to_string())?;
+        let q = queue()?;
+        let state = lock();
+        let tex = state.registries.textures.get(&texture_id).ok_or("Unknown texture id")?;
+        write_video_frame_to_texture(&q, tex, width, height, &rgba8)
+    }
+
     /// mapAsync + okuma: ham binary yanıt döndürür (base64 yok).
     #[tauri::command]
     pub async fn gpu_buffer_read_bin(
@@ -1721,6 +1902,42 @@ pub mod inner {
         )
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // Ölçek (scale_factor) önbelleği — surface FİZİKSEL px ile configure
+    // edilmeli. Overlay penceresi CSS×scale fiziksel boyutta yaratılıyor;
+    // surface'ı CSS boyutuyla configure etmek fractional scaling'de (örn.
+    // KDE %125) görüntüyü sıkıştırıyordu (site canvas backing'i zaten DPR'li:
+    // log "canvas 1847x1038 / configure 1847x829"). scale_factor() ana
+    // thread getter'ı olduğundan off-main çağrı bloklar; oneshot ile await
+    // edilip AtomicU64'te (f64 bit'leri) önbelleğe alınır.
+    // ─────────────────────────────────────────────────────────────────
+    static CACHED_SCALE_BITS: AtomicU64 = AtomicU64::new(0);
+
+    fn cached_scale() -> f64 {
+        let b = CACHED_SCALE_BITS.load(Ordering::Relaxed);
+        if b == 0 { 1.0 } else { f64::from_bits(b) }
+    }
+
+    async fn refresh_scale(app: &tauri::AppHandle) -> f64 {
+        let (tx, rx) = tokio::sync::oneshot::channel::<f64>();
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let sf = app2
+                .get_webview_window("main")
+                .and_then(|w| w.scale_factor().ok())
+                .unwrap_or(1.0);
+            let _ = tx.send(sf);
+        });
+        let sf = rx.await.unwrap_or_else(|_| cached_scale());
+        CACHED_SCALE_BITS.store(sf.to_bits(), Ordering::Relaxed);
+        sf
+    }
+
+    /// CSS px → fiziksel px (surface configure için). Alt sınır 1.
+    fn to_physical(css: u32, scale: f64) -> u32 {
+        ((css.max(1) as f64) * scale).round().max(1.0) as u32
+    }
+
     /// Overlay konumlama/boyutlandırmayı ANA THREAD'e taşır (fire-and-forget).
     /// scale_factor()/inner_position() getter'ları off-main çağrıldığında
     /// rx.recv() ile çağıran thread'i bloklar; ana loop meşgulken (webkit
@@ -1747,6 +1964,33 @@ pub mod inner {
                 let _ = overlay.set_ignore_cursor_events(true);
             }
         });
+    }
+
+    /// Ana pencere odak kaybettiğinde/geri aldığında overlay'leri gizler/
+    /// gösterir. Overlay'ler always_on_top olduğundan ana pencere arkaya
+    /// düşünce bile BAŞKA uygulamaların üstünde siyah kutu olarak kalıyordu
+    /// (saha: terminalin üstünde dev siyah dikdörtgen). Yalnızca ilk gerçek
+    /// karesini basmış (shown) overlay'lere dokunulur; hiç boyanmamışlar
+    /// zaten gizlidir. YALNIZCA ana thread'den çağrılmalı (on_window_event).
+    pub fn set_overlays_visible(visible: bool) {
+        let items: Vec<Window> = {
+            let state = lock();
+            state
+                .registries
+                .canvas_contexts
+                .values()
+                .filter(|ctx| ctx.shown)
+                .map(|ctx| ctx.overlay.clone())
+                .collect()
+        };
+        for overlay in items {
+            if visible {
+                let _ = overlay.show();
+                let _ = overlay.set_ignore_cursor_events(true);
+            } else {
+                let _ = overlay.hide();
+            }
+        }
     }
 
     /// Ana pencere taşındığında tüm canvas overlay'lerini kayıtlı viewport
@@ -1786,7 +2030,7 @@ pub mod inner {
             let state = lock();
             let count = state.registries.canvas_contexts.len();
             if count >= 2 {
-                println!("[WebGPU Bridge] Canvas overlay limiti aşıldı (mevcut={}) — yeni context reddedildi", count);
+                crate::log!("[WebGPU Bridge] Canvas overlay limiti aşıldı (mevcut={}) — yeni context reddedildi", count);
                 return Err(format!("canvas overlay limit reached ({})", count));
             }
         }
@@ -1888,7 +2132,7 @@ pub mod inner {
                 presents: 0,
             },
         );
-        println!("[WebGPU Bridge] Canvas overlay yaratıldı: ctx={} viewport=({},{} {}x{})", ctx_id, x, y, width, height);
+        crate::log!("[WebGPU Bridge] Canvas overlay yaratıldı: ctx={} viewport=({},{} {}x{})", ctx_id, x, y, width, height);
         Ok(ctx_id)
     }
 
@@ -1930,11 +2174,16 @@ pub mod inner {
         let dev = device()?;
         let requested_format = parse_texture_format(&format)?;
 
-        let (overlay, width, height) = {
+        let (overlay, css_width, css_height) = {
             let state = lock();
             let ctx = state.registries.canvas_contexts.get(&context_id).ok_or("Unknown canvas context id")?;
             (ctx.overlay.clone(), ctx.width, ctx.height)
         };
+
+        // Surface FİZİKSEL px ile configure edilir (pencere boyutu = CSS×scale).
+        let scale = refresh_scale(&overlay.app_handle().clone()).await;
+        let width = to_physical(css_width, scale);
+        let height = to_physical(css_height, scale);
 
         let adapter = {
             let state = lock();
@@ -1960,8 +2209,9 @@ pub mod inner {
         }
         let tex_format = clamp_surface_format(requested_format, &caps.formats);
         crate::log!(
-            "[WebGPU Bridge] Canvas configure: ctx={} istek={} kullanılan={} caps={:?} adapter='{}'",
-            context_id, format, texture_format_to_string(tex_format), caps.formats, adapter.get_info().name
+            "[WebGPU Bridge] Canvas configure: ctx={} istek={} kullanılan={} CSS={}x{} scale={:.3} fiziksel={}x{} adapter='{}'",
+            context_id, format, texture_format_to_string(tex_format),
+            css_width, css_height, scale, width, height, adapter.get_info().name
         );
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -2038,7 +2288,7 @@ pub mod inner {
             // present her karede sessizce no-op kalıyordu — oturumda 1 kez logla.
             static NOOP_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if !NOOP_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                println!(
+                crate::log!(
                     "[WebGPU Bridge] present çağrıldı ama pending_surface_texture yok (ctx={}, presents={}) — configure/getCurrentTexture→present zinciri kopuk",
                     context_id, ctx.presents
                 );
@@ -2047,9 +2297,9 @@ pub mod inner {
         if output.is_some() {
             ctx.presents += 1;
             if ctx.presents == 1 {
-                println!("[WebGPU Bridge] İLK KARE basıldı (ctx={})", context_id);
+                crate::log!("[WebGPU Bridge] İLK KARE basıldı (ctx={})", context_id);
             } else if ctx.presents % 300 == 0 {
-                println!("[WebGPU Bridge] present sayacı: ctx={} kare={}", context_id, ctx.presents);
+                crate::log!("[WebGPU Bridge] present sayacı: ctx={} kare={}", context_id, ctx.presents);
             }
         }
         // İlk GERÇEK kare present ediliyorsa overlay'i görünür yap —
@@ -2092,13 +2342,21 @@ pub mod inner {
         ctx.width = width;
         ctx.height = height;
 
+        // Surface FİZİKSEL px ile configure edilir (configure()'daki mantıkla
+        // aynı): CSS boyutuyla configure etmek fractional scaling'de görüntüyü
+        // sıkıştırıyordu. Ölçek önbellekten okunur — configure() önce koştuğu
+        // için önbellek sıcaktır, scroll/resize'da main-thread turu eklenmez.
+        let scale = cached_scale();
+        let phys_w = to_physical(width, scale);
+        let phys_h = to_physical(height, scale);
+
         if let Some(surface) = &ctx.surface {
             if let Some(d) = &dev {
                 let config = wgpu::SurfaceConfiguration {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     format: ctx.format,
-                    width: width.max(1),
-                    height: height.max(1),
+                    width: phys_w,
+                    height: phys_h,
                     present_mode: wgpu::PresentMode::Fifo,
                     // Önceden hardcoded PostMultiplied idi — NVIDIA/Wayland'da
                     // sürücü yalnızca Opaque destekleyince configure() panikliyor

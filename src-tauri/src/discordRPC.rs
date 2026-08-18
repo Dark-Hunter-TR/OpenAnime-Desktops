@@ -180,7 +180,13 @@ impl DiscordState {
                     continue;
                 }
 
-                let mut should_update = updated;
+                // should_update, `updated` (yeni mesaj geldi) ile DEĞİL, GERÇEK
+                // bir değişiklikle (sayfa/metadata/drift/dashboard rotasyonu)
+                // tetiklenmeli. Önceden `= updated` idi: site duraklatınca aynı
+                // current_time'la yüzlerce özdeş presence gönderiyor, her biri
+                // log basıyor ve terminali boğup gerçek WebGPU hatalarını
+                // gizliyordu. Aşağıdaki değişiklik-tespiti tek karar mercii.
+                let mut should_update = false;
 
                 if page == AppPage::Dashboard {
                     let now = Instant::now();
