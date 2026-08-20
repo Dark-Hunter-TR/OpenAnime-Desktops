@@ -727,9 +727,256 @@ function updateStatus(message, type = "info") {
   }
 }
 
+// Güncelleme Modalı için Bağımsız CSS
+// Site build'i her yenilendiğinde Svelte hash class'ları (svelte-f1dwd4, svelte-cc3kyp, vs.)
+// değiştiği için bu modal artık siteden çekilen o class'lara güvenemiyor.
+// OpenAnime-Theme/src/lib/AboutDialog.svelte kendi başına aynı tasarımı üreten
+// bağımsız bir stil bloğuna sahip; bu blok buraya birebir taşındı (id ile scope'lanmış).
+function injectModalStyles() {
+  if (document.getElementById("tauri-updater-modal-styles")) return;
+
+  const styleEl = document.createElement("style");
+  styleEl.id = "tauri-updater-modal-styles";
+  styleEl.textContent = `
+    #tauri-updater-modal-overlay {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: var(--fds-smoke-background-default, rgba(0, 0, 0, 0.45));
+      padding: 16px;
+      box-sizing: border-box;
+    }
+
+    #tauri-updater-modal-overlay .content-dialog-container {
+      max-width: 600px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    #tauri-updater-modal-overlay .content-dialog {
+      position: relative;
+      width: 100%;
+      max-width: 540px;
+      background-color: var(--fds-solid-background-base, #202020);
+      border-radius: var(--fds-overlay-corner-radius, 8px);
+      border: 1px solid var(--fds-card-stroke-default, rgba(255, 255, 255, 0.08));
+      box-shadow: var(--fds-dialog-shadow, 0 16px 32px rgba(0, 0, 0, 0.37));
+      overflow: hidden;
+      color: var(--fds-text-primary, #fff);
+    }
+
+    #tauri-updater-modal-overlay .content-dialog-body {
+      display: flex;
+      flex-direction: column;
+      padding: 0 !important;
+    }
+
+    #tauri-updater-modal-overlay #main {
+      position: relative;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background-image: url("/about-banner-base.png");
+      background-size: cover;
+      background-position: center;
+      border-top-left-radius: var(--fds-overlay-corner-radius, 8px);
+      border-top-right-radius: var(--fds-overlay-corner-radius, 8px);
+      height: 10rem;
+      overflow: hidden;
+    }
+
+    #tauri-updater-modal-overlay #card {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      width: fit-content;
+      margin-left: 24px;
+      margin-bottom: 0;
+      z-index: 2;
+    }
+
+    #tauri-updater-modal-overlay #logo {
+      width: 3rem;
+      height: 3rem;
+      flex-shrink: 0;
+    }
+
+    #tauri-updater-modal-overlay #logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: var(--fds-overlay-corner-radius, 8px);
+    }
+
+    #tauri-updater-modal-overlay #info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      color: var(--fds-text-primary, #ffffff);
+    }
+
+    #tauri-updater-modal-overlay #info h4 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      color: #ffffff;
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+    }
+
+    #tauri-updater-modal-overlay #info span {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.85);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+
+    #tauri-updater-modal-overlay #setsuki {
+      position: absolute;
+      right: 16px;
+      bottom: 0;
+      height: 100%;
+      aspect-ratio: 1;
+      object-fit: contain;
+      user-select: none;
+      pointer-events: none;
+      filter: drop-shadow(0 0 0.5rem hsla(0, 0%, 0%, 0.25));
+      z-index: 1;
+    }
+
+    #tauri-updater-modal-overlay #setsuki img {
+      height: 100%;
+      width: auto;
+      object-fit: contain;
+    }
+
+    #tauri-updater-modal-overlay #content {
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    #tauri-updater-modal-overlay #content h4 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--fds-text-primary, #ffffff);
+    }
+
+    #tauri-updater-modal-overlay #content > span {
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--fds-text-tertiary, rgba(255, 255, 255, 0.54));
+    }
+
+    #tauri-updater-modal-overlay hr.horizontal {
+      border: none;
+      border-top: 1px solid var(--fds-divider-stroke-default, rgba(255, 255, 255, 0.08));
+      height: 1px;
+      margin: 1rem 0;
+    }
+
+    #tauri-updater-modal-overlay #buttons {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+      width: 100%;
+    }
+
+    #tauri-updater-modal-overlay .button {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    #tauri-updater-modal-overlay .button.style-secondary {
+      box-sizing: border-box;
+      height: 32px;
+      padding: 0 16px;
+      font-size: 13px;
+      border-radius: var(--fds-control-corner-radius, 4px);
+      border: 1px solid var(--fds-control-stroke-default, rgba(255, 255, 255, 0.08));
+      background-color: var(--fds-control-fill-default, rgba(255, 255, 255, 0.06));
+      color: var(--fds-text-primary, #fff);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
+    }
+
+    #tauri-updater-modal-overlay .button.style-secondary:hover {
+      background-color: var(--fds-control-fill-secondary, rgba(255, 255, 255, 0.1));
+      border-color: var(--fds-control-stroke-secondary, rgba(255, 255, 255, 0.12));
+    }
+
+    #tauri-updater-modal-overlay .button.style-secondary:active {
+      background-color: var(--fds-control-fill-tertiary, rgba(255, 255, 255, 0.04));
+      opacity: 0.8;
+    }
+
+    #tauri-updater-modal-overlay .button.style-accent {
+      box-sizing: border-box;
+      height: 32px;
+      padding: 0 16px;
+      font-size: 13px;
+      border-radius: var(--fds-control-corner-radius, 4px);
+      border: 1px solid transparent;
+      background-color: var(--fds-accent-default, #5865f2);
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.15s ease, opacity 0.15s ease;
+    }
+
+    #tauri-updater-modal-overlay .button.style-accent:hover {
+      background-color: var(--fds-accent-secondary, #4752c4);
+    }
+
+    #tauri-updater-modal-overlay .button.style-accent:active {
+      opacity: 0.8;
+    }
+
+    #tauri-updater-modal-overlay .button:disabled {
+      opacity: 0.5 !important;
+      cursor: not-allowed !important;
+    }
+
+    #tauri-updater-modal-overlay #close-button {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      padding: 0;
+      border: 1px solid var(--fds-surface-stroke-default, rgba(255, 255, 255, 0.08));
+      border-radius: var(--fds-overlay-corner-radius, 8px);
+      background-color: var(--fds-control-on-image-fill-default, rgba(0, 0, 0, 0.25));
+      background-clip: padding-box;
+      color: var(--fds-text-primary, #ffffff);
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+
+    #tauri-updater-modal-overlay #close-button:hover {
+      background-color: var(--fds-control-on-image-fill-secondary, rgba(255, 255, 255, 0.08));
+    }
+
+    #tauri-updater-modal-overlay #close-button:active {
+      background-color: var(--fds-control-on-image-fill-tertiary, rgba(255, 255, 255, 0.04));
+    }
+  `;
+  document.head.appendChild(styleEl);
+}
+
 // Yeni Sürüm Modal / Popup Arayüzü (Açılışta otomatik çıkan)
 function showUpdateModal(version, changelog, date) {
   if (isUpdateInProgress) return;
+
+  injectModalStyles();
 
   const overlay = document.createElement("div");
   overlay.id = "tauri-updater-modal-overlay";
@@ -763,16 +1010,16 @@ function showUpdateModal(version, changelog, date) {
         <div class="content-dialog-body svelte-f1dwd4">
           <div id="main" class="fds-theme-dark svelte-cc3kyp">
             <div id="card" class="svelte-cc3kyp">
-              <div class="image-wrapper no-select undefined svelte-zi2j2b loaded" id="logo" style="border-radius: var(--fds-overlay-corner-radius); aspect-ratio: unset;">
-                <img alt="OpenAnime Logo" src="/favicon512_white.png" class="svelte-zi2j2b" style="border-radius: var(--fds-overlay-corner-radius);">
+              <div class="image-wrapper no-select loaded" id="logo">
+                <img alt="OpenAnime Logo" src="/favicon512_white.png">
               </div>
               <div id="info" class="fds-theme-dark svelte-cc3kyp">
                 <h4 class="text-block type-subtitle svelte-9tjxrp">Yeni Sürüm Mevcut!</h4>
                 <span class="text-block type-caption text-tertiary svelte-9tjxrp">Sürüm v${version}${dateSpan}</span>
               </div>
             </div>
-            <div class="image-wrapper no-select undefined svelte-zi2j2b loaded" id="setsuki" style="border-radius: var(--fds-overlay-corner-radius); aspect-ratio: unset;">
-              <img alt="Setsuki" src="${randomSetsuki}" class="svelte-zi2j2b" style="border-radius: var(--fds-overlay-corner-radius);">
+            <div class="image-wrapper no-select loaded" id="setsuki">
+              <img alt="Setsuki" src="${randomSetsuki}">
             </div>
           </div>
           <div id="content" class="svelte-cc3kyp">
