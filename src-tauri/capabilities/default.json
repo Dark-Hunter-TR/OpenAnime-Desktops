@@ -38,6 +38,7 @@
     "allow-read-local-video",
     "allow-updater",
     "allow-perf-mode",
-    "allow-super-notifications"
+    "allow-super-notifications",
+    "allow-easter-egg"
   ]
 }

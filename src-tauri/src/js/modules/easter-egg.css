@@ -1,0 +1,60 @@
+/* === OpenAnime - "???" === */
+/*
+ * ONEMLI: Bu dosya Rust include_str!() ile okunup JavaScript String.raw
+ * sablonuna yerlestirilir. HICBIR YERDE backtick (ters tirnak) KULLANILMAMALIDIR.
+ *
+ * Tasarim: quick-search.css ile ayni Fluent (fds-*) degiskenlerini kullanir,
+ * boylece site temasi degisince menu de birlikte degisir.
+ */
+
+/* -- Cift tik menusu (mini flyout) --------------------------- */
+.oa-egg-menu {
+  position: fixed !important;
+  z-index: 99999995 !important;
+  min-width: 92px !important;
+  padding: 4px !important;
+  box-sizing: border-box !important;
+  font-family: var(--fds-font-family-text, "Segoe UI Variable Text", "Segoe UI", sans-serif) !important;
+  color: var(--fds-text-primary, #fff) !important;
+  border-radius: var(--fds-overlay-corner-radius, 8px) !important;
+  border: 1px solid var(--fds-surface-stroke-flyout, rgba(255, 255, 255, 0.08)) !important;
+  background-color: var(--fds-solid-background-base, var(--bg-elevated, #1c202b)) !important;
+  background-clip: padding-box !important;
+  box-shadow: var(--fds-flyout-shadow, 0 8px 24px rgba(0, 0, 0, 0.55)) !important;
+  animation: oa-egg-menu-in var(--fds-control-fast-duration, 167ms) ease !important;
+}
+
+@keyframes oa-egg-menu-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.oa-egg-menu-item {
+  display: block !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 6px 12px !important;
+  box-sizing: border-box !important;
+  text-align: left !important;
+  font: inherit !important;
+  font-size: 14px !important;
+  letter-spacing: 2px !important;
+  color: inherit !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: var(--fds-control-corner-radius, 4px) !important;
+  cursor: pointer !important;
+}
+
+.oa-egg-menu-item:hover {
+  background-color: var(--fds-subtle-fill-secondary, rgba(255, 255, 255, 0.06)) !important;
+}
+
+.oa-egg-menu-item:active {
+  background-color: var(--fds-subtle-fill-tertiary, rgba(255, 255, 255, 0.03)) !important;
+  color: var(--fds-text-secondary, rgba(255, 255, 255, 0.78)) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oa-egg-menu { animation: none !important; }
+}

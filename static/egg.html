@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <title>???</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+        cursor: none;
+      }
+      video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        background: #000;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Kaynak static/ altından gelir: bu sayfa da video da aynı yerden
+         servis edilir (dev'de vite, pakette frontendDist). -->
+    <video id="egg-video" src="/bohohoyt.mp4" playsinline></video>
+
+    <script>
+      // "???" yumurtası — çerçevesiz, tam ekran, her zaman üstte pencerede
+      // oynar (bkz. lib.rs > oa_open_easter_egg_window).
+      // Kaçış yok: duraklatılamaz, kapatılamaz. Pencere YALNIZCA video
+      // bitince kendini yok eder — `destroy()` bilinçli: `close()` CloseRequested
+      // üretir, onu da Rust tarafı geri çeviriyor.
+      (function () {
+        var video = document.getElementById("egg-video");
+        var done = false;
+
+        // Bu pencerenin konsolunu kimse görmez (DevTools yok, sayfa ömrü
+        // saniyeler). Durumu oturum loguna yazalım ki bir şey ters giderse
+        // logs/session-*.log dosyasından görülebilsin.
+        function report(msg) {
+          try {
+            if (window.__TAURI__ && window.__TAURI__.core) {
+              window.__TAURI__.core.invoke("oa_js_log", {
+                level: "info",
+                msg: "[???win] " + msg,
+              });
+            }
+          } catch (e) {}
+        }
+
+        function destroySelf(why) {
+          if (done) return;
+          done = true;
+          report("kapanıyor (" + why + ")");
+          try {
+            if (window.__TAURI__ && window.__TAURI__.window) {
+              window.__TAURI__.window.getCurrentWindow().destroy();
+              return;
+            }
+          } catch (e) {}
+          try { window.close(); } catch (e) {}
+        }
+
+        report(
+          "sayfa yüklendi: " + location.href +
+          " · tauri=" + (typeof window.__TAURI__ !== "undefined") +
+          " · ekran=" + window.innerWidth + "x" + window.innerHeight
+        );
+
+        // Duraklatılamaz — orijinal popup.html'deki onpause="play()".
+        video.addEventListener("pause", function () {
+          if (!done && !video.ended) video.play().catch(function () {});
+        });
+        video.addEventListener("playing", function () {
+          report("oynuyor · süre=" + video.duration + " · sessiz=" + video.muted);
+        });
+        video.addEventListener("ended", function () { destroySelf("video bitti"); });
+        video.addEventListener("error", function () {
+          var code = video.error ? video.error.code : "?";
+          report("VİDEO HATASI kod=" + code + " src=" + video.currentSrc);
+          destroySelf("video hatası");
+        });
+
+        video.play().catch(function (err) {
+          // Otomatik oynatma sesli engellendiyse sessize alıp bir kez daha dene.
+          report("play() reddedildi (" + err + ") — sessize alınıp tekrar denenecek");
+          video.muted = true;
+          video.play().catch(function (err2) {
+            report("sessiz play() de reddedildi: " + err2);
+            destroySelf("oynatılamadı");
+          });
+        });
+
+        // Emniyet ağı: video hiç açılamazsa pencere ekranda sonsuza kadar
+        // kalmasın — kapatılamaz olduğu için tek çıkış yolu budur.
+        setTimeout(function () {
+          if (video.readyState === 0) destroySelf("8 sn'de veri gelmedi");
+        }, 8000);
+      })();
+    </script>
+  </body>
+</html>

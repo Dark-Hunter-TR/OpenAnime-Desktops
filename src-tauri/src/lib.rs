@@ -1012,6 +1012,17 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "})();\n",
 
     // ──────────────────────────────────────────────
+    // BLOK 9C: "???"
+    // Belirli bir profil sayfasında isme çift tıklayınca beliren gizli menü.
+    // Resmi Electron istemcisindeki sağ tık menüsü şakasının karşılığı.
+    // ──────────────────────────────────────────────
+    "{\nconst EASTER_EGG_CSS = String.raw`",
+    include_str!("js/modules/easter-egg.css"),
+    "`;\n",
+    include_str!("js/modules/easter-egg.js"),
+    "}\n",
+
+    // ──────────────────────────────────────────────
     // BLOK 10: BAŞLATMA (EN SON ÇALIŞIR)
     // ──────────────────────────────────────────────
     include_str!("js/init.js"),
@@ -1019,11 +1030,11 @@ const COMMON_INIT_SCRIPT: &str = concat!(
 );
 
 #[cfg(target_os = "windows")]
-pub const WINDOWS_BASE_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=134217728 --media-cache-size=67108864 --js-flags=\"--max-old-space-size=512\" --force-gpu-selection=high-performance --force_high_performance_gpu";
+pub const WINDOWS_BASE_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=134217728 --media-cache-size=67108864 --js-flags=\"--max-old-space-size=512\" --force-gpu-selection=high-performance --force_high_performance_gpu --autoplay-policy=no-user-gesture-required";
 
 /// Proxy aktifken kullanılacak browser args
 #[cfg(target_os = "windows")]
-pub const WINDOWS_PROXY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=134217728 --media-cache-size=67108864 --js-flags=\"--max-old-space-size=512\" --force-gpu-selection=high-performance --force_high_performance_gpu --proxy-server=http://127.0.0.1:1453";
+pub const WINDOWS_PROXY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msTrackingPrevention --enable-features=ParallelDownloading,HardwareMediaKeyHandling --enable-quic --enable-fast-unload --enable-gpu-rasterization --enable-zero-copy --enable-gpu-memory-buffer-video-frames --renderer-process-limit=1 --disk-cache-size=134217728 --media-cache-size=67108864 --js-flags=\"--max-old-space-size=512\" --force-gpu-selection=high-performance --force_high_performance_gpu --proxy-server=http://127.0.0.1:1453 --autoplay-policy=no-user-gesture-required";
 
 pub(crate) fn platform_user_agent() -> &'static str {
     #[cfg(target_os = "windows")]
@@ -1187,6 +1198,76 @@ fn spawn_tray_session_window(app: &tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn open_new_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
     build_new_window(&app, url)
+}
+
+/// "???" yumurta penceresi (bkz. js/modules/easter-egg.js, static/egg.html).
+///
+/// Resmi Electron istemcisi (OpenAnime/desktop-ts) bunu AYRI bir pencereyle
+/// yapıyor: çerçevesiz + tam ekran + her zaman üstte + fare olaylarını yok
+/// sayan bir BrowserWindow. Buradaki de birebir aynı ve bu bilinçli bir
+/// tercih — ANA PENCEREYE HİÇ DOKUNULMAZ. Ana pencereyi tam ekrana almayı
+/// denemek iki somut soruna yol açıyordu:
+///
+///   1. Windows'ta maximized pencereyi fullscreen'e alırken gereken
+///      `hide()` + `unmaximize()` dansı pencereyi bir an görünmez yapıyor;
+///      `update_background_mode` bunu DeepSleep sanıp WebView2'yi askıya
+///      alıyordu (uygulama dakikalarca donuyor, F5 bile geç işliyordu).
+///   2. Borderless fullscreen tek başına görev çubuğunun ALTINDA kalıyor;
+///      `always_on_top` ancak pencerenin kendisine uygulanınca işe yarıyor.
+const EASTER_EGG_WINDOW_LABEL: &str = "oa-egg";
+
+#[tauri::command]
+async fn oa_open_easter_egg_window(app: tauri::AppHandle) -> Result<(), String> {
+    // Zaten oynuyorsa ikinci pencere açma.
+    if app.get_webview_window(EASTER_EGG_WINDOW_LABEL).is_some() {
+        return Ok(());
+    }
+
+    let builder = WebviewWindowBuilder::new(
+        &app,
+        EASTER_EGG_WINDOW_LABEL,
+        WebviewUrl::App("egg.html".into()),
+    )
+    .title("???")
+    .decorations(false)
+    .fullscreen(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .focused(true);
+
+    // ARGÜMANLAR DİĞER PENCERELERLE AYNI OLMAK ZORUNDA. WebView2'de tüm
+    // webview'ler aynı kullanıcı veri klasörü üzerinden TEK bir ortamı
+    // paylaşır; ikinci bir webview farklı AdditionalBrowserArguments ile
+    // istenirse ortam kurulamaz ve webview sessizce ölür — pencere doğar ama
+    // içi hiç çizilmez (belirtisi: pencere getter'ları FailedToReceiveMessage
+    // döner). Buraya özel bir `--autoplay-policy` bayrağı eklemek tam olarak
+    // buna yol açıyordu; o bayrak artık ortak argümanların içinde
+    // (bkz. WINDOWS_BASE_ARGS / WINDOWS_PROXY_ARGS).
+    #[cfg(target_os = "windows")]
+    let builder = builder.additional_browser_args(WINDOWS_PROXY_ARGS);
+
+    let window = builder
+        .build()
+        .map_err(|e| format!("Yumurta penceresi açılamadı: {}", e))?;
+
+    // Orijinaldeki `close` → preventDefault karşılığı: kullanıcı kapatamaz.
+    // Video bitince sayfa kendini `destroy()` ile yok eder; o yol
+    // CloseRequested üretmediği için buradaki koruma onu engellemez.
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+        }
+    });
+
+    // NOT: Orijinaldeki `setIgnoreMouseEvents(true)` (tıklama geçirgenliği)
+    // BİLEREK uygulanmıyor. Windows'ta bu, pencereye WS_EX_LAYERED ekler ve
+    // katmanlı pencere alfası ayarlanmadığı sürece pencere hiç çizilmez —
+    // "pencere açıldı ama ekranda yok" tablosu tam olarak bu. Şakanın
+    // gereği de değil: pencere zaten tam ekran ve kapatılamaz.
+
+    dbg_log!("[???] Yumurta penceresi oluşturuldu");
+    Ok(())
 }
 
 #[tauri::command]
@@ -2207,6 +2288,8 @@ pub fn run() {
             get_local_video_port,
             get_super_opening_video_url,
             get_super_opening_video_data,
+            // "???"
+            oa_open_easter_egg_window,
             // 🎥 Local video server — videoId ↔ dosya yolu eşlemesi kaydet
             fetch_css,
             check_connection,

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "easter-egg-window",
+  "description": "\"???\" yumurta penceresi: video bitince kendini kapatabilsin (destroy) ve yükleme/oynatma hatalarını oturum loguna yazabilsin. close DEĞİL — o CloseRequested üretir ve Rust tarafı onu bilerek geri çeviriyor.",
+  "windows": ["oa-egg"],
+  "permissions": ["core:window:allow-destroy", "allow-easter-egg-log"]
+}

@@ -1,0 +1,17 @@
+[[permission]]
+identifier = "allow-easter-egg"
+description = "Allows invoking the oa_open_easter_egg_window command"
+
+[permission.commands]
+allow = [
+    "oa_open_easter_egg_window"
+]
+
+[[permission]]
+identifier = "allow-easter-egg-log"
+description = "Lets the easter egg window report its own load/playback errors to the session log"
+
+[permission.commands]
+allow = [
+    "oa_js_log"
+]

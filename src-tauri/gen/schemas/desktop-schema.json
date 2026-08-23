@@ -357,6 +357,18 @@
           "markdownDescription": "DPI atlatma proxy'sini yönetme komutlarına izin verir"
         },
         {
+          "description": "Allows invoking the oa_open_easter_egg_window command",
+          "type": "string",
+          "const": "allow-easter-egg",
+          "markdownDescription": "Allows invoking the oa_open_easter_egg_window command"
+        },
+        {
+          "description": "Lets the easter egg window report its own load/playback errors to the session log",
+          "type": "string",
+          "const": "allow-easter-egg-log",
+          "markdownDescription": "Lets the easter egg window report its own load/playback errors to the session log"
+        },
+        {
           "description": "Allows the frontend to invoke the fetch_css command",
           "type": "string",
           "const": "allow-fetch-css",
