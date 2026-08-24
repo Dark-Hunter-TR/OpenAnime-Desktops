@@ -1,8 +1,11 @@
 name: '🚀 Publish'
 
 # Tag push edildiğinde otomatik build + yayın.
-# Veya GitHub Actions arayüzünden manuel trigger.
-# Kanal, tag'in ön-sürüm son ekinden türetilir:
+# Veya GitHub Actions arayüzünden manuel trigger:
+#   - channel: stable | beta | alpha  (zorunlu)
+#   - version: OPSİYONEL — boş bırakılırsa scripts/next-version.sh otomatik
+#     hesaplar (bkz. release-preview.yml ile aynı mantık). İstersen override.
+# Tag push yolunda kanal, tag'in ön-sürüm son ekinden türetilir:
 #   v1.0.0          -> stable
 #   v1.1.0-beta.1   -> beta
 #   v1.2.0-alpha.1  -> alpha
