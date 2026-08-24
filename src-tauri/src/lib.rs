@@ -1124,7 +1124,6 @@ pub(crate) fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<()
     .inner_size(1280.0, 848.0)
     .min_inner_size(800.0, 500.0)
     .center()
-    .decorations(false)
     .zoom_hotkeys_enabled(true)
     .user_agent(user_agent)
     .on_new_window(move |new_url, _features| {
@@ -1142,6 +1141,21 @@ pub(crate) fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<()
         tauri::webview::NewWindowResponse::Deny
     })
     .initialization_script(build_init_script());
+
+    // macOS: `decorations(false)` bırakıyor bazı tao/macOS sürüm
+    // kombinasyonlarında pencereyi NSWindowCollectionBehavior::FullScreenPrimary
+    // olmadan oluşturuyor — native fullscreen (yeşil düğme / cmd+ctrl+F) ya hiç
+    // çalışmıyor ya da yarım kalmış bir geçişte pencere kromunu bozuyor. Theme'in
+    // kanıtlanmış deseni (tauri.macos.conf.json): decorations true + Overlay +
+    // hiddenTitle — native trafik ışıkları görünür kalır, içerik onların ALTINDA
+    // değil ÜSTÜNDE (overlay) render edilir, native fullscreen düzgün çalışır.
+    #[cfg(target_os = "macos")]
+    let win_builder = win_builder
+        .decorations(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    #[cfg(not(target_os = "macos"))]
+    let win_builder = win_builder.decorations(false);
 
     #[cfg(target_os = "windows")]
     let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
@@ -1210,7 +1224,6 @@ fn spawn_tray_session_window(app: &tauri::AppHandle) -> Result<(), String> {
     .inner_size(1280.0, 848.0)
     .min_inner_size(800.0, 500.0)
     .center()
-    .decorations(false)
     .visible(false)
     .zoom_hotkeys_enabled(true)
     .user_agent(user_agent)
@@ -1225,6 +1238,15 @@ fn spawn_tray_session_window(app: &tauri::AppHandle) -> Result<(), String> {
         tauri::webview::NewWindowResponse::Deny
     })
     .initialization_script(build_init_script());
+
+    // bkz. build_new_window'daki macOS decorations/fullscreen açıklaması.
+    #[cfg(target_os = "macos")]
+    let win_builder = win_builder
+        .decorations(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    #[cfg(not(target_os = "macos"))]
+    let win_builder = win_builder.decorations(false);
 
     #[cfg(target_os = "windows")]
     let win_builder = win_builder.additional_browser_args(WINDOWS_PROXY_ARGS);
@@ -2262,7 +2284,6 @@ pub fn run() {
         .inner_size(1280.0, 848.0)
         .min_inner_size(800.0, 500.0)
         .center()
-        .decorations(false)
         .zoom_hotkeys_enabled(true)
         .user_agent(user_agent)
         .on_new_window(move |url, _features| {
@@ -2280,6 +2301,15 @@ pub fn run() {
             tauri::webview::NewWindowResponse::Deny
         })
         .initialization_script(build_init_script());
+
+        // bkz. build_new_window'daki macOS decorations/fullscreen açıklaması.
+        #[cfg(target_os = "macos")]
+        let win_builder = win_builder
+            .decorations(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+        #[cfg(not(target_os = "macos"))]
+        let win_builder = win_builder.decorations(false);
 
         #[cfg(target_os = "windows")]
         let win_builder = win_builder.additional_browser_args(browser_args);

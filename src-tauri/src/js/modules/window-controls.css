@@ -131,59 +131,13 @@
   flex-direction: row !important;
 }
 
-/* ═══════════════════════════════════════════════════
-   Platform: macOS (traffic-light style)
-   ═══════════════════════════════════════════════════ */
-.tauri-window-controls.platform-macos {
-  --wc-btn-width: 14px;
-  --wc-btn-height: 14px;
-  --wc-icon-size: 10px;
-  --wc-border-radius: 50%;
-  right: auto !important;
-  left: 12px !important;
-  top: 14px !important;
-  gap: 8px !important;
-  flex-direction: row-reverse !important;
-  align-items: center !important;
-  height: auto !important;
-}
-
-/* macOS button base → solid color circles */
-.tauri-window-controls.platform-macos .tauri-window-control-btn {
-  min-width: 14px !important;
-  min-height: 14px !important;
-  border: 0.5px solid rgba(0, 0, 0, 0.12) !important;
-}
-.tauri-window-controls.platform-macos .tauri-window-control-btn.close {
-  background-color: #ff5f57 !important;
-}
-.tauri-window-controls.platform-macos .tauri-window-control-btn.minimize {
-  background-color: #febc2e !important;
-}
-.tauri-window-controls.platform-macos .tauri-window-control-btn.maximize {
-  background-color: #28c840 !important;
-}
-
-/* macOS: icons hidden by default, visible on container hover */
-.tauri-window-controls.platform-macos .tauri-window-control-btn svg {
-  opacity: 0 !important;
-  color: rgba(0, 0, 0, 0.5) !important;
-  transition: opacity 120ms ease !important;
-}
-.tauri-window-controls.platform-macos:hover .tauri-window-control-btn svg {
-  opacity: 1 !important;
-}
-
-/* macOS hover darkens circle */
-.tauri-window-controls.platform-macos .tauri-window-control-btn.close:hover {
-  background-color: #ff3b30 !important;
-}
-.tauri-window-controls.platform-macos .tauri-window-control-btn.minimize:hover {
-  background-color: #f5a623 !important;
-}
-.tauri-window-controls.platform-macos .tauri-window-control-btn.maximize:hover {
-  background-color: #1db934 !important;
-}
+/* macOS: pencere decorations:true + titleBarStyle:Overlay + hiddenTitle ile
+ * açılıyor (bkz. lib.rs) — native trafik ışıkları zaten görünür, burada
+ * sahte bir ikizini çizmiyoruz. #tauri-controls-container macOS'ta hiç
+ * oluşturulmuyor (bkz. window-controls.js setupTauriWindow); sitenin
+ * topbar'ına native şeridin altında kalmaması için sol boşluk bırakılıyor
+ * (setupMacTitlebarSpacing).
+ */
 
 /* ═══════════════════════════════════════════════════
    High-contrast / forced-colors support

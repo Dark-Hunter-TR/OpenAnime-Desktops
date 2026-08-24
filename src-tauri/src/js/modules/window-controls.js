@@ -142,8 +142,27 @@
     } catch (e) {}
   }
 
+  // ── macOS: native trafik ışıkları (decorations:true + titleBarStyle:Overlay
+  // + hiddenTitle, bkz. lib.rs) zaten gösteriliyor — kendi sahte yuvarlak
+  // düğmelerimizi ÇİZMİYORUZ (ikizlerini oluşturmamak için). Tek işimiz,
+  // sitenin kendi topbar'ının native şeridin altında kalmaması için sola
+  // boşluk bırakmak. 78px değeri Theme'in kanıtlanmış TitleBar.svelte'inden
+  // (aynı native strip genişliği, macOS'un standart trafik ışığı alanı).
+  function setupMacTitlebarSpacing() {
+    const topbar = document.querySelector(".topbar");
+    if (topbar) {
+      setStyleIfChanged(topbar, "padding-left", "78px");
+    }
+  }
+
   // ── Main setup function ──
   function setupTauriWindow() {
+    if (_wcPlatform === "macos") {
+      setupMacTitlebarSpacing();
+      fixSheetContent();
+      return true;
+    }
+
     let controls = document.getElementById("tauri-controls-container");
     if (!controls) {
       controls = document.createElement("div");
@@ -330,10 +349,18 @@
     let fallbackDragBar = document.getElementById("tauri-fallback-drag-bar");
     if (!topbar) {
       if (!fallbackDragBar) {
+        // macOS: native trafik ışıkları solda — sürükleme şeridi soldan 78px
+        // içeride başlamalı ki üstlerine binmesin. Diğer platformlarda sağda
+        // CONTROLS_WIDTH kadar boşluk bırakılıyor (bkz. üstteki yorum).
+        const isMac = _wcPlatform === "macos";
+        const left = isMac ? "78px" : "0";
+        const width = isMac
+          ? "calc(100% - 78px)"
+          : `calc(100% - ${CONTROLS_WIDTH}px)`;
         fallbackDragBar = document.createElement("div");
         fallbackDragBar.id = "tauri-fallback-drag-bar";
         fallbackDragBar.setAttribute("data-tauri-drag-region", "");
-        fallbackDragBar.style.cssText = `position: fixed !important; top: 0 !important; left: 0 !important; width: calc(100% - ${CONTROLS_WIDTH}px) !important; height: 48px !important; z-index: 999998 !important; background: transparent !important; pointer-events: auto !important;`;
+        fallbackDragBar.style.cssText = `position: fixed !important; top: 0 !important; left: ${left} !important; width: ${width} !important; height: 48px !important; z-index: 999998 !important; background: transparent !important; pointer-events: auto !important;`;
         document.documentElement.appendChild(fallbackDragBar);
       }
       return;
