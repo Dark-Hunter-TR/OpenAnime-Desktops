@@ -37,8 +37,8 @@ EXPLICIT="${2:-}"
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY gerekli}"
 
 case "$CHANNEL" in
-  stable|beta|alpha) ;;
-  *) echo "::error::Geçersiz kanal: '$CHANNEL' (stable|beta|alpha)" ; exit 1 ;;
+  stable|beta|alpha|test) ;;
+  *) echo "::error::Geçersiz kanal: '$CHANNEL' (stable|beta|alpha|test)" ; exit 1 ;;
 esac
 
 bump_patch() {
@@ -53,6 +53,7 @@ if [ -n "$EXPLICIT" ]; then
     stable) re='^[0-9]+\.[0-9]+\.[0-9]+$' ;;
     beta)   re='^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$' ;;
     alpha)  re='^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$' ;;
+    test)   re='^[0-9]+\.[0-9]+\.[0-9]+-test\.[0-9]+$' ;;
   esac
   if ! [[ "$EXPLICIT" =~ $re ]]; then
     echo "::error::Geçersiz sürüm: '$EXPLICIT' ('$CHANNEL' kanalına uymuyor)"
@@ -85,7 +86,7 @@ if [ "$CHANNEL" = "stable" ]; then
   exit 0
 fi
 
-# Beta/alpha: hedef baz H'nin altında stable VARSA patch+1, YOKSA H.
+# Beta/alpha/test: hedef baz H'nin altında stable VARSA patch+1, YOKSA H.
 # (grep pipefail'i bozmasın diye bilerek `|| true`.)
 if [ -n "$(printf '%s\n' "$tags" | grep -Ex -- "$base" || true)" ]; then
   target="$(bump_patch "$base")"

@@ -27,6 +27,21 @@ on:
         required: true
         default: true
         type: boolean
+      channel:
+        description: 'Sürüm kanalı — next-version.sh sayacına göre üretir'
+        required: true
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - stable
+          - beta
+          - alpha
+      version:
+        description: 'Sürüm override (OPSİYONEL) — boş bırakılırsa otomatik hesaplanır. Örn: 1.1.3-test.4'
+        required: false
+        type: string
+        default: ''
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,8 +49,41 @@ env:
   RUSTC_WRAPPER: "sccache"
 
 jobs:
+  # Sürümü release.yml ile AYNI betikten (scripts/next-version.sh) hesaplar.
+  # Test-build sürüm üretmez: yalnızca derleme çıktısının dosya adını sürüme
+  # göre scaffoldlar (set-version.mjs ile), hiçbir tag/release'e dokunmaz.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      channel: ${{ steps.meta.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Sürümü hesapla
+        id: meta
+        shell: bash
+        env:
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$(bash scripts/next-version.sh "$INPUT_CHANNEL" "$INPUT_VERSION")"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$INPUT_CHANNEL" >> "$GITHUB_OUTPUT"
+          {
+            echo "### 🧪 Test Build — Sürüm bilgisi"
+            echo "- **Tag:** \`$TAG\`"
+            echo "- **Kanal:** \`$INPUT_CHANNEL\`"
+            echo "- **Sürüm:** \`$VERSION\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   windows:
     if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows-latest'
+    needs: [prepare]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -85,6 +133,10 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      - name: Sürüm alanlarını sürümle eşleşle
+        shell: bash
+        run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
+
       - name: Build
         uses: tauri-apps/tauri-action@v1
         env:
@@ -107,6 +159,7 @@ jobs:
 
   macos:
     if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos-latest'
+    needs: [prepare]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -152,6 +205,10 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      - name: Sürüm alanlarını sürümle eşleşle
+        shell: bash
+        run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
+
       # `--target` MUTLAKA `--` ayracından önce gelmeli: `--` sonrasındaki her şey
       # doğrudan cargo'ya aktarılır ve tauri CLI onu görmez.
       - name: Build
@@ -177,6 +234,7 @@ jobs:
 
   linux:
     if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ubuntu-latest'
+    needs: [prepare]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -233,6 +291,10 @@ jobs:
 
       - name: Install frontend dependencies
         run: bun install
+
+      - name: Sürüm alanlarını sürümle eşleşle
+        shell: bash
+        run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
 
       - name: Build
         uses: tauri-apps/tauri-action@v1

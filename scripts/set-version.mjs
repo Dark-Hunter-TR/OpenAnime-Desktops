@@ -23,13 +23,15 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * Kabul edilen biçim: `1.2.3`, `1.2.3-alpha.4`, `1.2.3-beta.4`.
+ * Kabul edilen biçim: `1.2.3`, `1.2.3-alpha.4`, `1.2.3-beta.4`,
+ * `1.2.3-test.4`.
  *
- * Yalnızca bu iki ön-sürüm sonekine izin var, çünkü güncelleme kanalı tam
- * olarak bu sonekten türetiliyor (bkz. `.github/workflows/release.yml`).
- * Serbest bırakılsaydı `1.2.3-rc.1` gibi bir tag hiçbir kanala düşmezdi.
+ * Yalnızca bu ön-sürüm sonekine izin var: güncelleme kanalı -alpha/-beta
+ * sonekten türetilir, `-test` CI'de yalnızca test derleme sürümlerine (bkz.
+ * `.github/workflows/test-build.yml`). `1.2.3-rc.1` gibi serbest biçimler
+ * hiçbir kanala düşmez.
  */
-const VERSION_RE = /^\d+\.\d+\.\d+(-(alpha|beta)\.\d+)?$/;
+const VERSION_RE = /^\d+\.\d+\.\d+(-(alpha|beta|test)\.\d+)?$/;
 
 /**
  * Not: aşağıdaki düzenli ifadelerde `\r?` şart. Depo Windows'ta CRLF ile
