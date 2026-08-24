@@ -82,6 +82,10 @@
         ".oa-dash-group-list{display:flex;flex-direction:column;min-height:0;overflow:hidden;}",
         ".oa-dash-group.open .oa-dash-group-items{grid-template-rows:1fr;}",
 
+        // Başlık hover geri bildirimi (grup başlıkları + setler paneli)
+        ".oa-dash-group-header,.oa-sets-header,.oa-set-header,.oa-season-header{transition:opacity .12s;}",
+        ".oa-dash-group-header:hover,.oa-sets-header:hover,.oa-set-header:hover,.oa-season-header:hover{opacity:.8;}",
+
         // ── Setler paneli (yalnızca "Bölüm Oluştur" sahnesinde mount
         //    edilir; kurallar yine de rota class'ı altında scope'lu) ──
         "body.oa-dashboard-active .oa-sets-panel{margin:0 0 16px;flex:0 0 auto;}",
@@ -125,6 +129,15 @@
       }
     }
 
+    // Hafif senkron: rota class'ı + sidebar gruplama + bölüm araçları.
+    // Observer'dan, busy-bırakma sonrasından ve güvenlik ağı interval'ünden
+    // çağrılır — tek ve idempotent bir yol (ucuz: yapı değişmemişse no-op).
+    function lightSync() {
+      syncRouteClass();
+      maybeGroupSidebar();
+      syncEpisodeTools();
+    }
+
     // ────────────────────────────────────────────────────────
     // 2) SIDEBAR GRUPLAMA
     // ────────────────────────────────────────────────────────
@@ -143,6 +156,17 @@
     GROUP_DEFS.forEach(function (g) {
       g.items.forEach(function (t) { TEXT_TO_GROUP[t] = g.id; });
     });
+
+    // Tam eşleşme tutmazsa (site öğe adına rozet/sayaç ekleyebilir,
+    // örn. "Bölüm Oluştur 3") önek eşleşmesi denenir — aksi halde tüm
+    // öğeler "Diğer"e düşer ve gruplama "yok olmuş" gibi görünür.
+    function groupForItem(text) {
+      if (TEXT_TO_GROUP[text]) return TEXT_TO_GROUP[text];
+      for (var name in TEXT_TO_GROUP) {
+        if (text.indexOf(name) === 0) return TEXT_TO_GROUP[name];
+      }
+      return null;
+    }
 
     var GROUP_STORAGE_KEY = "oa_dash_group_state";
 
@@ -205,22 +229,42 @@
 
     function findLooseSidebar() {
       var sidebars = document.querySelectorAll(".sidebar");
-      for (var i = 0; i < sidebars.length; i++) {
+      var i, j, k;
+      // Hızlı yol: li'ler direkt çocuk (normal durum).
+      for (i = 0; i < sidebars.length; i++) {
         var children = sidebars[i].children;
-        for (var j = 0; j < children.length; j++) {
+        for (j = 0; j < children.length; j++) {
           if (children[j].tagName === "LI") return sidebars[i];
+        }
+      }
+      // Toparlanma yolu: Svelte site re-render'ında li'leri başka bir
+      // kapsayıcının içine geri koyabilir — bu durumda "yalnız direkt
+      // çocuk" şartı gruplamayı SONSUZ KADAR kaçırırdı. Grup dışındaki
+      // İLK li.list-item'ı ara.
+      for (i = 0; i < sidebars.length; i++) {
+        var lis = sidebars[i].querySelectorAll("li.list-item");
+        for (k = 0; k < lis.length; k++) {
+          if (!lis[k].closest(".oa-dash-group")) return sidebars[i];
         }
       }
       return null;
     }
 
     var _groupingBusy = false;
+    var _missedMutation = false; // busy penceresinde düşen mutasyon işareti
 
     // <li> node'ları grup sarmalayıcılarına TAŞIIR; içerikleri veya event
     // listener'ları asla yeniden oluşturulmaz — Svelte'in node referansları
     // geçerli kalır, yeniden mount olmaz.
     function groupSidebar(sidebar) {
       var items = Array.prototype.slice.call(sidebar.querySelectorAll("li.list-item"));
+
+      // ÖNCE eski sarmalayıcıları kaldır — items boşken bile (transient boş
+      // render) ekranda çürük/boş grup kartı kalmasın. li referansları
+      // elimizde kaldığı için aşağıda yeniden takılırlar. Sarmalayıcılar
+      // querySelector ile aranır — direkt çocuk olmayan çürükler de temizlenir.
+      Array.prototype.slice.call(sidebar.querySelectorAll(".oa-dash-group")).forEach(function (w) { w.remove(); });
+
       if (items.length === 0) return;
 
       var state = loadGroupState();
@@ -229,14 +273,9 @@
 
       var selectedGroupId = null;
       items.forEach(function (li) {
-        var gid = TEXT_TO_GROUP[itemText(li)] || OTHER_GROUP.id;
+        var gid = groupForItem(itemText(li)) || OTHER_GROUP.id;
         buckets[gid].push(li);
         if (!selectedGroupId && /\bselected\b/.test(li.className)) selectedGroupId = gid;
-      });
-
-      // Eski grup sarmalayıcılarını kaldır (li'lere dokunmadan).
-      Array.prototype.slice.call(sidebar.children).forEach(function (c) {
-        if (c.classList && c.classList.contains("oa-dash-group")) c.remove();
       });
 
       ALL_GROUPS.forEach(function (g) {
@@ -306,7 +345,16 @@
       if (!sidebar) return;
       _groupingBusy = true; // kendi taşımalarımız observer'ı yeniden tetiklemesin
       try { groupSidebar(sidebar); }
-      finally { setTimeout(function () { _groupingBusy = false; }, 0); }
+      finally {
+        setTimeout(function () {
+          _groupingBusy = false;
+          // Bizim DOM taşımalarımız sürerken GELEN site mutasyonları
+          // observer'da bilinçli olarak düşürülür (döngü koruması) ve
+          // işaretlenir. İşaret varsa hemen yeniden senkronla — yoksa
+          // o mutasyon HİÇ işlenmez ve gruplama eksik kalırdı.
+          if (_missedMutation) { _missedMutation = false; lightSync(); }
+        }, 0);
+      }
     }
 
     // ────────────────────────────────────────────────────────
@@ -1214,9 +1262,7 @@
       var restoreTimer = null;
 
       function check() {
-        syncRouteClass();
-        maybeGroupSidebar();
-        syncEpisodeTools();
+        lightSync();
 
         if (!onDashboardRoute()) { lastSceneKey = null; _restoringPlayer = false; return; }
         if (_restoringPlayer) return;
@@ -1245,14 +1291,18 @@
 
       var raf = null;
       var obs = new MutationObserver(function () {
-        if (_groupingBusy || raf) return;
+        if (_groupingBusy) { _missedMutation = true; return; } // düşme — işaretle, busy bitince işlenir
+        if (raf) return;
         raf = requestAnimationFrame(function () { raf = null; check(); });
       });
       obs.observe(document.body, { childList: true, subtree: true });
 
       // Periyodik snapshot: Svelte custom bileşenleri input/change event'i
       // fırlatmayabildiği için her 2 sn'de bir tam kayıt alınır.
+      // GÜVENLİK AĞI: lightSync aynı interval'de — observer bir mutasyonu
+      // kaçırsaydı bile gruplama/panel en geç 2 sn içinde kendini onarır.
       setInterval(function () {
+        lightSync();
         if (onDashboardRoute() && !_restoringPlayer) saveFormSnapshot();
       }, 2000);
     }
