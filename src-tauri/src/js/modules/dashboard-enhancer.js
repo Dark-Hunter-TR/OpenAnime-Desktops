@@ -57,9 +57,8 @@
         // Grup başlığı yalnızca DÜZEN tanımlar; yazı tipi/renk sitenin kendi
         // .text-block.type-caption sınıfından, chevron ise sitenin kendi
         // Expander ikonundan gelir (bkz. getExpanderHashes).
-        ".oa-dash-group{display:flex;flex-direction:column;}",
-        ".oa-dash-group-header{display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;user-select:none;opacity:.72;}",
-        ".oa-dash-group-header:hover{opacity:1;}",
+        ".oa-dash-group{display:flex;flex-direction:column;margin-bottom:4px;}",
+        ".oa-dash-group-header{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;}",
         ".oa-dash-group-header .expander-chevron{pointer-events:none;display:flex;flex:0 0 auto;transition:transform .15s cubic-bezier(.55,0,.1,1);}",
         ".oa-dash-group.open .oa-dash-group-header .expander-chevron{transform:rotate(180deg);}",
         // Katlanma animasyonu grid-template-rows hilesiyle yapılır;
@@ -116,36 +115,47 @@
       try { localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
     }
 
-    // Sitenin kendi Expander bileşeninin (Ayarlar sayfasındaki açılır
-    // kartlar) scoped Svelte class hash'lerini canlı DOM'dan okur;
-    // bulamazsa doğrulanmış sabitlere düşer (aynı desen:
-    // discord/settings-ui.js → getDiscordDropdownHashes/expanderHash).
-    function getSvelteClass(el) {
-      if (!el) return "";
-      var found = "";
-      Array.prototype.forEach.call(el.classList, function (c) {
-        if (!found && c.indexOf("svelte-") === 0) found = c;
-      });
-      return found;
-    }
+    // ── Expander "derisi": sitenin kendi açılır kartından canlı kopya ──
+    // Ayarlar sayfasındaki Expander bileşeninin CANLI DOM örneğinden
+    // görünümü devralır: sınıflar (svelte hash dahil — scoped CSS kuralları
+    // böylece bize de uygulanır), kartın arka planı/radius'u/padding'i
+    // (computed style → tema renkleri otomatik doğru) ve chevron SVG'si.
+    // Canlı örnek bulunamazsa (dashboard'da expander yoksa) doğrulanmış
+    // sabitlere düşer ve SONRAKİ denemede tekrar canlı arar.
+    var _expanderSkin = null;
 
-    function getExpanderHashes() {
-      if (window.__oaExpanderHashes) return window.__oaExpanderHashes;
+    var EXPANDER_FALLBACK = {
+      containerClass: "",
+      headerClass: "",
+      textClass: "text-block type-caption text-secondary",
+      chevronHtml: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;"><path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path></svg>',
+      containerStyle: "",
+      headerStyle: "padding:6px 12px;"
+    };
+
+    function getExpanderSkin() {
+      if (_expanderSkin) return _expanderSkin;
       var live = document.querySelector(".expander");
-      var hashes = {
-        headerHash: (live && getSvelteClass(live.querySelector(".expander-header"))) || "svelte-1b1dfzj",
-        textBlockHash: (live && getSvelteClass(live.querySelector(".text-block"))) || "svelte-9tjxrp"
-      };
-      window.__oaExpanderHashes = hashes;
-      return hashes;
-    }
+      var liveHeader = live && live.querySelector(".expander-header");
+      if (!live || !liveHeader) return EXPANDER_FALLBACK; // cache'lemeden dön → sonra tekrar dene
 
-    // Ayarlar sayfasındaki Expander'ın aşağı-ok chevron SVG'siyle birebir
-    // aynı (kapalıyken aşağı bakar, açılınca 180° döner).
-    function chevronSvg(hash) {
-      return '<svg class="' + hash + '" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" style="display:block;">' +
-        '<path fill="currentColor" d="M2.14645 4.64645C2.34171 4.45118 2.65829 4.45118 2.85355 4.64645L6 7.79289L9.14645 4.64645C9.34171 4.45118 9.65829 4.45118 9.85355 4.64645C10.0488 4.84171 10.0488 5.15829 9.85355 5.35355L6.35355 8.85355C6.15829 9.04882 5.84171 9.04882 5.64645 8.85355L2.14645 5.35355C1.95118 5.15829 1.95118 4.84171 2.14645 4.64645Z"></path>' +
-        "</svg>";
+      var liveText = liveHeader.querySelector(".text-block");
+      var liveChevron = live.querySelector(".expander-chevron");
+      var cs = getComputedStyle(live);
+      _expanderSkin = {
+        containerClass: live.className || "",
+        headerClass: liveHeader.className || "",
+        textClass: (liveText && liveText.className) || "text-block type-caption text-secondary",
+        chevronHtml: (liveChevron && liveChevron.innerHTML) || EXPANDER_FALLBACK.chevronHtml,
+        // Kart görünümünü (tema renkleri dahil) birebir devral
+        containerStyle: [
+          "background:" + cs.backgroundColor,
+          "border-radius:" + cs.borderRadius,
+          "padding:" + cs.padding
+        ].join(";") + ";",
+        headerStyle: ""
+      };
+      return _expanderSkin;
     }
 
     function itemText(li) {
@@ -199,18 +209,29 @@
           ? !!state[g.id]
           : g.id === selectedGroupId;
 
+        var skin = getExpanderSkin();
+
         var wrap = document.createElement("div");
-        wrap.className = "oa-dash-group" + (isOpen ? " open" : "");
+        wrap.className = ("oa-dash-group " + skin.containerClass + (isOpen ? " open" : "")).trim();
+        if (skin.containerStyle) wrap.style.cssText += ";" + skin.containerStyle;
         wrap.dataset.groupId = g.id;
 
-        var hashes = getExpanderHashes();
         var header = document.createElement("div");
-        header.className = "oa-dash-group-header";
+        header.className = ("oa-dash-group-header " + skin.headerClass).trim();
+        if (skin.headerStyle) header.style.cssText += ";" + skin.headerStyle;
         header.setAttribute("role", "button");
         header.setAttribute("tabindex", "0");
-        header.innerHTML =
-          '<span class="expander-chevron ' + hashes.headerHash + '">' + chevronSvg(hashes.headerHash) + "</span>" +
-          '<span class="text-block type-caption text-secondary ' + hashes.textBlockHash + '">' + g.label + "</span>";
+
+        var chevron = document.createElement("span");
+        chevron.className = "expander-chevron";
+        chevron.innerHTML = skin.chevronHtml;
+
+        var label = document.createElement("span");
+        label.className = skin.textClass;
+        label.textContent = g.label;
+
+        header.appendChild(chevron);
+        header.appendChild(label);
 
         var itemsWrap = document.createElement("div");
         itemsWrap.className = "oa-dash-group-items";
@@ -352,52 +373,66 @@
     }
 
     // ────────────────────────────────────────────────────────
-    // 4) OYNATICI SEÇİMİ GERİ YÜKLEME (3 adımlı akış)
+    // 4) OYNATICI SEÇİMİ GERİ YÜKLEME (tek atımlık, token-korumalı)
     // ────────────────────────────────────────────────────────
+    // SADECE sidebar gezinmesi sonrası ve sahnedeki "Oynatıcı Seç"
+    // butonu + kayıtlı oynatıcı birlikte mevcutken TEK SEFER çalışır.
+    // _restoreToken: her yeni deneme önceki denemenin bekleyen
+    // setTimeout'larını geçersiz kılar → gecikmiş bir adım asla
+    // tekrar tıklama yapamaz (döngü imkânsız). Başarısızlıkta
+    // deneme kalıcı olarak düşer; yeni deneme yalnızca YENİ bir
+    // sidebar gezinmesiyle başlar.
     var _restoringPlayer = false;
     var _pendingNav = false;
+    var _restoreToken = 0;
 
-    function restorePlayerSelection(step) {
-      step = step || 0;
+    function restoreAbort() {
+      _restoringPlayer = false;
+      _restoreToken++; // bekleyen adım timeout'larını iptal et
+    }
 
-      if (step === 0) {
-        var root = sceneRoot();
-        if (!root) return false;
-        var openBtn = null;
-        root.querySelectorAll("button").forEach(function (b) {
-          if (((b.textContent || "").trim()) === "Oynatıcı Seç") openBtn = b;
-        });
-        var lastPlayer = null;
-        try { lastPlayer = sessionStorage.getItem("oa_last_player"); } catch (e) {}
-        if (!openBtn || !lastPlayer) return false;
+    function startPlayerRestore() {
+      var root = sceneRoot();
+      if (!root) return false;
+      var openBtn = null;
+      root.querySelectorAll("button").forEach(function (b) {
+        if (((b.textContent || "").trim()) === "Oynatıcı Seç") openBtn = b;
+      });
+      var lastPlayer = null;
+      try { lastPlayer = sessionStorage.getItem("oa_last_player"); } catch (e) {}
+      if (!openBtn || !lastPlayer) return false;
 
-        console.debug(LOG, "oynatıcı geri yükleme: adım 1 (Oynatıcı Seç)");
-        openBtn.click();
-        setTimeout(function () { restorePlayerSelection(1); }, 200);
-        return true;
-      }
+      _restoreToken++;
+      var token = _restoreToken;
+      _restoringPlayer = true;
+      console.debug(LOG, "oynatıcı geri yükleniyor:", lastPlayer);
+      openBtn.click();
+      setTimeout(function () { restoreStep(1, token); }, 250);
+      return true;
+    }
+
+    function restoreStep(step, token) {
+      if (token !== _restoreToken) return; // iptal edilmiş deneme — dokunma
 
       if (step === 1) {
         var lastPlayer2 = null;
         try { lastPlayer2 = sessionStorage.getItem("oa_last_player"); } catch (e) {}
-        if (!lastPlayer2) { _restoringPlayer = false; return false; }
+        if (!lastPlayer2) { restoreAbort(); return; }
         var re = new RegExp("Oynatıcı\\s*" + lastPlayer2, "i");
         var found = false;
         document.querySelectorAll("li.player-item").forEach(function (li) {
-          if (re.test(((li.textContent || "").replace(/\s+/g, " ")).trim())) { li.click(); found = true; }
+          if (!found && re.test(((li.textContent || "").replace(/\s+/g, " ")).trim())) { li.click(); found = true; }
         });
-        if (!found) { console.debug(LOG, "oynatıcı listede bulunamadı"); _restoringPlayer = false; return false; }
-        setTimeout(function () { restorePlayerSelection(2); }, 200);
-        return true;
+        if (!found) { console.debug(LOG, "oynatıcı listede yok, vazgeçildi"); restoreAbort(); return; }
+        setTimeout(function () { restoreStep(2, token); }, 250);
+        return;
       }
 
-      // step === 2: dialogu kapat
+      // step === 2: dialogu kapat ve bitir
       var closeBtn = document.getElementById("close-button");
-      _restoringPlayer = false;
-      if (!closeBtn) { console.debug(LOG, "dialog kapatma butonu bulunamadı"); return false; }
-      closeBtn.click();
+      restoreAbort(); // önce kilidi bırak — bu adımdan sonra yeniden tetiklenemez
+      if (closeBtn) closeBtn.click();
       console.debug(LOG, "oynatıcı seçimi geri yüklendi");
-      return true;
     }
 
     function onFieldChange(e) {
@@ -441,10 +476,12 @@
 
         if (restoreTimer) clearTimeout(restoreTimer);
         restoreTimer = setTimeout(function () {
-          // Yalnızca sidebar gezinmesinden sonra oynatıcı geri yüklemeyi dene
+          // Yalnızca sidebar gezinmesinden sonra ve TEK SEFER denenir;
+          // _pendingNav burada tüketilir — aynı gezinme için asla tekrar.
           if (_pendingNav) {
             _pendingNav = false;
-            if (restorePlayerSelection(0)) { _restoringPlayer = true; return; }
+            startPlayerRestore();
+            if (_restoringPlayer) return;
           }
           restoreScene(root, 0);
           restoreTimer = null;

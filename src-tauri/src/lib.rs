@@ -1021,13 +1021,15 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // BLOK 7D: DASHBOARD İYİLEŞTİRMELERİ
     // Yalnızca /dashboard rotasında aktif olur (bkz. dosya içi route
     // guard'ı + body.oa-dashboard-active CSS scoping'i). Sidebar gruplama,
-    // form hafızası ve oynatıcı hatırlamayı içerir.
+    // form hafızası ve oynatıcı hatırlamayı içerir. Oynatıcı geri yükleme
+    // TEK ATIMLIKTIR (sidebar gezinmesi başına 1 deneme, token korumalı).
+    //
+    // NOT: player-dialog-dismiss.js bilinçli olarak enjekte EDİLMEDİ —
+    // kendi observer'ı dialogu kapattıkça yeniden tetiklenip sonsuz
+    // tıklama döngüsüne giriyordu. Aynı işi enhancer'ın adım 2'si
+    // (dialogu kapat) zaten güvenli yapıyor.
     // ──────────────────────────────────────────────
     include_str!("js/modules/dashboard-enhancer.js"),
-    "\n",
-    // Dashboard'daki "Bir oynatıcı seç" dialogunu otomatik kapatır.
-    // Dosya içi /dashboard route guard'ı vardır — başka sayfalara dokunmaz.
-    include_str!("js/modules/player-dialog-dismiss.js"),
     "\n",
 
     // ──────────────────────────────────────────────
