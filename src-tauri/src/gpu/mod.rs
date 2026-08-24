@@ -1,0 +1,650 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// gpu/mod.rs — GPU Tanılama Sistemi Ana Modülü
+//
+// Bu modül tüm alt modülleri birleştirerek:
+//   1. FullGpuReport üretir (GpuSession aracılığıyla session-lifetime cache)
+//   2. Linux'a özgü env var yönetimini yapar (NVIDIA/Wayland workaround'lar)
+//   3. Tauri komutlarını expose eder
+//
+// Session cache: OnceLock<Mutex<FullGpuReport>>
+//   • Başarılı rapor → session boyunca korunur
+//   • Başarısız rapor → 60s TTL sonrası yeniden denenir
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub mod diagnostics;
+pub mod backend;
+pub mod vulkan;
+// webgpu/checker.rs doğrudan wgpu API'sini kullanır; wgpu yalnızca Linux
+// target'ında bağımlı olduğundan bu modül de Linux'a özgüdür.
+#[cfg(target_os = "linux")]
+pub mod webgpu;
+pub mod wgpu_fb;
+pub mod linux;
+pub mod windows;
+pub mod macos;
+
+pub use diagnostics::types::*;
+pub use diagnostics::report::*;
+// Glob re-export: #[tauri::command] makrosunun ürettiği gizli __cmd__* öğeleri
+// de dahil edilir; böylece lib.rs'teki generate_handler! bunları
+// `gpu::gpu_fallback_status` yolundan bulabilir (isimli re-export bunu taşımaz).
+pub use wgpu_fb::fallback::*;
+
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Session Cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Başarısız raporlar için yeniden deneme süresi (60 saniye).
+const FAILURE_RETRY_TTL_SECS: u64 = 60;
+
+struct CacheEntry {
+    report: FullGpuReport,
+    computed_at: Instant,
+    is_success: bool,
+}
+
+static GPU_CACHE: OnceLock<Mutex<Option<CacheEntry>>> = OnceLock::new();
+
+fn gpu_cache() -> &'static Mutex<Option<CacheEntry>> {
+    GPU_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ana API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GPU raporunu döndürür. Cache geçerliyse cache'den, değilse hesaplayarak.
+/// Thread-safe, hata toleranslı.
+pub async fn get_gpu_report() -> FullGpuReport {
+    // Cache kontrolü
+    {
+        let cache = gpu_cache()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        if let Some(entry) = cache.as_ref() {
+            if entry.is_success {
+                // Başarılı rapor → session boyunca geçerli
+                return entry.report.clone();
+            }
+            // Başarısız rapor → TTL kontrolü
+            let elapsed = entry.computed_at.elapsed().as_secs();
+            if elapsed < FAILURE_RETRY_TTL_SECS {
+                return entry.report.clone();
+            }
+            println!("[GPU] Başarısız rapor TTL doldu ({} sn), yeniden hesaplanıyor...", elapsed);
+        }
+    }
+
+    // Raporu hesapla
+    let report = compute_full_report().await;
+    let is_success = report.critical_error.is_none() && report.vulkan_status.is_ok();
+
+    // Cache'e kaydet
+    {
+        let mut cache = gpu_cache()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        *cache = Some(CacheEntry {
+            report: report.clone(),
+            computed_at: Instant::now(),
+            is_success,
+        });
+    }
+
+    report
+}
+
+/// Cache'i geçersiz kılar (test/debug için).
+pub fn invalidate_gpu_cache() {
+    let mut cache = gpu_cache()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    *cache = None;
+    println!("[GPU] Cache geçersiz kılındı");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Platform Rapor Hesaplayıcı
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn compute_full_report() -> FullGpuReport {
+    #[cfg(target_os = "linux")]
+    {
+        compute_linux_report().await
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        compute_windows_report().await
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        compute_macos_report().await
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        empty_report()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Linux Raporu
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+async fn compute_linux_report() -> FullGpuReport {
+    println!("[GPU] Linux GPU raporu hesaplanıyor...");
+
+    // 1. Platform-spesifik algılama
+    let detection = linux::detector::detect();
+
+    // 2. Vulkan probe
+    let vulkan_probe = vulkan::run_vulkan_probe().await;
+
+    // 3. Backend seçimi
+    let best_backend = backend::select_best_backend().await;
+
+    // 4. wgpu adapter bilgileri (varsa)
+    let (adapter_name, webgpu_info, webgpu_status) = try_get_wgpu_adapter_info(&best_backend).await;
+
+    // 5. Raporu birleştir
+    let mut report = empty_report();
+
+    // Temel bilgiler
+    let refined_vendor = linux::detector::refine_vendor_from_renderer(
+        detection.vendor.clone(),
+        &detection.opengl_renderer.clone().unwrap_or_default(),
+    );
+    report.vendor = refined_vendor.as_str().to_string();
+    report.vendor_enum = refined_vendor.clone();
+    report.renderer = detection.renderer.clone();
+    report.driver_version = detection.driver_version.clone();
+    report.mesa_version = detection.mesa_version.clone();
+    report.opengl_renderer = detection.opengl_renderer.clone();
+    report.opengl_version = detection.opengl_version.clone();
+    report.display_server = detection.display_server.clone();
+    report.pci_vendor_id = detection.pci_vendor_id.clone();
+    report.pci_device_id = detection.pci_device_id.clone();
+
+    // NVIDIA spesifik
+    report.nvidia_driver_version = detection.nvidia_driver_version.clone();
+    report.nvidia_is_proprietary = detection.nvidia_is_proprietary;
+    report.nvidia_is_nouveau = detection.nvidia_is_nouveau;
+
+    // AMD spesifik
+    report.amd_driver = detection.amd_driver.clone();
+
+    // Intel spesifik
+    report.intel_driver = detection.intel_driver.clone();
+
+    // Hardware acceleration
+    report.vaapi_supported = detection.vaapi_supported;
+    report.dmabuf_supported = detection.dmabuf_supported;
+    report.hw_accel = !matches!(best_backend, GpuBackend::Software);
+    report.video_decode = detection.vaapi_supported;
+    report.video_encode = detection.vaapi_supported;
+
+    // Paket yönetimi
+    report.pkg_manager = detection.pkg_manager.clone();
+    report.has_pkexec = detection.has_pkexec;
+
+    // Backend
+    report.backend = best_backend.clone();
+
+    // Vulkan
+    apply_vulkan_probe(&mut report, &vulkan_probe);
+
+    // WebGPU
+    if let Some(name) = adapter_name {
+        report.adapter_name = Some(name);
+    }
+    if let Some(info) = webgpu_info {
+        report.webgpu_status = webgpu_status;
+        report.msaa_supported = info.msaa_x4;
+        report.compute_shader = true;
+        report.timestamp_query = info.timestamp_query;
+        report.max_texture_dimension = Some(info.max_texture_dimension_2d);
+        report.max_storage_buffer_binding_size = Some(info.max_storage_buffer_binding_size);
+        report.max_compute_workgroup_size = Some(info.max_compute_workgroup_size_x);
+    } else {
+        report.webgpu_status = WebGpuStatus::BridgeOk; // wgpu bridge üzerinden çalışıyor
+    }
+
+    // Paket önerileri (sadece Vulkan yoksa)
+    if !vulkan_probe.status.is_ok() {
+        let (pkgs, cmd) = build_install_command(&detection.pkg_manager, &refined_vendor);
+        report.recommended_packages = pkgs;
+        report.recommended_command = cmd;
+        report.critical_error = Some(vulkan_probe.status.error_message().to_string());
+    }
+
+    // Log birleştir
+    report.init_log.extend(detection.log);
+
+    // Özet log
+    println!(
+        "[GPU] Rapor tamamlandı: vendor={}, backend={}, vulkan={:?}, dmabuf={}",
+        report.vendor, report.backend, report.vulkan_status, report.dmabuf_supported
+    );
+
+    report
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Windows Raporu
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+async fn compute_windows_report() -> FullGpuReport {
+    // Windows'ta GPU tanısı wgpu'suz yapılır (wgpu yalnızca Linux target'ında bağımlı).
+    // Backend seçimi ve adapter enumeration burada stub'dur; asıl WebGPU yolu
+    // WebView2'nin (Chromium) native WebGPU desteği üzerinden yürür.
+    let detection = windows::detector::detect();
+    let best_backend = backend::select_best_backend().await;
+
+    let mut report = empty_report();
+    report.vendor = detection.vendor.as_str().to_string();
+    report.vendor_enum = detection.vendor;
+    report.renderer = detection.renderer;
+    report.driver_version = detection.driver_version;
+    report.display_server = detection.display_server;
+    report.backend = best_backend;
+    report.hw_accel = report.backend.is_hardware();
+    // WebView2 (Chromium) native WebGPU sağlar; kesin durum Faz 4'te frontend'den doldurulur.
+    report.webgpu_status = WebGpuStatus::NativeOk;
+    report.init_log.extend(detection.log);
+    report
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// macOS Raporu
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+async fn compute_macos_report() -> FullGpuReport {
+    // macOS'ta GPU tanısı wgpu'suz yapılır (wgpu yalnızca Linux target'ında bağımlı).
+    // Render yolu WKWebView üzerinden yürür; WKWebView'de WebGPU 2026 itibarıyla
+    // hâlâ deneysel olduğundan durum "Unsupported" varsayılır, Faz 4'te güncellenebilir.
+    let detection = macos::detector::detect();
+    let best_backend = backend::select_best_backend().await;
+
+    let mut report = empty_report();
+    report.vendor = detection.vendor.as_str().to_string();
+    report.vendor_enum = detection.vendor;
+    report.renderer = detection.renderer;
+    report.driver_version = detection.driver_version;
+    report.display_server = detection.display_server;
+    report.backend = best_backend;
+    report.hw_accel = report.backend.is_hardware();
+    report.webgpu_status = WebGpuStatus::Unsupported;
+    report.init_log.extend(detection.log);
+    report
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Panik-korumalı wgpu Instance oluşturma
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// wgpu Instance'ı panic'e karşı korumalı oluşturur.
+///
+/// wgpu-hal'ın GL backend'i, bozuk/eksik EGL kurulumlarında (ör. AppImage +
+/// host EGL uyumsuzluğu) init sırasında khronos-egl içinde
+/// `Option::unwrap() on None` ile PANIC'ler — sahada bunun sonucu,
+/// gpu_request_adapter promise'inin hiç çözülmemesi ve sitenin splash
+/// ekranında sonsuza dek takılı kalmasıydı. Sıra: istenen backend seti →
+/// GL çıkarılmış set → boş set (adapter bulunmaz ama uygulama yaşar).
+#[cfg(target_os = "linux")]
+pub fn create_instance_safe(backends: wgpu::Backends) -> wgpu::Instance {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let mk = |b: wgpu::Backends| {
+        // Beklenen panic (bozuk EGL) — hook'un backtrace/crash.log maliyeti bastırılır.
+        crate::with_suppressed_panic_log(|| {
+            catch_unwind(AssertUnwindSafe(|| {
+                wgpu::Instance::new(wgpu::InstanceDescriptor {
+                    backends: b,
+                    ..Default::default()
+                })
+            }))
+        })
+    };
+
+    if let Ok(instance) = mk(backends) {
+        return instance;
+    }
+
+    let without_gl = backends - wgpu::Backends::GL;
+    if without_gl != backends {
+        crate::log!("[GPU] wgpu instance init panic'ledi (muhtemel bozuk EGL) — GL backend'siz deneniyor");
+        if let Ok(instance) = mk(without_gl) {
+            return instance;
+        }
+    }
+
+    crate::log!("[GPU] wgpu instance hiçbir backend ile kurulamadı — boş backend seti ile devam (WebGPU devre dışı)");
+    mk(wgpu::Backends::empty()).unwrap_or_else(|_| {
+        // Boş backend setiyle init hiçbir sürücüye dokunmaz; buraya düşmek
+        // pratikte imkânsızdır.
+        panic!("wgpu instance boş backend setiyle bile oluşturulamadı")
+    })
+}
+
+/// Uygulama genelinde TEK wgpu Instance — her zaman VULKAN-ONLY.
+///
+/// GL backend'i burada ASLA init edilmez: wgpu'nun GL backend'i EGL'yi
+/// webkit UI process'inin İÇİNDE (tokio thread'inde) başlatır ve webkit'in
+/// kendi EGL/GLX compositing durumuyla aynı proseste çakışır — sahada
+/// requestAdapter anında tüm pencerenin siyaha dönmesinin kökü buydu
+/// (AppImage=Vulkan-only etkilenmiyordu, kaynaktan/dev VULKAN|GL kuruyordu).
+/// GL'ye gerçekten ihtiyaç duyan Vulkan'sız sistemler için tek kapı
+/// gl_fallback_instance()'tır; seçim active_instance()'ta yapılır.
+#[cfg(target_os = "linux")]
+pub fn shared_instance() -> &'static wgpu::Instance {
+    static SHARED: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
+    SHARED.get_or_init(|| create_instance_safe(wgpu::Backends::VULKAN))
+}
+
+/// Process'te GL/EGL instance yaratımının TEK kapısı. Yalnızca Vulkan'sız
+/// sistemlerde (active_instance kararı veya GL tanılaması) çağrılmalıdır;
+/// o sistemlerde configure_linux_gpu_env zaten WEBKIT_DISABLE_COMPOSITING_MODE=1
+/// set ettiğinden webkit'le EGL çakışması riski kalmaz.
+#[cfg(target_os = "linux")]
+pub fn gl_fallback_instance() -> &'static wgpu::Instance {
+    static GL_FALLBACK: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
+    GL_FALLBACK.get_or_init(|| {
+        crate::log!("[GPU] UI process'te EGL init ediliyor (GL fallback) — yalnızca Vulkan'sız sistem yolu");
+        create_instance_safe(wgpu::Backends::GL)
+    })
+}
+
+/// Köprü ve renderer'ın kullanacağı instance: Vulkan adapter varsa Vulkan-only
+/// shared instance (EGL'ye hiç dokunulmaz); 0 Vulkan adapter'da GL fallback
+/// denenir; o da boşsa shared döner (mevcut "adapter yok" tanılama modalı
+/// akışı devreye girer). Karar oturum başına bir kez verilir.
+#[cfg(target_os = "linux")]
+pub fn active_instance() -> &'static wgpu::Instance {
+    static ACTIVE: std::sync::OnceLock<&'static wgpu::Instance> = std::sync::OnceLock::new();
+    ACTIVE.get_or_init(|| {
+        let vk = shared_instance();
+        if !vk.enumerate_adapters(wgpu::Backends::VULKAN).is_empty() {
+            crate::log!("[GPU] active_instance: Vulkan adapter mevcut — Vulkan-only instance (EGL'ye dokunulmadı)");
+            return vk;
+        }
+        let gl = gl_fallback_instance();
+        if !gl.enumerate_adapters(wgpu::Backends::GL).is_empty() {
+            crate::log!("[GPU] active_instance: 0 Vulkan adapter — GL fallback instance kullanılıyor");
+            return gl;
+        }
+        crate::log!("[GPU] active_instance: hiçbir backend'de adapter yok — boş Vulkan instance (tanılama modalı akışı)");
+        vk
+    })
+}
+
+/// WebGPU köprüsü için `wgpu::Device` + `wgpu::Queue` yaratır.
+///
+/// (Orijinal daldaki `renderer/device.rs`'in sadeleştirilmiş hâli: burada
+/// `renderer/` modülü portlanmadığı için tek tüketici bu köprü — süreç
+/// genelinde paylaşılan bir statik cache'e gerek yok, `BridgeState.device`
+/// zaten tek örneği tutuyor. `SHADER_F16`/`BGRA8UNORM_STORAGE` destekleniyorsa
+/// istenir, device-lost/uncaptured-error olayları `crate::log!`'a akar.)
+#[cfg(target_os = "linux")]
+pub async fn create_device_and_queue(
+    adapter: &wgpu::Adapter,
+) -> Result<(std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>), String> {
+    let supported_features = adapter.features();
+    let mut required_features = wgpu::Features::empty();
+    if supported_features.contains(wgpu::Features::SHADER_F16) {
+        required_features |= wgpu::Features::SHADER_F16;
+    }
+    if supported_features.contains(wgpu::Features::BGRA8UNORM_STORAGE) {
+        required_features |= wgpu::Features::BGRA8UNORM_STORAGE;
+    }
+
+    let (device, queue) = adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("OpenAnime WebGPU Bridge Device"),
+                required_features,
+                required_limits: wgpu::Limits::default(),
+                memory_hints: Default::default(),
+            },
+            None,
+        )
+        .await
+        .map_err(|e| format!("WGPU Device oluşturulamadı: {e}"))?;
+
+    // wgpu'nun varsayılan davranışı doğrulama hatalarında panic'tir; bunun
+    // yerine logla ki uygulama yaşasın (panic = "abort" kullanılmıyor olsa
+    // bile bir GPU thread panic'i o thread'i öldürüp köprüyü ölü bırakırdı).
+    device.on_uncaptured_error(Box::new(|error| {
+        crate::log!("[WebGPU] Uncaptured error: {}", error);
+    }));
+    device.set_device_lost_callback(|reason, message| {
+        crate::log!("[WebGPU] Device lost ({:?}): {}", reason, message);
+    });
+
+    Ok((std::sync::Arc::new(device), std::sync::Arc::new(queue)))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wgpu Adapter Bilgisi (her platformda kullanılabilir)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+async fn try_get_wgpu_adapter_info(
+    backend: &GpuBackend,
+) -> (Option<String>, Option<webgpu::checker::WebGpuAdapterInfo>, WebGpuStatus) {
+    // Per-call create_instance_safe KALKTI: eski `_ => Backends::all()` kolu
+    // GL'yi de içerdiğinden UI process'te üçüncü bir EGL init noktasıydı
+    // (webkit compositing'ini öldürüyordu). Artık paylaşılan kapılar kullanılır.
+    let instance = match backend {
+        GpuBackend::Vulkan => shared_instance(),
+        // Bu fonksiyon Linux'a özgü; OpenGL dışındaki kollar (Metal/DX) pratikte
+        // hiç seçilmez — hepsi active_instance kararına düşer.
+        GpuBackend::OpenGL => gl_fallback_instance(),
+        _ => active_instance(),
+    };
+
+    let adapter_opt = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        })
+        .await;
+
+    match adapter_opt {
+        Some(adapter) => {
+            let info = webgpu::checker::extract_webgpu_info(&adapter);
+            let status = webgpu::checker::determine_webgpu_status(&info);
+            let name = info.name.clone();
+            (Some(name), Some(info), status)
+        }
+        None => {
+            // Software fallback dene
+            let fallback = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::None,
+                    force_fallback_adapter: true,
+                    compatible_surface: None,
+                })
+                .await;
+
+            match fallback {
+                Some(adapter) => {
+                    let info = webgpu::checker::extract_webgpu_info(&adapter);
+                    let name = info.name.clone();
+                    (Some(name), Some(info), WebGpuStatus::SoftwareFallback)
+                }
+                None => (None, None, WebGpuStatus::AdapterFailed),
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Linux Environment Variables — GPU'ya göre otomatik ayar
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Linux'ta GPU'ya ve display server'a göre WebKit/DRM ortam değişkenlerini ayarlar.
+/// Bu fonksiyon `run()` başlamadan önce çağrılmalı (Tauri setup öncesi).
+/// Ortam değişkenini yalnızca kullanıcı tarafından önceden ayarlanmamışsa
+/// ayarlar; böylece kullanıcı override'ları her zaman kazanır.
+#[cfg(target_os = "linux")]
+fn set_env_if_unset(key: &str, value: &str, reason: &str) {
+    if std::env::var_os(key).is_some() {
+        println!("[GPU Env] {key} kullanıcı tarafından ayarlanmış — dokunulmadı");
+        return;
+    }
+    std::env::set_var(key, value);
+    println!("[GPU Env] {reason} — {key}={value} ayarlandı");
+}
+
+#[cfg(target_os = "linux")]
+pub fn configure_linux_gpu_env() {
+    println!("[GPU Env] Linux GPU ortam değişkenleri yapılandırılıyor...");
+
+    let detection = linux::detector::detect();
+    let is_wayland = matches!(detection.display_server, DisplayServer::Wayland);
+
+    // ── WebKit sürüm tespiti + DMABUF renderer koruması ─────────────────────
+    // Yalnızca bilinen kötü aralıkta (2.44–2.48) VE X11 backend'i altında
+    // DEĞİLKEN blanket kapatma uygulanır. 2.50+ sürümlerde DMABUF sağlıklı;
+    // kapatmak webkit'i yazılımsal compositing'e düşürüp UI lag'i üretiyor
+    // (sahada 2.52'de gözlendi). OPENANIME_ENABLE_DMABUF=1 ile opt-out sürer.
+    let (wk_major, wk_minor, wk_micro) = linux::webkit::version();
+    println!("[GPU Env] webkit2gtk sürümü: {wk_major}.{wk_minor}.{wk_micro}");
+
+    let dmabuf_opt_in = std::env::var("OPENANIME_ENABLE_DMABUF")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    // GDK_BACKEND=x11 zorlandıysa ya da oturum zaten X11 ise webkit X11
+    // yolundadır — DMABUF sorunları büyük ölçüde Wayland yoluna özgüdür.
+    let on_x11 = std::env::var_os("WAYLAND_DISPLAY").is_none()
+        || std::env::var("GDK_BACKEND").map(|v| v.contains("x11")).unwrap_or(false);
+
+    if linux::webkit::dmabuf_renderer_is_risky() && !on_x11 && !dmabuf_opt_in {
+        set_env_if_unset(
+            "WEBKIT_DISABLE_DMABUF_RENDERER",
+            "1",
+            &format!("webkit2gtk {wk_major}.{wk_minor} (2.44-2.48 aralığı, Wayland) DMABUF renderer riskli"),
+        );
+    } else if dmabuf_opt_in {
+        println!("[GPU Env] OPENANIME_ENABLE_DMABUF=1 — DMABUF renderer korumaları atlandı");
+    }
+
+    // ── Vulkan desteği yoksa WebKit compositing'i kapat ─────────────────────
+    // Asenkron Vulkan probe'u burada çalıştırmak maliyetli olduğundan
+    // sadece ICD dosyası varlığına bakarak hızlı karar veririz.
+    let vulkan_available = !linux::detector::find_vulkan_icd_files().is_empty()
+        && (std::path::Path::new("/usr/lib/libvulkan.so.1").exists()
+            || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libvulkan.so.1").exists()
+            || std::path::Path::new("/usr/lib64/libvulkan.so.1").exists());
+
+    if !vulkan_available {
+        set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1", "Vulkan yok");
+    }
+
+    // ── NVIDIA spesifik workaround'lar ─────────────────────────────────────
+    let is_nvidia = matches!(detection.vendor, GpuVendor::Nvidia);
+
+    if is_nvidia {
+        // DMA-BUF: NVIDIA < 555 sürümde DMA-BUF sorunlu
+        if !detection.dmabuf_supported && !dmabuf_opt_in {
+            set_env_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1", "NVIDIA (eski driver)");
+        }
+
+        // Wayland + NVIDIA: explicit sync workaround (driver < 555)
+        if is_wayland && !detection.dmabuf_supported {
+            set_env_if_unset("__NV_DISABLE_EXPLICIT_SYNC", "1", "Wayland + NVIDIA (eski)");
+        }
+
+        // NVIDIA proprietary + Wayland: GBM backend zorla — YALNIZCA sistemdeki
+        // tek GPU NVIDIA ise. Hibrit laptop'larda (iGPU + NVIDIA dGPU)
+        // compositor iGPU'da koşar; GLX'i NVIDIA'ya zorlamak webkit'in GL
+        // bağlamını kırabilir (klasik PRIME yanlış yapılandırması).
+        if is_wayland && detection.nvidia_is_proprietary {
+            if detection.gpu_count > 1 {
+                println!("[GPU Env] Hibrit sistem ({} GPU) — NVIDIA GBM/GLX zorlaması atlandı", detection.gpu_count);
+            } else if let Some(ref ver_str) = detection.nvidia_driver_version {
+                // nvidia sürücüsü 525+ sürümde GBM destekliyor
+                let major: u32 = ver_str.split('.').next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                if major >= 525 {
+                    set_env_if_unset("GBM_BACKEND", "nvidia-drm",
+                        &format!("NVIDIA {ver_str} Wayland GBM backend"));
+                    set_env_if_unset("__GLX_VENDOR_LIBRARY_NAME", "nvidia",
+                        &format!("NVIDIA {ver_str} Wayland GLX vendor"));
+                }
+            }
+        }
+    }
+
+    // ── VirtIO GPU (VM ortamı) ──────────────────────────────────────────────
+    if matches!(detection.vendor, GpuVendor::VirtIo | GpuVendor::Vmware) {
+        // VM'de hardware compositing sorunlu olabilir
+        set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1", "VM GPU tespit edildi");
+    }
+
+    println!("[GPU Env] ✓ Yapılandırma tamamlandı (vendor={}, gpu_sayısı={}, wayland={}, dmabuf={}, webkit={}.{}.{}, overlay={})",
+        detection.vendor, detection.gpu_count, is_wayland, detection.dmabuf_supported,
+        wk_major, wk_minor, wk_micro, crate::overlays_supported());
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn configure_linux_gpu_env() {
+    // Linux dışı platformlarda hiçbir şey yapma
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tauri Komutları
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tam GPU raporunu döndürür. Session cache ile korunur.
+#[tauri::command]
+pub async fn gpu_full_report() -> FullGpuReport {
+    get_gpu_report().await
+}
+
+/// GPU Vulkan durumunu döndürür (sadece Vulkan kısmı — daha hızlı).
+#[tauri::command]
+pub async fn gpu_vulkan_status() -> serde_json::Value {
+    let report = get_gpu_report().await;
+    serde_json::json!({
+        "status": report.vulkan_status,
+        "steps": report.vulkan_steps,
+        "icd_files": report.vulkan_icd_files,
+        "version": report.vulkan_version,
+        "error_message": report.vulkan_status.error_message(),
+        "fix_hint": report.vulkan_status.fix_hint(),
+    })
+}
+
+/// Seçilen backend bilgisini döndürür.
+#[tauri::command]
+pub async fn gpu_backend_info() -> serde_json::Value {
+    let report = get_gpu_report().await;
+    serde_json::json!({
+        "backend": report.backend,
+        "is_hardware": report.backend.is_hardware(),
+        "adapter_name": report.adapter_name,
+        "vendor": report.vendor,
+    })
+}
+
+/// Cache'i geçersiz kılarak raporu yeniden hesaplar.
+/// Kullanıcı driver kurulumu yaptıktan sonra çağrılır.
+#[tauri::command]
+pub async fn gpu_refresh_report() -> FullGpuReport {
+    invalidate_gpu_cache();
+    get_gpu_report().await
+}

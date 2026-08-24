@@ -38,6 +38,7 @@
     "allow-read-local-video",
     "allow-updater",
     "allow-theme-app",
+    "allow-webgpu-bridge",
     "allow-perf-mode",
     "allow-super-notifications",
     "allow-easter-egg"

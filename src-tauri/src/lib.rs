@@ -28,8 +28,10 @@ mod dpi_proxy;
 mod perf_mode;
 #[cfg(target_os = "windows")]
 mod perf_report;
+mod gpu;
 #[cfg(target_os = "linux")]
-mod native_player;
+mod gpu_detector;
+mod webgpu_bridge;
 mod gpu_info;
 
 /// Performans modu kararı için paylaşılan durum.
@@ -209,10 +211,38 @@ mod gpu_switch_macos {
 // Her blok yorumla ayrılmıştır.
 // ═══════════════════════════════════════════════════════════════════════════════
 /// Webview'lara enjekte edilen ortak init script'i döndürür.
-/// (Linux'a özgü overlay/WebGPU köprüsü kaldırıldı; Windows/macOS webview'ı
-/// WebGPU'yu native sağladığından ek bayrağa gerek yok.)
+///
+/// Linux'ta başına çalışma zamanı bayrakları eklenir:
+///   __OA_OVERLAY_OK__ — overlay pencereleri (WebGPU canvas sunumu)
+///   konumlandırılabiliyor mu (bkz. `configure_display_backend`). `false` ise
+///   `webgpu-native-shim.js` `navigator.gpu`'yu HİÇ kurmaz, site kendi
+///   HTML5/HLS yoluna döner — player yine çalışır, yalnızca upscale/kare
+///   oluşturma devre dışı kalır.
+/// Windows/macOS webview'ı WebGPU'yu zaten native sağladığından bu bayraklara
+/// ihtiyaç duymaz (shim `isLinux` kontrolüyle kendini zaten devre dışı bırakır).
 fn build_init_script() -> String {
-    COMMON_INIT_SCRIPT.to_string()
+    #[cfg(target_os = "linux")]
+    {
+        // OPENANIME_DISABLE_WEBGPU=1: tanılama bayrağı — shim navigator.gpu'yu
+        // hiç kurmaz, dolayısıyla wgpu instance'ı proseste hiç yüklenmez.
+        // "Render/donma sorunu WebGPU köprüsünden mi geliyor?" sorusunu izole
+        // etmek için.
+        let webgpu_disabled = std::env::var("OPENANIME_DISABLE_WEBGPU")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if webgpu_disabled {
+            println!("[Display] OPENANIME_DISABLE_WEBGPU=1 — WebGPU shim devre dışı (tanılama modu)");
+        }
+        let overlay_flag = overlays_supported() && !webgpu_disabled;
+        return format!(
+            "window.__OA_OVERLAY_OK__={};\n{}",
+            overlay_flag, COMMON_INIT_SCRIPT
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        COMMON_INIT_SCRIPT.to_string()
+    }
 }
 
 /// Logo animatörü ("Muptezel Anime" splash) base64 dokularını lazy döndürür.
@@ -835,6 +865,20 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "{\n",
     include_str!("js/modules/image-rightsizer.js"),
     "\n}\n",
+
+    // ──────────────────────────────────────────────
+    // BLOK 2B: WEBGPU IPC KÖPRÜSÜ (SADECE LİNUX)
+    // WebKitGTK navigator.gpu sunmuyor; bu shim onu JS tarafında taklit edip
+    // her çağrıyı IPC ile src-tauri/src/webgpu_bridge.rs'teki gerçek wgpu'ya
+    // yönlendirir. Site kendi kodunu (gerçek OFG kare-oluşturma dahil) hiç
+    // değişmeden çalıştırır. Kendini Windows/macOS'ta (`isLinux` kontrolü) ve
+    // overlay konumlandırılamıyorsa (__OA_OVERLAY_OK__, bkz. build_init_script)
+    // devre dışı bırakır — BURADA ekstra bir platform dalına gerek yok.
+    // Sonraki bloklardaki webgpu-inspector.js/webgpu-detect.js'in
+    // navigator.gpu'yu bulabilmesi için ONLARDAN ÖNCE gelmeli.
+    // ──────────────────────────────────────────────
+    include_str!("js/modules/webgpu-native-shim.js"),
+    "\n",
 
     // ──────────────────────────────────────────────
     // BLOK 4: PENCERE & ARAYÜZ KONTROLLERİ
@@ -1838,11 +1882,39 @@ async fn read_file_head(path: String, max_bytes: u32) -> Result<Vec<u8>, String>
     Ok(buffer)
 }
 
+thread_local! {
+    /// `with_suppressed_panic_log` içindeyken true — GPU instance kurulumu
+    /// gibi "panic'leyebilir ama yakalanıp normal bir hataya çevrilecek"
+    /// beklenen durumlarda tam backtrace + crash.log dosyası YAZILMASIN diye
+    /// (bkz. gpu/mod.rs -> create_instance_safe). Beklenmeyen bir panic bunu
+    /// hiç görmez, HER ZAMAN false'tur.
+    static SUPPRESS_PANIC_LOG: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
+/// Verilen kapanışı, panic hook'unun bu thread'deki panic'i sessizce (tek
+/// satır log, backtrace/crash.log YOK) işlemesini sağlayarak çalıştırır.
+/// `catch_unwind` ile birlikte kullanılır — panic zaten yakalanıp normal bir
+/// `Result::Err`e çevrileceği için gürültülü bir crash raporuna gerek yoktur.
+#[allow(dead_code)] // yalnızca Linux'ta çağrılıyor (bkz. gpu::create_instance_safe)
+pub(crate) fn with_suppressed_panic_log<T>(f: impl FnOnce() -> T) -> T {
+    SUPPRESS_PANIC_LOG.with(|c| c.set(true));
+    let result = f();
+    SUPPRESS_PANIC_LOG.with(|c| c.set(false));
+    result
+}
+
 /// Panic mesajı + backtrace'i hem session log'a hem de kalıcı bir crash
 /// dosyasına yazar; "uygulama sessizce çöküyor" raporları böylece kanıtlı gelir.
 fn install_crash_logger() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Beklenen/yakalanan panic (bkz. with_suppressed_panic_log): tek
+        // satır log, backtrace yok, crash.log yok.
+        if SUPPRESS_PANIC_LOG.with(|c| c.get()) {
+            log!("[Panic-Yakalandı] {}", info);
+            return;
+        }
+
         let backtrace = std::backtrace::Backtrace::force_capture();
         let report = format!(
             "===== OPENANIME PANIC =====\n{}\n\nBacktrace:\n{}\n",
@@ -1888,8 +1960,90 @@ fn show_fatal_startup_error(err: &dyn std::fmt::Display) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Linux'ta pencere overlay'lerinin (WebGPU canvas sunumu) çalışıp
+/// çalışamayacağı. Wayland'da toplevel pencereler konumlandırılamaz
+/// (gtk_window_move no-op) — overlay mimarisi yalnızca X11/XWayland'da işler.
+#[cfg(target_os = "linux")]
+static OVERLAYS_SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "linux")]
+pub fn overlays_supported() -> bool {
+    *OVERLAYS_SUPPORTED.get().unwrap_or(&false)
+}
+
+/// Prosesin İLK Xlib çağrısı olarak XInitThreads() çalıştırır — GTK init'ten
+/// ve her türlü XOpenDisplay'den ÖNCE çağrılmalıdır. Gerekçe: GDK (GTK3)
+/// XInitThreads çağırmaz; Display kilitleri XOpenDisplay ANINDA thread
+/// desteğine göre kurulduğundan GTK'nın X bağlantısı kilitsiz açılır. Oysa
+/// wgpu/Vulkan WSI (canvas overlay surface'ları + swapchain present) aynı GTK
+/// Display'ine tokio thread'lerinden dokunur — kilitsiz bağlantıda bu, GTK ana
+/// döngüsüyle veri yarışıdır ve sahada "uygulama bir anda çizmeyi bırakıyor"
+/// (UI donuk, JS/IPC yaşıyor) olarak görülüyordu.
+#[cfg(target_os = "linux")]
+fn init_xlib_threads() {
+    if let Ok(xlib) = x11_dl::xlib::Xlib::open() {
+        let status = unsafe { (xlib.XInitThreads)() };
+        println!("[Display] XInitThreads çağrıldı (status={status}) — Xlib çok-thread kilitleri aktif");
+    } else {
+        // libX11 yok (saf Wayland sistemi olabilir) — overlay'ler zaten devre
+        // dışı kalacağından sorun değil.
+        println!("[Display] libX11 açılamadı — XInitThreads atlandı");
+    }
+}
+
+/// Wayland oturumunda GTK'yı X11 backend'ine (XWayland) zorlar.
+/// GTK init'ten ÖNCE çağrılmalıdır. Gerekçe: tao/GTK'da set_position →
+/// gtk_window_move, Wayland'da belgeli no-op'tur; gpu_canvas overlay
+/// pencereleri videonun/canvas'ın üzerine hizalanamaz. XWayland altında
+/// konumlandırma X11 semantiğiyle çalışır.
+#[cfg(target_os = "linux")]
+fn configure_display_backend() {
+    let native_wayland_opt_in = std::env::var("OPENANIME_NATIVE_WAYLAND")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let is_wayland_session = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let has_x11 = std::env::var_os("DISPLAY").is_some();
+    let user_forced_backend = std::env::var_os("GDK_BACKEND").is_some();
+
+    // Karar HER dalda loglanır — sahada hangi yolun seçildiği log'dan
+    // birebir okunabilmeli (bazı AppImage GTK hook'ları GDK_BACKEND'i
+    // kendileri export eder; o durum da görünür olmalı).
+    let overlays_ok = if !is_wayland_session {
+        println!("[Display] X11 oturumu — backend değişikliği gerekmedi");
+        true
+    } else if user_forced_backend {
+        let value = std::env::var("GDK_BACKEND").unwrap_or_default();
+        let ok = value.contains("x11");
+        println!(
+            "[Display] GDK_BACKEND önceden setli (\"{}\") — dokunulmadı{}",
+            value,
+            if ok { "" } else { " (x11 değil: overlay'ler devre dışı)" }
+        );
+        ok
+    } else if native_wayland_opt_in {
+        println!("[Display] OPENANIME_NATIVE_WAYLAND=1 — Wayland'da kalınıyor, overlay'ler devre dışı");
+        false
+    } else if has_x11 {
+        std::env::set_var("GDK_BACKEND", "x11");
+        println!("[Display] Wayland oturumu tespit edildi — GDK_BACKEND=x11 zorlandı (XWayland). Overlay konumlandırma aktif.");
+        true
+    } else {
+        println!("[Display] Saf Wayland (XWayland yok) — overlay'ler devre dışı, HTML5 player modu");
+        false
+    };
+
+    println!("[Display] karar: overlay={}", overlays_ok);
+    let _ = OVERLAYS_SUPPORTED.set(overlays_ok);
+}
+
 pub fn run() {
     install_crash_logger();
+
+    #[cfg(target_os = "linux")]
+    {
+        init_xlib_threads();
+        configure_display_backend();
+    }
 
     #[cfg(target_os = "windows")]
     {
@@ -1913,6 +2067,14 @@ pub fn run() {
     } else {
         dbg_log!("[LocalVideo] Server başlatılamadı!");
     }
+
+    // GPU/display server'a göre WebKit/DRM ortam değişkenlerini GPU tanılama
+    // sistemi üzerinden yapılandırır (vendor tespiti, Vulkan ICD kontrolü,
+    // NVIDIA DMA-BUF/explicit-sync, Wayland GBM backend workaround'ları).
+    // Linux dışında no-op — `#[cfg]` burada değil, fonksiyonun kendi
+    // gövdesinde (bkz. gpu/mod.rs), bu yüzden çağrı koşulsuz.
+    gpu::configure_linux_gpu_env();
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // İkinci bir kopya başlatılmaya çalışıldığında (örn. hızlı ardışık
@@ -2246,7 +2408,22 @@ pub fn run() {
                         st.bg_since.lock().unwrap().remove(&label);
                     }
                 }
+                // Ana pencere taşınınca WebGPU canvas overlay'lerini (bkz.
+                // webgpu_bridge.rs -> CanvasContext) kayıtlı son viewport
+                // bounds'una göre yeniden konumlandır.
+                #[cfg(target_os = "linux")]
+                tauri::WindowEvent::Moved(_) => {
+                    webgpu_bridge::inner::reposition_overlays(&app_handle);
+                }
                 _ => {}
+            }
+
+            // Ana pencere odak kaybedince WebGPU overlay'lerini gizle / odak
+            // dönünce geri göster — always_on_top overlay başka uygulamaların
+            // üstünde boyanmamış kutu olarak kalmasın.
+            #[cfg(target_os = "linux")]
+            if let tauri::WindowEvent::Focused(focused) = event {
+                webgpu_bridge::inner::set_overlays_visible(*focused);
             }
 
             #[cfg(target_os = "windows")]
@@ -2337,7 +2514,67 @@ pub fn run() {
             super_notifications::sn_set_account,
             super_notifications::sn_open_notification,
             super_notifications::sn_test_toast,
-            super_notifications::sn_test_notifications
+            super_notifications::sn_test_notifications,
+            // GPU tanılama (Vulkan/backend durumu, dağıtım-farkındalı hata mesajları)
+            gpu::gpu_full_report,
+            gpu::gpu_vulkan_status,
+            gpu::gpu_backend_info,
+            gpu::gpu_refresh_report,
+            gpu::gpu_fallback_status,
+            gpu::gpu_activate_fallback,
+            // WebGPU IPC köprüsü (yalnızca Linux'ta gerçek işlev görür — bkz.
+            // webgpu_bridge.rs; diğer platformlarda hata döndüren stub'lar)
+            webgpu_bridge::inner::gpu_request_adapter,
+            webgpu_bridge::inner::gpu_request_device,
+            webgpu_bridge::inner::gpu_create_buffer,
+            webgpu_bridge::inner::gpu_write_buffer,
+            webgpu_bridge::inner::gpu_buffer_map_async,
+            webgpu_bridge::inner::gpu_buffer_unmap,
+            webgpu_bridge::inner::gpu_create_texture,
+            webgpu_bridge::inner::gpu_texture_create_view,
+            webgpu_bridge::inner::gpu_write_texture,
+            webgpu_bridge::inner::gpu_create_sampler,
+            webgpu_bridge::inner::gpu_create_shader_module,
+            webgpu_bridge::inner::gpu_create_bind_group_layout,
+            webgpu_bridge::inner::gpu_create_pipeline_layout,
+            webgpu_bridge::inner::gpu_create_bind_group,
+            webgpu_bridge::inner::gpu_create_compute_pipeline,
+            webgpu_bridge::inner::gpu_create_render_pipeline,
+            webgpu_bridge::inner::gpu_pipeline_get_bind_group_layout,
+            webgpu_bridge::inner::gpu_upload_frame_bin,
+            webgpu_bridge::inner::gpu_upload_frame,
+            webgpu_bridge::inner::gpu_create_command_encoder,
+            webgpu_bridge::inner::gpu_encoder_begin_compute_pass,
+            webgpu_bridge::inner::gpu_encoder_set_compute_pipeline,
+            webgpu_bridge::inner::gpu_encoder_set_bind_group,
+            webgpu_bridge::inner::gpu_encoder_dispatch_workgroups,
+            webgpu_bridge::inner::gpu_encoder_end_compute_pass,
+            webgpu_bridge::inner::gpu_encoder_begin_render_pass,
+            webgpu_bridge::inner::gpu_encoder_set_render_pipeline,
+            webgpu_bridge::inner::gpu_encoder_set_render_bind_group,
+            webgpu_bridge::inner::gpu_encoder_set_vertex_buffer,
+            webgpu_bridge::inner::gpu_encoder_set_index_buffer,
+            webgpu_bridge::inner::gpu_encoder_draw,
+            webgpu_bridge::inner::gpu_encoder_draw_indexed,
+            webgpu_bridge::inner::gpu_encoder_end_render_pass,
+            webgpu_bridge::inner::gpu_encoder_copy_buffer_to_texture,
+            webgpu_bridge::inner::gpu_encoder_copy_texture_to_texture,
+            webgpu_bridge::inner::gpu_encoder_finish,
+            webgpu_bridge::inner::gpu_queue_submit,
+            webgpu_bridge::inner::gpu_queue_on_submitted_work_done,
+            webgpu_bridge::inner::gpu_canvas_get_context,
+            webgpu_bridge::inner::gpu_canvas_configure,
+            webgpu_bridge::inner::gpu_canvas_get_current_texture,
+            webgpu_bridge::inner::gpu_canvas_present,
+            webgpu_bridge::inner::gpu_canvas_sync_bounds,
+            webgpu_bridge::inner::gpu_write_buffer_bin,
+            webgpu_bridge::inner::gpu_write_texture_bin,
+            webgpu_bridge::inner::gpu_buffer_read_bin,
+            webgpu_bridge::inner::gpu_import_video_frame,
+            webgpu_bridge::inner::gpu_destroy_resource,
+            webgpu_bridge::inner::gpu_push_error_scope,
+            webgpu_bridge::inner::gpu_pop_error_scope,
+            webgpu_bridge::inner::gpu_reset_bridge
         ])
         .build(tauri::generate_context!());
 

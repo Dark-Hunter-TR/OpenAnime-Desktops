@@ -47,15 +47,19 @@ windows = { version = "0.61", features = [
 ] }
 winreg = "0.56.0"
 
-# Native WebGPU oynatıcı (yalnızca Linux). Windows/macOS'ta WebView2/WebKit
-# zaten WebGPU sunar; Linux'ta WebKitGTK sunmadığı için openani.me'nin render
-# pipeline'ını native wgpu ile kopyalarız. Bkz. src/native_player/.
+# WebGPU IPC köprüsü (yalnızca Linux). Windows/macOS'ta WebView2/WebKit
+# zaten WebGPU sunar; Linux'ta WebKitGTK sunmadığı için `navigator.gpu`'yu
+# JS tarafında (webgpu-native-shim.js) taklit edip her çağrıyı IPC ile
+# buradaki gerçek wgpu'ya yönlendiriyoruz. Bkz. src/webgpu_bridge.rs, src/gpu/.
 [target.'cfg(target_os = "linux")'.dependencies]
 wgpu = "24"
 bytemuck = { version = "1", features = ["derive"] }
 half = "2"
 pollster = "0.4"
-winit = "0.29"
+# GPU adapter/sunum-uyumluluğu probe'u: GTK'nın Xlib bağlantısı thread-safe
+# olmadığından probe, dlopen'la açılan AYRI bir X bağlantısı üzerinde koşar.
+x11-dl = "2.21"
+raw-window-handle = "0.6.2"
 
 # panic = "abort" KULLANILMAZ: async Tauri komutundaki bir panic tüm uygulamayı
 # öldürmesin diye unwinding açık kalır — panic yalnızca o task'ı düşürür.
