@@ -1018,6 +1018,19 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n",
 
     // ──────────────────────────────────────────────
+    // BLOK 7D: DASHBOARD İYİLEŞTİRMELERİ
+    // Yalnızca /dashboard rotasında aktif olur (bkz. dosya içi route
+    // guard'ı + body.oa-dashboard-active CSS scoping'i). Sidebar gruplama,
+    // form hafızası ve oynatıcı hatırlamayı içerir.
+    // ──────────────────────────────────────────────
+    include_str!("js/modules/dashboard-enhancer.js"),
+    "\n",
+    // Dashboard'daki "Bir oynatıcı seç" dialogunu otomatik kapatır.
+    // Dosya içi /dashboard route guard'ı vardır — başka sayfalara dokunmaz.
+    include_str!("js/modules/player-dialog-dismiss.js"),
+    "\n",
+
+    // ──────────────────────────────────────────────
     // BLOK 8: TEMA SİSTEMİ
     // ──────────────────────────────────────────────
     "{\n",

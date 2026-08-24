@@ -67,6 +67,9 @@
   }
 
   function autoHandlePlayerSelection() {
+    // GÜVENLİK: yalnızca /dashboard rotasında çalış — izleme sayfalarındaki
+    // oynatıcı akışına asla karışmasın.
+    if (location.pathname.indexOf("/dashboard") !== 0) return;
     if (!isPlayerSelectionScene()) return;
 
     // Adım 1: "Oynatıcı Seç" butonuna tıkla
