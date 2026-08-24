@@ -29,6 +29,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -81,6 +82,31 @@ impl Channel {
             Channel::Alpha => "Alpha",
         }
     }
+
+    /// Hiyerarşi sırası: Stable < Beta < Alpha.
+    fn rank(self) -> u8 {
+        match self {
+            Channel::Stable => 0,
+            Channel::Beta => 1,
+            Channel::Alpha => 2,
+        }
+    }
+
+    /// Bu kanaldaki bir kullanıcının güncelleme ARAYABİLECEĞİ kanallar
+    /// (hiyerarşi): Beta kullanıcıları beta + stable'ı, Alpha kullanıcıları
+    /// alpha + beta + stable'ı görür. Böylece kendi kanalının manifesti
+    /// geride kalmış olsa bile (ör. beta manifesti 1.0.0'da kalıp stable
+    /// 1.1.2'ye ilerlemişse) kullanıcı yeni stable sürümü kaçırmaz.
+    ///
+    /// Karşıt yön bilerek yok: Stable kullanıcıya alpha/beta ASLA görünmez —
+    /// ön-sürüm, istemeyen birine dayatılamaz.
+    fn allowed(self) -> &'static [Channel] {
+        match self {
+            Channel::Stable => &[Channel::Stable],
+            Channel::Beta => &[Channel::Beta, Channel::Stable],
+            Channel::Alpha => &[Channel::Alpha, Channel::Beta, Channel::Stable],
+        }
+    }
 }
 
 /// Bir kontrolün sonucu.
@@ -105,6 +131,15 @@ pub struct CheckResult {
     /// olabiliyor; o durumda güncelleme sunulmuyor ama arayüzün "bu kanalın
     /// en sonu şu" diyebilmesi gerekiyor.
     pub latest_version: Option<String>,
+    /// Güncelleme hiyerarşide başka bir kanaldan geldiyse o kanal.
+    ///
+    /// Örn. Beta kullanıcısına güncelleme Stable manifestinden düştüyse burada
+    /// `Stable` olur; kendi kanalından düştüyse kullanıcının kanalıyla aynı.
+    /// Güncelleme yoksa `None`.
+    pub source_channel: Option<Channel>,
+    /// `source_channel`in arayüz etiketi ("Stable" vb.) — frontend'in kanal
+    /// adlarını yeniden eşlemesin diye burada dolduruluyor.
+    pub source_channel_label: Option<String>,
 }
 
 impl CheckResult {
@@ -118,6 +153,8 @@ impl CheckResult {
             date: None,
             body: None,
             latest_version: None,
+            source_channel: None,
+            source_channel_label: None,
         }
     }
 }
@@ -221,22 +258,87 @@ pub async fn updater_check(
         }
     }
 
-    let mut url = format!("{MANIFEST_BASE}/{}", channel.file());
-    if force {
-        // raw.githubusercontent yanıtları birkaç dakika önbelleğe alınıyor;
-        // elle kontrol edildiğinde taze veri görmek gerekiyor.
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        url = format!("{url}?t={ts}");
+    // ── Hiyerarşik kontrol ─────────────────────────────────────────
+    // Kullanıcının kanalının görebildiği TÜM kanalların manifestleri PARALEL
+    // çekilir; sürümler SemVer'a göre karşılaştırılıp en yükseği seçilir.
+    // Kazanan manifestin adresi eklentiye endpoint olarak verilir; "kurulu
+    // sürümden yeni mi" kararı yine eklentide kalır (bkz. aşağıdaki not).
+    let allowed = channel.allowed();
+    let fetches = allowed.iter().map(|ch| {
+        let mut url = format!("{MANIFEST_BASE}/{}", ch.file());
+        if force {
+            // raw.githubusercontent yanıtları birkaç dakika önbelleğe alınıyor;
+            // elle kontrol edildiğinde taze veri görmek gerekiyor.
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            url = format!("{url}?t={ts}");
+        }
+        async move { (*ch, fetch_manifest(url.as_str()).await) }
+    });
+    let fetched = futures_util::future::join_all(fetches).await;
+
+    struct Candidate {
+        channel: Channel,
+        version: Version,
+        latest_version: String,
+        url: String,
     }
 
-    crate::dbg_log!("[Updater] Checking updates on URL: {} (Force: {})", url, force);
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let mut first_error: Option<String> = None;
+    for (ch, res) in fetched {
+        match res {
+            Ok(Some(manifest)) => {
+                let ver_str = manifest.get("version").and_then(|v| v.as_str());
+                match ver_str.map(Version::parse) {
+                    Some(Ok(version)) => candidates.push(Candidate {
+                        channel: ch,
+                        version,
+                        latest_version: ver_str.unwrap_or_default().to_string(),
+                        // Cache-buster'sız temel adres: eklenti manifesti kendisi
+                        // yeniden çeker; ?t= parametresi ona gereksiz gürültü.
+                        url: format!("{MANIFEST_BASE}/{}", ch.file()),
+                    }),
+                    other => match other {
+                        Some(Err(e)) => crate::dbg_log!(
+                            "[Updater] {} içindeki sürüm ayrıştırılamadı: {}",
+                            ch.file(),
+                            e
+                        ),
+                        None => crate::dbg_log!(
+                            "[Updater] {} manifestinde sürüm alanı yok",
+                            ch.file()
+                        ),
+                        _ => {}
+                    },
+                }
+            }
+            Ok(None) => {} // kanalda henüz yayın yok — normal durum
+            Err(e) => {
+                crate::dbg_log!("[Updater] {} çekilemedi: {}", ch.file(), e);
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+            }
+        }
+    }
 
-    let manifest = fetch_manifest(&url).await?;
-
-    let Some(manifest) = manifest else {
+    // En yüksek sürüm kazanır. Eşitlikte sırasıyla kullanıcının KENDİ kanalı,
+    // sonra daha üst kanal tercih edilir (üst kanal derlemeleri daha tazedir).
+    let Some(best) = candidates.into_iter().max_by(|a, b| {
+        a.version.cmp(&b.version).then_with(|| {
+            let pref = |c: &Candidate| (c.channel == channel, c.channel.rank());
+            pref(b).cmp(&pref(a))
+        })
+    }) else {
+        // Hiç aday yok. Kanal(lar) gerçekten boşsa "boş kanal" dön; ama en az
+        // biri AĞ hatası yüzünden okunamadıysa hatayı yutma — kullanıcıya
+        // "kanal boş" demek yanlış olurdu.
+        if let Some(err) = first_error {
+            return Err(err);
+        }
         if let Ok(mut current) = state.current.lock() {
             *current = None;
         }
@@ -246,17 +348,24 @@ pub async fn updater_check(
         });
     };
 
-    let latest_version = manifest
-        .get("version")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let source_label = best.channel.label().to_string();
+    let best_channel = best.channel;
+    let latest_version = Some(best.latest_version);
+
+    crate::dbg_log!(
+        "[Updater] Checking updates on URL: {} (Force: {}, kaynak kanal: {})",
+        best.url,
+        force,
+        source_label
+    );
 
     // Sürüm karşılaştırması ve imza doğrulaması eklentiye bırakılıyor: kendi
     // karşılaştırmamızı yazmak, ön-sürüm sıralaması (0.2.0-alpha.2 < 0.2.0)
     // gibi ayrıntıları ikinci kez uygulamak olurdu.
     let updater = app
         .updater_builder()
-        .endpoints(vec![url
+        .endpoints(vec![best
+            .url
             .parse()
             .map_err(|e| format!("Endpoint çözümlenemedi: {e}"))?])
         .map_err(|e| format!("Updater yapılandırılamadı: {e}"))?
@@ -284,6 +393,8 @@ pub async fn updater_check(
                 date,
                 body,
                 latest_version,
+                source_channel: Some(best_channel),
+                source_channel_label: Some(source_label),
                 ..CheckResult::base(channel)
             }
         }

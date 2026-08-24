@@ -31,6 +31,10 @@ reqwest = { version = "0.12", features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
 regex = "1.10"
+# Updater hiyerarşisi: birden çok kanal manifestindeki sürümleri SemVer
+# kurallarıyla karşılaştırıp en yükseği seçmek için (1.2.0-alpha.3 < 1.2.0
+# dahil). bkz. src-tauri/src/updater.rs
+semver = "1"
 rfd = "0.15"
 url = "2.5"
 percent-encoding = "2.3"

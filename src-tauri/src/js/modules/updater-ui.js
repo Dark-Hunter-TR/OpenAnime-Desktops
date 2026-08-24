@@ -686,7 +686,7 @@ function bindSettingsCardEvents(card, hashes) {
         const res = await window.__TAURI__.core.invoke("updater_check", { channel, force: true });
         
         if (res.available) {
-          showUpdateModal(res.version, res.body, res.date);
+          showUpdateModal(res.version, res.body, res.date, res.sourceChannelLabel);
           checkBtn.innerHTML = `Güncelleme Var`;
           checkBtn.disabled = false;
         } else {
@@ -983,7 +983,7 @@ function injectModalStyles() {
 }
 
 // Yeni Sürüm Modal / Popup Arayüzü (Açılışta otomatik çıkan)
-function showUpdateModal(version, changelog, date) {
+function showUpdateModal(version, changelog, date, sourceLabel) {
   if (isUpdateInProgress) return;
 
   injectModalStyles();
@@ -1010,6 +1010,9 @@ function showUpdateModal(version, changelog, date) {
     }
   }
   const dateSpan = parsedDateStr ? ` - ${parsedDateStr}` : "";
+  // Hiyerarşik kontrolde güncelleme kullanıcının kanalından FARKLI bir kanaldan
+  // gelebilir (ör. Beta kullanıcısına Stable sürümü düşer); kaynağı göster.
+  const sourceSpan = sourceLabel ? ` • ${sourceLabel} kanalından` : "";
 
   // openani.me'nin kendi Setsuki havuzu ve ağırlıkları (siteden 1:1 analiz
   // edildi — OpenAnime-Theme/src/lib/DialogShell.svelte). "pajamas" diğer
@@ -1031,7 +1034,7 @@ function showUpdateModal(version, changelog, date) {
               </div>
               <div id="info" class="fds-theme-dark svelte-cc3kyp">
                 <h4 class="text-block type-subtitle svelte-9tjxrp">Yeni Sürüm Mevcut!</h4>
-                <span class="text-block type-caption text-tertiary svelte-9tjxrp">Sürüm v${version}${dateSpan}</span>
+                <span class="text-block type-caption text-tertiary svelte-9tjxrp">Sürüm v${version}${dateSpan}${sourceSpan}</span>
               </div>
             </div>
             <div class="image-wrapper no-select loaded" id="setsuki">
@@ -1210,7 +1213,7 @@ async function checkAutoUpdateOnStartup() {
       const res = await window.__TAURI__.core.invoke("updater_check", { channel });
       
       if (res.available && res.version !== skipVersion) {
-        showUpdateModal(res.version, res.body, res.date);
+        showUpdateModal(res.version, res.body, res.date, res.sourceChannelLabel);
       }
     } catch (err) {
       console.warn("[Updater] Startup auto check failed:", err);

@@ -1,0 +1,60 @@
+name: '🔍 Sürüm Önizleme'
+
+# "Yayınlarsam hangi sürüm oluşur?" sorusunu yayın yapmadan cevaplar.
+# Actions -> Sürüm Önizleme -> Run workflow -> kanal seç. Sonuç iş özetinde
+# (summary) ve annotation olarak gösterilir. Hiçbir şey derlemez/yayınlamaz.
+#
+# Hesaplama release.yml ile AYNI betiği kullanır (scripts/next-version.sh);
+# önizlemede görünen sürümle yayında oluşan sürümün farklılaşma ihtimali,
+# araya yeni bir tag girmedikçe yoktur.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Release kanalı'
+        required: true
+        type: choice
+        options:
+          - stable
+          - beta
+          - alpha
+
+permissions: {}
+
+jobs:
+  preview:
+    name: Sıradaki sürümü hesapla
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Hesapla
+        id: calc
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          TAG="$(bash scripts/next-version.sh "$CHANNEL")"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          {
+            echo "## 🔍 Sürüm Önizleme"
+            echo ""
+            echo "| Ayar | Değer |"
+            echo "|---|---|"
+            echo "| Kanal | \`$CHANNEL\` |"
+            echo "| Oluşturulacak sürüm | **\`$TAG\`** |"
+            echo ""
+            echo "Bu sürümü yayınlamak için **Publish** workflow'unu aynı kanalla tetikleyin."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sonuç
+        shell: bash
+        env:
+          TAG: ${{ steps.calc.outputs.tag }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          echo "::notice title=Sıradaki sürüm::$TAG ($CHANNEL kanalı)"
+          echo ""
+          echo "✅ Bu ayarla yayınlarsanız oluşacak sürüm: ${TAG} (${CHANNEL})"
