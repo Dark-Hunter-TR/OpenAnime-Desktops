@@ -308,7 +308,7 @@ pub fn create_instance_safe(backends: wgpu::Backends) -> wgpu::Instance {
         // Beklenen panic (bozuk EGL) — hook'un backtrace/crash.log maliyeti bastırılır.
         crate::with_suppressed_panic_log(|| {
             catch_unwind(AssertUnwindSafe(|| {
-                wgpu::Instance::new(wgpu::InstanceDescriptor {
+                wgpu::Instance::new(&wgpu::InstanceDescriptor {
                     backends: b,
                     ..Default::default()
                 })

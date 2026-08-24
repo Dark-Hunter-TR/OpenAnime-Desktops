@@ -13,7 +13,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["native-tls-vendored", "tray-icon", "image-png"] }
+# "unstable": webview'sız düz pencere (tauri::window::WindowBuilder) için —
+# WebGPU canvas overlay pencereleri (yalnızca Linux, bkz. webgpu_bridge.rs)
+# yalnızca wgpu surface handle'ı ister; tam bir WebKit webview başlatmak
+# gereksiz kaynak israfı olurdu. `WindowBuilder` bu feature olmadan private.
+tauri = { version = "2", features = ["native-tls-vendored", "tray-icon", "image-png", "unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-os = "2"
 tauri-plugin-updater = "2"

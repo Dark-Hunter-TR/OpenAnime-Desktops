@@ -726,14 +726,14 @@ pub mod inner {
         let state = lock();
         let tex = state.registries.textures.get(&texture_id).ok_or("Unknown texture id")?;
         q.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             &bytes,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bytes_per_row),
                 rows_per_image: Some(height),
@@ -987,7 +987,7 @@ pub mod inner {
             label: None,
             layout,
             module,
-            entry_point: &entry_point,
+            entry_point: Some(&entry_point),
             compilation_options: Default::default(),
             cache: None,
         });
@@ -1141,13 +1141,13 @@ pub mod inner {
             layout,
             vertex: wgpu::VertexState {
                 module,
-                entry_point: &vs_entry,
+                entry_point: Some(&vs_entry),
                 buffers: &vb_layouts,
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module,
-                entry_point: &fs_entry,
+                entry_point: Some(&fs_entry),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::REPLACE),
@@ -1393,15 +1393,15 @@ pub mod inner {
                     let buf = state.registries.buffers.get(src).ok_or("Unknown buffer id")?;
                     let tex = state.registries.textures.get(dst_texture).ok_or("Unknown texture id")?;
                     encoder.copy_buffer_to_texture(
-                        wgpu::ImageCopyBuffer {
+                        wgpu::TexelCopyBufferInfo {
                             buffer: buf,
-                            layout: wgpu::ImageDataLayout {
+                            layout: wgpu::TexelCopyBufferLayout {
                                 offset: 0,
                                 bytes_per_row: Some(*bytes_per_row),
                                 rows_per_image: Some(*height),
                             },
                         },
-                        wgpu::ImageCopyTexture {
+                        wgpu::TexelCopyTextureInfo {
                             texture: tex,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
@@ -1414,13 +1414,13 @@ pub mod inner {
                     let src_tex = state.registries.textures.get(src).ok_or("Unknown source texture id")?;
                     let dst_tex = state.registries.textures.get(dst).ok_or("Unknown destination texture id")?;
                     encoder.copy_texture_to_texture(
-                        wgpu::ImageCopyTexture {
+                        wgpu::TexelCopyTextureInfo {
                             texture: src_tex,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
                         },
-                        wgpu::ImageCopyTexture {
+                        wgpu::TexelCopyTextureInfo {
                             texture: dst_tex,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
@@ -1519,14 +1519,14 @@ pub mod inner {
         let state = lock();
         let tex = state.registries.textures.get(&texture_id).ok_or("Unknown texture id")?;
         q.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             bytes,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bytes_per_row),
                 rows_per_image: Some(height),
@@ -1599,14 +1599,14 @@ pub mod inner {
             other => return Err(format!("unsupported video texture format: {:?}", other)),
         };
         q.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             &bytes,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bpr),
                 rows_per_image: Some(height),
@@ -1992,7 +1992,7 @@ pub mod inner {
             // Ana pencereye transient bağla (X11'de z-order/minimize uyumu).
             // parent() self'i tüketir; hata pratikte yalnızca main penceresi
             // yokken oluşur — o durumda overlay zaten anlamsızdır, hata döndür.
-            if let Some(parent) = app_for_build.get_window("main") {
+            if let Some(parent) = app_for_build.get_webview_window("main") {
                 builder = match builder.parent(&parent) {
                     Ok(b) => b,
                     Err(e) => {
@@ -2326,7 +2326,7 @@ pub mod inner {
             "rg32uint" => wgpu::TextureFormat::Rg32Uint,
             "rgba32uint" => wgpu::TextureFormat::Rgba32Uint,
             "rgb10a2unorm" => wgpu::TextureFormat::Rgb10a2Unorm,
-            "rg11b10ufloat" => wgpu::TextureFormat::Rg11b10Float,
+            "rg11b10ufloat" => wgpu::TextureFormat::Rg11b10Ufloat,
             "depth24plus" => wgpu::TextureFormat::Depth24Plus,
             "depth32float" => wgpu::TextureFormat::Depth32Float,
             other => return Err(format!("Unsupported/unrecognized texture format: {}", other)),
