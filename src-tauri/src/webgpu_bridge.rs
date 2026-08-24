@@ -1992,8 +1992,16 @@ pub mod inner {
             // Ana pencereye transient bağla (X11'de z-order/minimize uyumu).
             // parent() self'i tüketir; hata pratikte yalnızca main penceresi
             // yokken oluşur — o durumda overlay zaten anlamsızdır, hata döndür.
+            //
+            // window::WindowBuilder::parent() bir düz `&tauri::Window` istiyor
+            // (WebviewWindow'un `parent()`'ı bundan farklı bir overload —
+            // WebviewWindowBuilder üzerinde ve `&WebviewWindow` alıyor). "main"
+            // bir WebviewWindow olduğundan AsRef<Webview<_>> -> Webview::window()
+            // ile alttaki düz Window'a çeviriyoruz.
             if let Some(parent) = app_for_build.get_webview_window("main") {
-                builder = match builder.parent(&parent) {
+                let parent_webview: &tauri::Webview<_> = parent.as_ref();
+                let parent_window = parent_webview.window();
+                builder = match builder.parent(&parent_window) {
                     Ok(b) => b,
                     Err(e) => {
                         let _ = window_tx.send(Err(format!("Overlay parent bağlanamadı: {}", e)));
