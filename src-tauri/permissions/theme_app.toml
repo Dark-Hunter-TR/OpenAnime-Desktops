@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "allow-theme-app"
+description = "Ayrı OpenAnime Theme uygulamasının kurulu olup olmadığını sorgulama, açma ve kurma komutlarına izin verir"
+
+[permission.commands]
+allow = [
+    "theme_app_status",
+    "open_theme_app",
+    "install_theme_app"
+]

@@ -1,227 +1,452 @@
+//! Kanal farkındalıklı güncelleyici.
+//!
+//! ## Neden Rust tarafında
+//!
+//! `@tauri-apps/plugin-updater`'ın JS API'si endpoint'i çalışma anında
+//! değiştiremiyor: `check()` seçenekleri yalnızca başlık/zaman aşımı/proxy
+//! alıyor, adres `tauri.conf.json`'dan geliyor. Kanal seçimi ise tam olarak
+//! "hangi manifesti okuyacağız" sorusu. Endpoint'i ezebilen tek yol Rust
+//! tarafındaki `updater_builder().endpoints(...)`, bu yüzden kontrol ve
+//! indirme buraya taşındı.
+//!
+//! ## Kanal başına ayrı manifest
+//!
+//! Kanallar `main` dalındaki `updater/latest-<kanal>.json` dosyaları. Yayın
+//! iş akışı her sürümden sonra yalnızca KENDİ kanalının dosyasını güncelliyor
+//! (bkz. `.github/workflows/release.yml`). Ayrımın kritik sonucu şu: Stable
+//! kanaldaki bir kullanıcıya alpha/beta sürümü asla görünmez, çünkü o sürüm
+//! Stable manifeste hiç yazılmaz. Tek bir manifeste "en yeni sürüm" yazıp
+//! istemcide filtrelemek aynı garantiyi vermezdi.
+//!
+//! ## "Kanalda sürüm yok" durumu
+//!
+//! Bir kanaldan henüz hiç yayın yapılmamışsa o dosya depoda yoktur ve
+//! `raw.githubusercontent.com` 404 döner. Eklentinin `check()`'i bunu ağ
+//! hatasından ayırt etmiyor — ikisi de "kontrol başarısız" olurdu. Kullanıcıya
+//! "Stable sürüm mevcut değil" ile "internet yok" arasındaki farkı
+//! gösterebilmek için manifesti önce kendimiz çekip durumuna bakıyoruz.
+
 use std::sync::Mutex;
-use std::time::{Instant, Duration};
-use serde::Serialize;
-use tauri_plugin_updater::Update;
-use tauri::{Emitter, Manager};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_updater::{Update, UpdaterExt};
+
+/// Kanal manifestlerinin bulunduğu dizin (ham dosya erişimi).
+///
+/// Release varlıkları yerine `raw.githubusercontent.com`: manifest, yayın
+/// tamamlandıktan sonra `main`'e commit'leniyor, dolayısıyla taslak ya da
+/// silinmiş release'lerden etkilenmiyor ve kanal başına ayrı dosya tutmak
+/// mümkün oluyor.
+const MANIFEST_BASE: &str =
+    "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater";
+
+/// Aynı kanal için ardışık kontrollerde ağa çıkmadan önce beklenen süre.
+///
+/// Açılış kontrolü ile Ayarlar'daki "şimdi kontrol et" aynı fonksiyonu
+/// çağırıyor; kullanıcı sekmeler arasında gezinirken arka arkaya istek
+/// yapılmasın diye. Elle tetiklenen kontrol `force` ile bunu atlıyor.
+const CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Tel formatı (`Deserialize`/`Serialize` string'i) frontend'in
+/// `localStorage`'ta hâlâ tuttuğu tarihi `"release"` değeriyle birebir
+/// eşleşiyor — JS/localStorage tarafında hiçbir şey değişmedi, yalnızca Rust
+/// artık bunu serbest bir `String` yerine tipli bir enum olarak işliyor.
+/// Dosya adları (bkz. `file()`) ise `latest-stable.json` olarak kalıyor.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    #[serde(rename = "release")]
+    Stable,
+    Beta,
+    Alpha,
+}
+
+impl Channel {
+    fn file(self) -> &'static str {
+        match self {
+            Channel::Stable => "latest-stable.json",
+            Channel::Beta => "latest-beta.json",
+            Channel::Alpha => "latest-alpha.json",
+        }
+    }
+
+    /// Arayüzde gösterilen ad. Durum metinleri burada üretildiği için çeviri
+    /// de burada duruyor.
+    fn label(self) -> &'static str {
+        match self {
+            Channel::Stable => "Stable",
+            Channel::Beta => "Beta",
+            Channel::Alpha => "Alpha",
+        }
+    }
+}
+
+/// Bir kontrolün sonucu.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckResult {
+    /// Kanalda henüz hiç yayın yok (manifest dosyası depoda bulunmuyor).
+    ///
+    /// `available: false` ile aynı şey değil: biri "güncelsin", diğeri "bu
+    /// kanaldan hiç sürüm çıkmamış".
+    pub channel_empty: bool,
+    pub available: bool,
+    pub channel: Channel,
+    pub channel_label: String,
+    /// Güncelleme varsa yeni sürüm; yoksa `None`.
+    pub version: Option<String>,
+    pub date: Option<String>,
+    pub body: Option<String>,
+    /// Kanaldaki en son sürüm — güncelleme olmasa bile dolu.
+    ///
+    /// Kullanıcı alpha'dan Stable kanala geçtiğinde oradaki sürüm daha ESKİ
+    /// olabiliyor; o durumda güncelleme sunulmuyor ama arayüzün "bu kanalın
+    /// en sonu şu" diyebilmesi gerekiyor.
+    pub latest_version: Option<String>,
+}
+
+impl CheckResult {
+    fn base(channel: Channel) -> Self {
+        Self {
+            channel_empty: false,
+            available: false,
+            channel,
+            channel_label: channel.label().to_string(),
+            version: None,
+            date: None,
+            body: None,
+            latest_version: None,
+        }
+    }
+}
 
 pub struct UpdaterState {
-    pub current_update: Mutex<Option<Update>>,
-    pub cache: Mutex<Option<(Instant, String, serde_json::Value)>>,
-    pub is_downloading: Mutex<bool>,
+    /// Son kontrolde bulunan güncelleme — indirme bunu kullanıyor.
+    current: Mutex<Option<Update>>,
+    downloading: Mutex<bool>,
+    cache: Mutex<Option<(Instant, Channel, CheckResult)>>,
 }
 
 impl UpdaterState {
     pub fn new() -> Self {
         Self {
-            current_update: Mutex::new(None),
+            current: Mutex::new(None),
+            downloading: Mutex::new(false),
             cache: Mutex::new(None),
-            is_downloading: Mutex::new(false),
         }
     }
 }
 
-#[allow(dead_code)]
-#[derive(Serialize, Clone, Debug)]
-pub struct UpdateCheckResult {
-    pub available: bool,
-    pub version: String,
-    pub date: Option<String>,
-    pub body: Option<String>,
-}
-
+/// Uygulamanın kurulu sürümü. Güncelleme kontrolünden bağımsız — Ayarlar
+/// kartında "Mevcut Sürüm: vX.Y.Z" göstermek için.
 #[tauri::command]
 pub fn get_app_version(app: tauri::AppHandle) -> String {
-    app.config().version.clone().unwrap_or_else(|| "1.0.0".to_string())
+    app.config()
+        .version
+        .clone()
+        .unwrap_or_else(|| "0.0.0".to_string())
 }
 
-#[tauri::command]
-pub async fn check_for_updates(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, UpdaterState>,
-    channel: String,
-    force: Option<bool>,
-) -> Result<serde_json::Value, String> {
-    let is_force = force.unwrap_or(false);
+/// Manifesti çeker.
+///
+/// `Ok(None)` = kanalda yayın yok (404 ya da içi boş manifest).
+/// `Err(_)`   = gerçek bir hata (ağ yok, sunucu hatası, bozuk JSON).
+async fn fetch_manifest(url: &str) -> Result<Option<serde_json::Value>, String> {
+    let resp = reqwest::get(url)
+        .await
+        .map_err(|e| format!("Manifest alınamadı: {e}"))?;
 
-    // Eğer uygulama hata ayıklama (debug/dev) modunda derlendiyse, kanalı otomatik olarak beta'ya zorla
-    let active_channel = if cfg!(debug_assertions) {
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !resp.status().is_success() {
+        return Err(format!("Manifest sunucusu {} döndü", resp.status()));
+    }
+
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Manifest okunamadı: {e}"))?;
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Manifest çözümlenemedi: {e}"))?;
+
+    // Platform listesi boşsa indirilecek bir şey yok; dosyanın varlığı tek
+    // başına "bu kanalda sürüm var" anlamına gelmiyor.
+    let has_platform = value
+        .get("platforms")
+        .and_then(|p| p.as_object())
+        .map(|o| !o.is_empty())
+        .unwrap_or(false);
+    if !has_platform {
+        return Ok(None);
+    }
+
+    Ok(Some(value))
+}
+
+/// Seçili kanalda güncelleme olup olmadığını sorar.
+#[tauri::command]
+pub async fn updater_check(
+    app: AppHandle,
+    state: tauri::State<'_, UpdaterState>,
+    channel: Channel,
+    force: Option<bool>,
+) -> Result<CheckResult, String> {
+    let force = force.unwrap_or(false);
+
+    // Geliştirici (debug) derlemesi her zaman Beta kanalını kontrol eder —
+    // dağıtılan Stable/Alpha manifestleri henüz derlenmemiş özellikleri
+    // içermeyebilir, geliştirme sırasında güncelleme kontrolünün en sık
+    // değişen kanala bakması isteniyor.
+    let channel = if cfg!(debug_assertions) {
         crate::log!("[Updater] Geliştirici (Dev) derlemesi algılandı. Güncelleme kanalı 'beta' olarak ayarlanıyor.");
-        "beta".to_string()
+        Channel::Beta
     } else {
-        channel.to_lowercase()
+        channel
     };
 
-    // 1. Cache Kontrolü (Force değilse ve 5 dakika geçerliyse)
-    if !is_force {
-        let cache_lock = state.cache.lock().unwrap();
-        if let Some((instant, cached_channel, data)) = &*cache_lock {
-            if instant.elapsed() < Duration::from_secs(300) && cached_channel == &active_channel {
-                crate::log!("[Updater] Returning cached update manifest for channel: {}", active_channel);
-                return Ok(data.clone());
+    if !force {
+        if let Ok(cache) = state.cache.lock() {
+            if let Some((at, cached_channel, result)) = &*cache {
+                if *cached_channel == channel && at.elapsed() < CACHE_TTL {
+                    return Ok(result.clone());
+                }
             }
         }
     }
 
-    // 2. Kanal URL'sini belirleme (kanal manifestleri main dalına commit'lenir)
-    let mut url = match active_channel.as_str() {
-        "beta" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-beta.json".to_string(),
-        "alpha" => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-alpha.json".to_string(),
-        _ => "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-stable.json".to_string(),
-    };
-
-    if is_force {
-        let timestamp = std::time::SystemTime::now()
+    let mut url = format!("{MANIFEST_BASE}/{}", channel.file());
+    if force {
+        // raw.githubusercontent yanıtları birkaç dakika önbelleğe alınıyor;
+        // elle kontrol edildiğinde taze veri görmek gerekiyor.
+        let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        url = format!("{}?t={}", url, timestamp);
+        url = format!("{url}?t={ts}");
     }
 
-    crate::dbg_log!(
-        "[Updater] Checking updates on URL: {} (Force: {})",
-        url, is_force
-    );
+    crate::dbg_log!("[Updater] Checking updates on URL: {} (Force: {})", url, force);
 
-    // 3. Tauri Updater Builder yapılandırması
-    use tauri_plugin_updater::UpdaterExt;
-    let mut builder = app.updater_builder();
-    builder = builder.endpoints(vec![url.parse().map_err(|e| format!("URL Parse Hatası: {}", e))?])
-        .map_err(|e| format!("Updater endpoints hatası: {}", e))?;
+    let manifest = fetch_manifest(&url).await?;
 
-    let updater = builder.build().map_err(|e| format!("Updater Build Hatası: {}", e))?;
-    let update_result = updater.check().await.map_err(|e| {
-        crate::dbg_log!("[Updater] Güncelleme sorgusu başarısız: {}", e);
-        format!("Güncelleme kontrolü başarısız: {}", e)
-    })?;
-
-    let response = if let Some(update) = update_result {
-        // Rust state'ine bu update'i kaydet (indirme/kurulum için kullanılacak)
-        let mut current_update = state.current_update.lock().unwrap();
-        *current_update = Some(update.clone());
-
-        let date_str = update.date.map(|d| d.to_string());
-
-        serde_json::json!({
-            "available": true,
-            "version": update.version,
-            "date": date_str,
-            "body": update.body,
-        })
-    } else {
-        serde_json::json!({
-            "available": false,
-        })
+    let Some(manifest) = manifest else {
+        if let Ok(mut current) = state.current.lock() {
+            *current = None;
+        }
+        return Ok(CheckResult {
+            channel_empty: true,
+            ..CheckResult::base(channel)
+        });
     };
 
-    // Cache'le (sadece force olmayan durumlar için)
-    // NOT: `channel` (ham parametre) DEĞİL `active_channel` (debug'da beta'ya
-    // zorlanmış/lowercase edilmiş hali) yazılıyor — okuma tarafı da
-    // active_channel ile karşılaştırıyor. Eskiden ikisi farklı değişkendi;
-    // debug build'lerde asla eşleşmediği için cache hiçbir zaman isabet etmiyordu.
-    if !is_force {
-        let mut cache_lock = state.cache.lock().unwrap();
-        *cache_lock = Some((Instant::now(), active_channel, response.clone()));
+    let latest_version = manifest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Sürüm karşılaştırması ve imza doğrulaması eklentiye bırakılıyor: kendi
+    // karşılaştırmamızı yazmak, ön-sürüm sıralaması (0.2.0-alpha.2 < 0.2.0)
+    // gibi ayrıntıları ikinci kez uygulamak olurdu.
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url
+            .parse()
+            .map_err(|e| format!("Endpoint çözümlenemedi: {e}"))?])
+        .map_err(|e| format!("Updater yapılandırılamadı: {e}"))?
+        .build()
+        .map_err(|e| format!("Updater kurulamadı: {e}"))?;
+
+    let found = updater.check().await.map_err(|e| {
+        crate::dbg_log!("[Updater] Güncelleme sorgusu başarısız: {}", e);
+        format!("Güncelleme kontrolü başarısız: {e}")
+    })?;
+
+    let result = match found {
+        Some(update) => {
+            let version = update.version.clone();
+            let date = update.date.map(|d| d.to_string());
+            let body = update.body.clone();
+
+            if let Ok(mut current) = state.current.lock() {
+                *current = Some(update);
+            }
+
+            CheckResult {
+                available: true,
+                version: Some(version),
+                date,
+                body,
+                latest_version,
+                ..CheckResult::base(channel)
+            }
+        }
+        None => {
+            if let Ok(mut current) = state.current.lock() {
+                *current = None;
+            }
+            CheckResult {
+                latest_version,
+                ..CheckResult::base(channel)
+            }
+        }
+    };
+
+    if !force {
+        if let Ok(mut cache) = state.cache.lock() {
+            *cache = Some((Instant::now(), channel, result.clone()));
+        }
     }
 
-    Ok(response)
+    Ok(result)
 }
 
+/// İndirme ilerlemesi. Arayüz `openanime://update-progress` olayını dinliyor.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Progress {
+    /// `downloading` | `installing` | `success` | `error`
+    status: &'static str,
+    downloaded: u64,
+    /// Sunucu `Content-Length` vermezse `None` — arayüz o durumda belirsiz
+    /// ilerleme çubuğuna düşüyor.
+    total: Option<u64>,
+    percent: u32,
+    message: Option<String>,
+}
+
+impl Progress {
+    fn new(status: &'static str) -> Self {
+        Self {
+            status,
+            downloaded: 0,
+            total: None,
+            percent: 0,
+            message: None,
+        }
+    }
+}
+
+/// Son kontrolde bulunan güncellemeyi indirir, kurar ve uygulamayı yeniden
+/// başlatır.
+///
+/// Hemen dönüyor; ilerleme olay olarak akıyor. Bloke etseydi indirme boyunca
+/// IPC kuyruğu beklerdi ve arayüz donardı.
 #[tauri::command]
-pub async fn start_update_download(
-    app: tauri::AppHandle,
+pub async fn updater_download(
+    app: AppHandle,
     state: tauri::State<'_, UpdaterState>,
 ) -> Result<(), String> {
-    // Birden fazla indirmeyi önle
     {
-        let mut downloading = state.is_downloading.lock().unwrap();
+        let mut downloading = state
+            .downloading
+            .lock()
+            .map_err(|_| "Güncelleyici durumu okunamadı".to_string())?;
         if *downloading {
-            return Err("İndirme işlemi zaten devam ediyor.".to_string());
+            return Err("İndirme zaten sürüyor.".to_string());
         }
         *downloading = true;
     }
 
-    let update = {
-        let current_update = state.current_update.lock().unwrap();
-        current_update.clone()
-    };
+    let update = state.current.lock().ok().and_then(|guard| guard.clone());
 
-    let update = match update {
-        Some(u) => u,
-        None => {
-            let mut downloading = state.is_downloading.lock().unwrap();
+    let Some(update) = update else {
+        if let Ok(mut downloading) = state.downloading.lock() {
             *downloading = false;
-            return Err("İndirilecek aktif güncelleme bulunamadı. Önce kontrol edin.".to_string());
         }
+        return Err("İndirilecek güncelleme yok; önce kontrol edin.".to_string());
     };
 
-    let app_c = app.clone();
-
-    // İndirmeyi asenkron arka planda çalıştır
+    let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let state_c = app_c.state::<UpdaterState>();
-        let mut downloaded = 0;
-        let mut content_length = None;
-        
-        let app_progress = app_c.clone();
-        let result = update.download_and_install(
-            move |chunk_length, total_length| {
-                downloaded += chunk_length;
-                if content_length.is_none() {
-                    content_length = total_length;
+        let mut downloaded: u64 = 0;
+        let mut total: Option<u64> = None;
+
+        let on_chunk = {
+            let app = app_handle.clone();
+            move |chunk: usize, content_length: Option<u64>| {
+                downloaded += chunk as u64;
+                if total.is_none() {
+                    total = content_length;
                 }
-                
-                let percent = if let Some(total) = content_length {
-                    (downloaded as f64 / total as f64 * 100.0).round() as u32
-                } else {
-                    0
+                let percent = match total {
+                    Some(t) if t > 0 => ((downloaded as f64 / t as f64) * 100.0).round() as u32,
+                    _ => 0,
                 };
-
-                let _ = app_progress.emit("openanime://update-progress", serde_json::json!({
-                    "status": "downloading",
-                    "downloaded": downloaded,
-                    "total": content_length,
-                    "percent": percent
-                }));
-            },
-            move || {
-                crate::log!("[Güncelleme] İndirildi, kuruluyor…");
+                let _ = app.emit(
+                    "openanime://update-progress",
+                    Progress {
+                        status: "downloading",
+                        downloaded,
+                        total,
+                        percent,
+                        message: None,
+                    },
+                );
             }
-        ).await;
+        };
 
-        // İndirme bitti veya hata aldı, bayrağı sıfırla
-        {
-            let mut downloading = state_c.is_downloading.lock().unwrap();
-            *downloading = false;
+        let on_finish = {
+            let app = app_handle.clone();
+            move || {
+                let _ = app.emit(
+                    "openanime://update-progress",
+                    Progress {
+                        percent: 100,
+                        ..Progress::new("installing")
+                    },
+                );
+            }
+        };
+
+        let result = update.download_and_install(on_chunk, on_finish).await;
+
+        if let Some(state) = app_handle.try_state::<UpdaterState>() {
+            if let Ok(mut downloading) = state.downloading.lock() {
+                *downloading = false;
+            }
         }
 
         match result {
             Ok(_) => {
-                let _ = app_c.emit("openanime://update-progress", serde_json::json!({
-                    "status": "success",
-                    "percent": 100
-                }));
+                let _ = app_handle.emit(
+                    "openanime://update-progress",
+                    Progress {
+                        percent: 100,
+                        ..Progress::new("success")
+                    },
+                );
                 crate::log!("[Güncelleme] Kuruldu, uygulama yeniden başlatılıyor…");
 
-                // KRİTİK: restart() çağrılmazsa bu süreç açık kalmaya devam eder.
-                // NSIS installer download_and_install() içinde zaten başlatıldı,
-                // ama çalışan ana .exe hâlâ bu süreç tarafından kilitli olduğu
-                // sürece installer onun üzerine yazamaz — kurulum burada takılı
-                // kalır ya da kullanıcıdan elle kapatmasını ister. Kısa bekleme,
-                // yukarıdaki "success" event'inin frontend'e ulaşıp UI'da
-                // görünmesi için (restart() döndürmez, hemen süreci sonlandırır).
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                app_c.restart();
+                // KRİTİK: restart() çağrılmazsa bu süreç açık kalmaya devam
+                // eder. NSIS installer download_and_install() içinde zaten
+                // başlatıldı, ama çalışan ana .exe hâlâ bu süreç tarafından
+                // kilitli olduğu sürece installer onun üzerine yazamaz —
+                // kurulum burada takılı kalır ya da kullanıcıdan elle
+                // kapatmasını ister. Kısa bekleme, yukarıdaki "success"
+                // olayının frontend'e ulaşıp UI'da görünmesi için (restart()
+                // geri dönmez, hemen süreci sonlandırır).
+                tokio::time::sleep(Duration::from_millis(800)).await;
+                app_handle.restart();
             }
             Err(e) => {
                 crate::log!("[Güncelleme] Başarısız: {}", e);
-                let _ = app_c.emit("openanime://update-progress", serde_json::json!({
-                    "status": "error",
-                    "message": format!("Güncelleme başarısız: {}", e)
-                }));
+                let _ = app_handle.emit(
+                    "openanime://update-progress",
+                    Progress {
+                        message: Some(format!("{e}")),
+                        ..Progress::new("error")
+                    },
+                );
             }
         }
     });
+
     Ok(())
 }
-
-// (debug_log kaldırıldı — hiçbir JS tarafından çağrılmıyordu.)

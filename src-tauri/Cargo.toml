@@ -45,6 +45,7 @@ windows = { version = "0.61", features = [
   "Win32_System_ProcessStatus",
   "Win32_System_Console",
 ] }
+winreg = "0.56.0"
 
 # Native WebGPU oynatıcı (yalnızca Linux). Windows/macOS'ta WebView2/WebKit
 # zaten WebGPU sunar; Linux'ta WebKitGTK sunmadığı için openani.me'nin render

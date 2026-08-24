@@ -34,11 +34,90 @@ function renderThemePage(container) {
     container.className = "need-more-info svelte-1xx4j76";
     container.setAttribute("data-desktop-theme", "true");
     container.innerHTML = `
-<div class="contain svelte-10oc5q5" style="--s-width: 250px; --s-height: 250px;"><div class="setsuki svelte-10oc5q5"><div class="image-wrapper no-select undefined svelte-zi2j2b loaded" id="image" style="border-radius: var(--fds-overlay-corner-radius); ; aspect-ratio: unset;"><img alt="Hayırr!" src="/setsuki/chibi/crying.png" style="border-radius: var(--fds-overlay-corner-radius);" class="svelte-zi2j2b"></div> <h4 class="text-block type-subtitle svelte-9tjxrp">Hayırr!</h4> <span class="text-block type-body text-tertiary svelte-9tjxrp" style="max-width: none !important; white-space: nowrap !important;">Şu anda aktif veya yüklenmiş herhangi bir özel tema bulunamadı. Yeni temalar yükleyebilir veya varsayılan görünümü kullanmaya devam edebilirsiniz.</span> <button class="button style-accent svelte-nqc07q theme-btn-custom primary" disabled style="margin-top: 16px; cursor: not-allowed; opacity: 0.6;" type="button">Tema Oluştur Aç</button></div></div></div>
+<div class="contain desktop-theme-page svelte-10oc5q5" style="--s-width: 250px; --s-height: 250px;"><div class="setsuki svelte-10oc5q5"><div class="image-wrapper no-select undefined svelte-zi2j2b loaded" id="image" style="border-radius: var(--fds-overlay-corner-radius); ; aspect-ratio: unset;"><img alt="Hayırr!" src="/setsuki/chibi/crying.png" style="border-radius: var(--fds-overlay-corner-radius);" class="svelte-zi2j2b"></div> <h4 class="text-block type-subtitle svelte-9tjxrp">Hayırr!</h4> <span class="text-block type-body text-tertiary svelte-9tjxrp" style="max-width: none !important; white-space: nowrap !important;">Şu anda aktif veya yüklenmiş herhangi bir özel tema bulunamadı. Yeni temalar yükleyebilir veya varsayılan görünümü kullanmaya devam edebilirsiniz.</span> <button class="button style-accent svelte-nqc07q theme-btn-custom primary" id="tauri-theme-create-btn" style="margin-top: 16px;" type="button">Tema Oluştur</button></div></div></div>
     `;
+    setupThemeCreateButton(container);
   } catch (e) {
     console.error("[Theme] renderThemePage error:", e);
   }
+}
+
+// setupThemeCreateButton(container) — "Tema Oluştur" düğmesinin metnini ve
+// tıklama davranışını, ayrı OpenAnime Theme uygulamasının kurulu olup
+// olmadığına göre ayarlar.
+//
+// WHY iki katmanlı tasarım (tıklama zamanında YENİDEN sorgulama + render
+// zamanında etiket güncelleme):
+//   1) Buton her renderThemePage() çağrısında innerHTML ile yeniden
+//      oluşturuluyor, dolayısıyla bağlama her seferinde tekrarlanmalı.
+//   2) Bu sayfa `window.__TAURI__` köprüsü tamamen hazır olmadan render
+//      edilebiliyor (bkz. theme-core.js -> setupCrossWindowThemeListener'daki
+//      AYNI sorun/AYNI retry deseni). Yalnızca render anındaki durumu bir
+//      kapanışa (closure) hapsedip tıklamada onu kullansaydık, köprü henüz
+//      hazır değilken render olduğunda buton SONSUZA KADAR tıklanamaz
+//      kalırdı. Bunun yerine tıklama anında `getTauriCore()` TEKRAR okunuyor
+//      ve karar (aç / kur) o an taze veriliyor — etiket render zamanında
+//      "iyimser" güncellense de, gerçek davranış her zaman tıklama anındaki
+//      canlı duruma göre çalışır.
+function setupThemeCreateButton(container) {
+  try {
+    const btn = container.querySelector("#tauri-theme-create-btn");
+    if (!btn) return;
+
+    btn.onclick = () => {
+      const invoke = getTauriCore()?.invoke;
+      if (!invoke) {
+        console.error("[Theme] Tauri köprüsü hazır değil (window.__TAURI__ yok).");
+        alert("Uygulama henüz tam yüklenmedi, birkaç saniye sonra tekrar deneyin.");
+        return;
+      }
+      invoke("theme_app_status")
+        .then((status) => {
+          console.log("[Theme] theme_app_status:", status);
+          if (status && status.installed) {
+            return invoke("open_theme_app").then(() => {
+              console.log("[Theme] open_theme_app başarılı.");
+            });
+          }
+          if (typeof showThemeInstallModal === "function") {
+            showThemeInstallModal();
+          } else {
+            console.error("[Theme] showThemeInstallModal tanımlı değil.");
+          }
+        })
+        .catch((e) => {
+          console.error("[Theme] theme_app_status/open_theme_app error:", e);
+          alert("OpenAnime Theme açılamadı: " + e);
+        });
+    };
+
+    updateThemeCreateButtonLabel(btn);
+  } catch (e) {
+    console.error("[Theme] setupThemeCreateButton error:", e);
+  }
+}
+
+// updateThemeCreateButtonLabel(btn, attempt) — Butonun metnini kurulum
+// durumuna göre günceller. `window.__TAURI__` henüz hazır değilse kısa bir
+// süre sonra tekrar dener (bkz. yukarıdaki WHY notu) — sınırlı deneme sayısı
+// ile (sayfa terk edilmiş olabilir, sonsuza kadar uğraşmasın).
+function updateThemeCreateButtonLabel(btn, attempt) {
+  attempt = attempt || 0;
+  const invoke = getTauriCore()?.invoke;
+  if (!invoke) {
+    if (attempt >= 10 || !document.body.contains(btn)) return;
+    setTimeout(() => updateThemeCreateButtonLabel(btn, attempt + 1), 500);
+    return;
+  }
+  invoke("theme_app_status")
+    .then((status) => {
+      if (!document.body.contains(btn)) return;
+      btn.textContent =
+        status && status.installed ? "Tema Oluştur" : "Tema Uygulamasını Kur";
+    })
+    .catch((e) => {
+      console.error("[Theme] theme_app_status error:", e);
+    });
 }
 
 function replaceAndShow() {
@@ -60,6 +139,17 @@ function replaceAndShow() {
     }
     if (!container) return;
 
+    // `.desktop-theme-page` işaretçisi KRİTİK: theme-observer.js'deki
+    // MutationObserver, sayfada (document.body altında, HERHANGİ BİR YERDE)
+    // olan hemen her DOM mutasyonunda replaceAndShow()'u tekrar çağırıyor.
+    // Bu işaretçi olmadan renderThemePage() her seferinde container'ın
+    // innerHTML'ini SIFIRDAN yazıyordu — "Tema Oluştur" düğmesi saniyede
+    // defalarca yok edilip yeniden yaratılıyor, bu da bir tıklamanın hedef
+    // düğme silinip yenisiyle değiştirilirken kaybolmasına yol açıyordu
+    // (kullanıcı tıklıyor ama hiçbir şey olmuyormuş gibi görünüyordu).
+    // THEMES.length HER ZAMAN >= 1 (theme-core.js'deki hardcoded "default"
+    // girdisi yüzünden), yani bu dal pratikte HER replaceAndShow() çağrısında
+    // çalışıyor — işaretçi olmadan render tamamen idempotent değildi.
     if (THEMES.length > 0) {
       if (!container.querySelector(".desktop-theme-page")) {
         renderThemePage(container);

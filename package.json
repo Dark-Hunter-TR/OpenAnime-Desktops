@@ -11,7 +11,10 @@
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "set-version": "node scripts/set-version.mjs",
+    "build:debug": "tauri build --debug --config src-tauri/tauri.debug.conf.json --verbose",
+    "build:release": "tauri build --verbose"
   },
   "license": "MIT",
   "dependencies": {

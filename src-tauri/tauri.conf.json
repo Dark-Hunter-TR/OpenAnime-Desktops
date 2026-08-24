@@ -19,28 +19,20 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["nsis", "dmg", "app", "deb", "appimage"],
+    "targets": "all",
     "resources": {
       "../static/superlogo.mp4": "superlogo.mp4"
     },
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"
-    ],
-    "windows": {
-      "nsis": {
-        "languages": ["Turkish"],
-        "template": "./nsis/installer.nsi",
-        "installerIcon": "icons/icon.ico",
-        "headerImage": "nsis/images/header.bmp"
-      }
-    }
+    ]
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ0NDM0MjE0M0UzNUFFQUQKUldTdHJqVStGRUpEMVB3R1NZUFJHTlkyYkE0cGJLZFM1WDAwMEVnRDk4eXdEYlk0K05ZVy9Kbm0K",
       "endpoints": [
-        "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/latest/download/latest.json"
+        "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Desktops/main/updater/latest-stable.json"
       ]
     }
   }

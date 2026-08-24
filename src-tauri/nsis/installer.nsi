@@ -94,6 +94,7 @@ Var OaRadio1
 Var OaRadio2
 Var OaRadio3
 Var OaChkOnlineLatest
+Var OaChkInstallTheme
 Var OaStatusText
 Var OaSetsukiImage
 Var OaSetsukiHandle
@@ -283,6 +284,13 @@ Function OaCustomPage
   Pop $OaChkOnlineLatest
   SendMessage $OaChkOnlineLatest ${BM_SETCHECK} ${BST_CHECKED} 0
 
+  ; OpenAnime Theme, tema oluşturmak için kullanılan AYRI bir uygulama
+  ; (kendi kurulumu, kendi güncelleme kanalı). Varsayılan İŞARETLİ: kutuyu
+  ; kaldırmadığı sürece kullanıcı ikinci bir kurulum akışıyla uğraşmaz.
+  ${NSD_CreateCheckbox} 10u 130u 100% 12u "OpenAnime Theme uygulamasını da kur (tema oluşturmak için ayrı bir uygulama)"
+  Pop $OaChkInstallTheme
+  SendMessage $OaChkInstallTheme ${BM_SETCHECK} ${BST_CHECKED} 0
+
   nsDialogs::Show
 FunctionEnd
 
@@ -326,6 +334,14 @@ Function OaCustomPageLeave
     StrCpy $OaChkForceLocal 1
   ${Else}
     StrCpy $OaChkForceLocal 0
+  ${EndIf}
+
+  ; OpenAnime Theme kurulum seçeneği
+  ${NSD_GetState} $OaChkInstallTheme $0
+  ${If} $0 == ${BST_CHECKED}
+    StrCpy $OaChkInstallTheme 1
+  ${Else}
+    StrCpy $OaChkInstallTheme 0
   ${EndIf}
 
   ; Not: OaChkAutoUpdate değeri tauri.conf.json üzerinden yönetiliyor ama
@@ -805,6 +821,11 @@ Section Install
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
 
+  ; OpenAnime kurulumu tamamlandıktan SONRA, isteğe bağlı olarak OpenAnime
+  ; Theme'i de kur (bkz. InstallThemeAppIfSelected — fail-open, bu kurulumu
+  ; ASLA bloklamaz/başarısız etmez).
+  Call InstallThemeAppIfSelected
+
   ; Auto close this page for passive mode
   ${If} $PassiveMode = 1
     SetAutoClose true
@@ -993,6 +1014,7 @@ FunctionEnd
 
 Var OaOnlineVersion
 Var OaSetupUrl
+Var OaThemeSetupUrl
 
 Function CheckOnlineLatest
   ; Sadece interaktif kurulumda çalış
@@ -1114,6 +1136,131 @@ Function CheckOnlineLatest
   ; 6) En son installer'ı başlat ve bu (eski) installer'ı kapat
   Exec '"$TEMP\oa_latest_setup.exe"'
   Quit
+FunctionEnd
+
+; ─────────────────────────────────────────────────────────────
+; OpenAnime Theme'i de kur (isteğe bağlı, varsayılan işaretli)
+; ─────────────────────────────────────────────────────────────
+; OpenAnime Theme, Desktops'tan tamamen AYRI bir uygulama (kendi kurulumu,
+; kendi güncelleme kanalı — tema oluşturma editörü). "$OaChkInstallTheme"
+; işaretliyse, Theme'in KENDİ kanal manifestinden ("latest-stable.json" —
+; CheckOnlineLatest'in kullandığı manifestle aynı biçim, farklı depo) en son
+; Windows kurulum paketinin adresini çıkarıp indirir ve pasif modda (/P)
+; çalıştırır.
+;
+; CheckOnlineLatest'ten fark: burada yalnızca "version" değil, iç içe
+; `platforms.windows-x86_64.url` alanı da gerekiyor. Manifest çok satırlı
+; (pretty-printed) olduğundan tek satır taraması yetmez — dosya TEK SEFERDE
+; belleğe okunup tüm metin üzerinde aranıyor.
+;
+; Güvenlik / sağlamlık: CheckOnlineLatest ile AYNI muhafazalar — yalnızca
+; interaktif kurulumda çalışır, fail-open (her hata yolunda sessizce geri
+; döner), ve Desktops'un KENDİ kurulumunu ASLA bloklamaz/başarısız etmez
+; (Abort/Quit YOK).
+!define OA_THEME_MANIFEST_URL "https://raw.githubusercontent.com/Dark-Hunter-TR/OpenAnime-Thema/main/updater/latest-stable.json"
+
+Function InstallThemeAppIfSelected
+  ${If} $OaChkInstallTheme != 1
+    Return
+  ${EndIf}
+  ${If} $UpdateMode = 1
+    Return
+  ${EndIf}
+  ${If} $PassiveMode = 1
+    Return
+  ${EndIf}
+  ${If} ${Silent}
+    Return
+  ${EndIf}
+
+  Push "OpenAnime Theme kontrol ediliyor..."
+  Call OaSetInstText
+
+  ; 1) Manifesti indir (fail-open)
+  Delete "$TEMP\oa_theme_latest.json"
+  nsExec::Exec '"$SYSDIR\curl.exe" -L -s -f -A "OpenAnime-Installer" --connect-timeout 5 --max-time 20 -o "$TEMP\oa_theme_latest.json" "${OA_THEME_MANIFEST_URL}"'
+  Pop $0
+  ${If} $0 != "0"
+    Goto theme_done
+  ${EndIf}
+
+  ; 2) Dosyanın TÜM satırlarını tek bir değişkende birleştir (satır satır
+  ;    ARAMA değil — "windows-x86_64" anahtarıyla "url" değeri pretty-printed
+  ;    manifestte farklı satırlara düşebiliyor, bu yüzden önce tüm metin tek
+  ;    parçada olmalı).
+  ClearErrors
+  FileOpen $1 "$TEMP\oa_theme_latest.json" r
+  ${If} ${Errors}
+    Goto theme_done
+  ${EndIf}
+  StrCpy $2 ""
+  theme_read_loop:
+    ClearErrors
+    FileRead $1 $3
+    ${If} ${Errors}
+      Goto theme_read_done
+    ${EndIf}
+    StrCpy $2 "$2$3"
+    Goto theme_read_loop
+  theme_read_done:
+  FileClose $1
+  Delete "$TEMP\oa_theme_latest.json"
+  ${If} $2 == ""
+    Goto theme_done
+  ${EndIf}
+
+  ; 3) "windows-x86_64" bloğundan sonraki ilk "url" değerini çıkar
+  ${StrLoc} $3 $2 '"windows-x86_64"' ">"
+  ${If} $3 == ""
+    Goto theme_done
+  ${EndIf}
+  StrCpy $4 $2 "" $3
+
+  ${StrLoc} $5 $4 '"url"' ">"
+  ${If} $5 == ""
+    Goto theme_done
+  ${EndIf}
+  IntOp $6 $5 + 5               ; "url" (tırnaklarıyla 5 karakter) sonrası konum
+  StrCpy $7 $4 "" $6
+
+  ${StrLoc} $8 $7 '"' ">"
+  ${If} $8 == ""
+    Goto theme_done
+  ${EndIf}
+  IntOp $9 $8 + 1
+  StrCpy $7 $7 "" $9
+
+  ${StrLoc} $8 $7 '"' ">"
+  ${If} $8 == ""
+    Goto theme_done
+  ${EndIf}
+  StrCpy $OaThemeSetupUrl $7 $8
+
+  ${If} $OaThemeSetupUrl == ""
+    Goto theme_done
+  ${EndIf}
+
+  ; 4) İndir (fail-open)
+  Push "OpenAnime Theme indiriliyor..."
+  Call OaSetInstText
+  Delete "$TEMP\oa_theme_setup.exe"
+  nsExec::Exec '"$SYSDIR\curl.exe" -L -s -f -A "OpenAnime-Installer" --connect-timeout 5 --max-time 300 -o "$TEMP\oa_theme_setup.exe" "$OaThemeSetupUrl"'
+  Pop $0
+  ${If} $0 != "0"
+    Delete "$TEMP\oa_theme_setup.exe"
+    Goto theme_done
+  ${EndIf}
+
+  ; 5) Pasif modda (/P) kur ve bekle — Theme'in kendi installer.nsi'si de
+  ;    AYNI Tauri şablonundan geldiği için bu bayrağı destekliyor.
+  Push "OpenAnime Theme kuruluyor..."
+  Call OaSetInstText
+  ExecWait '"$TEMP\oa_theme_setup.exe" /P'
+  Delete "$TEMP\oa_theme_setup.exe"
+
+  theme_done:
+  Push "OpenAnime Kuruluyor... Lütfen Bekleyin."
+  Call OaSetInstText
 FunctionEnd
 
 ; Kurulum (INSTFILES) sayfasindaki ana baslik metnini (ID 1006) gunceller.

@@ -411,6 +411,12 @@
           "markdownDescription": "OpenAnime bildirimlerinin arka planda okunup masaüstü toast bildirimi olarak gösterilmesine izin verir. Ayar aç/kapa, Gateway-Token köprüsü ve toast penceresinin kendi komutlarını kapsar."
         },
         {
+          "description": "Ayrı OpenAnime Theme uygulamasının kurulu olup olmadığını sorgulama, açma ve kurma komutlarına izin verir",
+          "type": "string",
+          "const": "allow-theme-app",
+          "markdownDescription": "Ayrı OpenAnime Theme uygulamasının kurulu olup olmadığını sorgulama, açma ve kurma komutlarına izin verir"
+        },
+        {
           "description": "Tema oluşturucu Svelte penceresini açma komutuna izin verir",
           "type": "string",
           "const": "allow-theme-builder",

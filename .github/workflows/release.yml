@@ -120,16 +120,107 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────
-  # 2) Derle + TASLAK release'e yayınla (Windows + macOS)
+  # 2) Taslak release'i ÖNCEDEN aç
+  #
+  # Üç platform paralel derlendiği için bu adım şart: `tauri-action` release
+  # yoksa kendisi oluşturuyor ve aynı anda başlayan üç iş aynı tag'i yaratmaya
+  # çalışınca biri 422 ile düşüyor. Release'i burada tek seferde açıp aşağıya
+  # yalnızca `releaseId` geçiyoruz.
+  # ────────────────────────────────────────────────────
+  create-release:
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.mk.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Taslak release'i oluştur (varsa yeniden kullan)
+        id: mk
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          # Taslak release'ler `releases/tags/<tag>` ile BULUNAMIYOR (o uç nokta
+          # yalnızca yayınlanmışlara bakıyor); bu yüzden liste üzerinden arıyoruz.
+          #
+          # Ama liste uç noktası ANINDA TUTARLI DEĞİL: yeni açılan bir taslak
+          # birkaç saniye boyunca listede görünmeyebiliyor. Release'i açıp hemen
+          # ardından listede aramak tam da bu yüzden "oluşturulamadı" diye
+          # düşüyordu — release aslında oluşmuştu.
+          #
+          # Çözüm: id'yi aramıyoruz, release'i oluşturan POST'un YANITINDAN
+          # okuyoruz (`gh release create` yalnızca URL basıyor, id vermiyor;
+          # bu yüzden REST uç noktasını doğrudan çağırıyoruz). Listeye artık
+          # sadece "bu tag için taslak zaten var mı" kontrolü ve paralel bir işin
+          # release'i önce açtığı yarış durumu için başvuruyoruz.
+          find_id() {
+            # `head -1` YOK: pipefail altında SIGPIPE (141) adımı sessizce
+            # düşürüyor. Tüm çıktıyı alıp ilk satırı bash içinde ayıklıyoruz.
+            local out
+            out="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+                   | jq -r --arg tag "$TAG" '[.[][] | select(.tag_name == $tag) | .id] | .[0] // empty')" \
+              || return 1
+            printf '%s' "${out%%$'\n'*}"
+          }
+
+          # Yukarıdaki gecikmeye karşı artan beklemeyle yeniden dener.
+          find_id_retry() {
+            local id delay
+            for delay in 0 2 4 8 15; do
+              [ "$delay" -eq 0 ] || sleep "$delay"
+              id="$(find_id || true)"
+              if [ -n "$id" ]; then printf '%s' "$id"; return 0; fi
+            done
+          }
+
+          ID="$(find_id || true)"
+
+          if [ -z "$ID" ]; then
+            if RESPONSE="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases" \
+                 -f "tag_name=$TAG" \
+                 -f "name=$TAG" \
+                 -f "target_commitish=$GITHUB_SHA" \
+                 -F draft=true \
+                 -F "prerelease=$PRERELEASE" \
+                 -f 'body=Otomatik yayın — varlıklar yükleniyor…')"; then
+              ID="$(printf '%s' "$RESPONSE" | jq -r '.id // empty')"
+            else
+              # 422 already_exists: aynı tag için release başka bir yerde
+              # açılmış olabilir. Listede belirmesini bekleyip yeniden ara.
+              echo "Release oluşturma isteği reddedildi, mevcut release aranıyor…"
+              ID="$(find_id_retry)"
+            fi
+          fi
+
+          if [ -z "$ID" ]; then
+            echo "::error::Taslak release oluşturulamadı."
+            exit 1
+          fi
+          echo "release_id=$ID" >> "$GITHUB_OUTPUT"
+          echo "Taslak release id: $ID"
+
+  # ────────────────────────────────────────────────────
+  # 3) Derle + TASLAK release'e yükle (Windows + macOS + Linux paralel)
   # ────────────────────────────────────────────────────
   build:
-    needs: prepare
+    needs: [prepare, create-release]
     permissions:
       contents: write
     strategy:
+      # Bir platform patlarsa diğerlerinin sonucunu da görmek istiyoruz;
+      # eksik platformu aşağıdaki manifest işi zaten yakalıyor.
       fail-fast: false
       matrix:
         include:
+          - platform: windows-latest
+            args: ''
+            debug_args: ''
+            target: x86_64-pc-windows-msvc
+            rust-targets: ''
+            label: Windows-x64
           # macOS: universal binary (Intel + Apple Silicon tek .app/.dmg içinde).
           # tauri-cli, aarch64 ve x86_64 hedeflerini AYRI AYRI derleyip `lipo` ile
           # birleştirir — bu yüzden iki rustup target'ı da kurulu olmak zorunda
@@ -141,12 +232,12 @@ jobs:
             target: universal-apple-darwin
             rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
             label: macOS-Universal
-          - platform: windows-latest
+          - platform: ubuntu-latest
             args: ''
             debug_args: ''
-            target: x86_64-pc-windows-msvc
+            target: x86_64-unknown-linux-gnu
             rust-targets: ''
-            label: Windows-x64
+            label: Linux-x64
 
     runs-on: ${{ matrix.platform }}
 
@@ -154,6 +245,23 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # Tauri v2 (webkit2gtk-4.1) + native_player (gtk4 + wgpu) için sistem
+      # bağımlılıkları. libegl1-mesa-dev: wgpu'nun GLES arka ucu (Vulkan ash
+      # ile dinamik yüklenir, ama EGL için başlık gerekebilir).
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-4-dev \
+            libglib2.0-dev \
+            libegl1-mesa-dev \
+            pkg-config
 
       # Toolchain + sccache
       - name: Setup sccache
@@ -180,7 +288,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~\AppData\Local\tauri
-          key: ${{ runner.os }}-tauri-bundler-${{ hashFiles('src-tauri/tauri.conf.json') }}
+          key: ${{ runner.os }}-tauri-bundler-${{ hashFiles('src-tauri/tauri.conf.json', 'src-tauri/tauri.windows.conf.json') }}
           restore-keys: |
             ${{ runner.os }}-tauri-bundler-
 
@@ -202,37 +310,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-
 
-      # Sürüm alanlarını tag ile eşitle (repo değeri ne olursa olsun tag kazanır)
+      # Sürüm alanları derlemeden ÖNCE yazılıyor: paketin, ikilinin ve updater
+      # manifestinin sürümü birbirine uymak zorunda. Depodaki değer ne olursa
+      # olsun tag kazanır. `Cargo.lock` da güncelleniyor (bkz. scripts/set-version.mjs)
+      # — aksi hâlde lock dosyası "güncel değil" diye ayrı bir sorun çıkarabilir.
       - name: Sürüm alanlarını tag ile eşitle
         shell: bash
-        env:
-          APP_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          node -e '
-            const fs = require("fs");
-            const v = process.env.APP_VERSION;
-
-            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            pkg.version = v;
-            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
-
-            const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
-            tauri.version = v;
-            fs.writeFileSync("src-tauri/tauri.conf.json", JSON.stringify(tauri, null, 2) + "\n");
-
-            let cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
-            cargo = cargo.replace(/^version = ".*"/m, `version = "${v}"`);
-            fs.writeFileSync("src-tauri/Cargo.toml", cargo);
-
-            console.log("Sürüm alanları güncellendi:", v);
-          '
+        run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
 
       - name: Install frontend dependencies
         run: bun install
 
       # Stable: İMZALI derleme. tauri-action createUpdaterArtifacts=true olduğu
       # için latest.json + .sig üretir. İmzalama secret'ları ZORUNLU; yoksa
-      # updater manifesti üretilmez ve aşağıdaki merge job'ı BİLEREK patlar.
+      # updater manifesti üretilmez ve aşağıdaki manifest işi BİLEREK patlar.
       #
       # macOS universal notu: tauri-action, universal bir .app.tar.gz gördüğünde
       # latest.json'a HEM darwin-aarch64 HEM darwin-x86_64 anahtarlarını (aynı
@@ -246,10 +337,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ needs.prepare.outputs.tag }}
-          releaseName: ${{ needs.prepare.outputs.tag }}
-          releaseDraft: true      # Her zaman taslak başla; sonda topluca yayınla
-          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }} --verbose
 
       # Debug sürümü: tauri.debug.conf.json ile override.
@@ -260,49 +348,64 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ needs.prepare.outputs.tag }}
-          releaseName: ${{ needs.prepare.outputs.tag }}
-          releaseDraft: true
-          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: --debug --config src-tauri/tauri.debug.conf.json ${{ matrix.debug_args }} --verbose
 
   # ────────────────────────────────────────────────────
-  # 3) latest.json'u DOGRULA
-  #    tauri-action, createUpdaterArtifacts=true iken latest.json'u KENDISI uretip
-  #    (birden fazla platformu birlestirerek) release'e yukler. Bu yuzden ayri bir
-  #    "merge" adimina gerek yok; eski Save/merge adimlari tauri v1 disk yolunu
-  #    (bundle/updater/latest.json) varsayiyordu ki v2'de o dosya orada olusmaz —
-  #    eski release'lerde latest.json olmamasinin gercek sebebi buydu.
-  #    Burada yalnizca manifest'in release'de gercekten var oldugunu dogruluyoruz;
-  #    yoksa (imza secret'i bozuksa tauri-action zaten patlar) yayini durduruyoruz.
+  # 4) Çok platformlu updater manifestini kur ve doğrula
+  #
+  # tauri-action her işte kendi latest.json'unu yükleyip diğerlerini eziyor;
+  # bu yüzden manifesti release varlıklarından yeniden kuruyoruz
+  # (bkz. scripts/build-updater-manifest.sh).
   # ────────────────────────────────────────────────────
-  verify-manifest:
+  updater-manifest:
     needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: latest.json release'de var mi?
+      - uses: actions/checkout@v7
+
+      - name: Manifesti üret
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download "${{ needs.prepare.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --pattern "latest.json" \
-            --output latest.json \
-            --clobber || true
-          if [ ! -s latest.json ]; then
-            echo "::error::latest.json release'de yok veya bos. tauri-action updater manifestini uretmedi (imza secret degeri eksik/yanlis olabilir). Yayin durduruldu."
-            exit 1
-          fi
-          echo "latest.json bulundu:"
-          cat latest.json
+          bash scripts/build-updater-manifest.sh \
+            "${{ needs.prepare.outputs.tag }}" \
+            "${{ needs.prepare.outputs.version }}" \
+            latest.json
+
+      # Üç platformun da manifeste girdiğini doğruluyoruz. Eksik bir anahtar,
+      # o platformdaki kullanıcının hiç güncelleme almaması demek — sessizce
+      # geçilecek bir durum değil.
+      - name: Bütün platformlar var mı?
+        run: |
+          missing=0
+          for key in windows-x86_64 darwin-aarch64 darwin-x86_64 linux-x86_64; do
+            if ! jq -e --arg k "$key" '.platforms[$k].url' latest.json >/dev/null; then
+              echo "::error::Manifestte $key eksik"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+
+      - name: Manifesti release'e yükle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare.outputs.tag }}" latest.json \
+            --repo "${{ github.repository }}" --clobber
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: updater-manifest
+          path: latest.json
 
   # ────────────────────────────────────────────────────
-  # 4) Taslak release'i CANLIYA al
+  # 5) Taslak release'i canlıya al
   # ────────────────────────────────────────────────────
   publish-release:
-    needs: [prepare, build, verify-manifest]
+    needs: [prepare, build, updater-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -316,11 +419,15 @@ jobs:
             --repo "${{ github.repository }}"
 
   # ────────────────────────────────────────────────────
-  # 5) Kanal manifestini main'e commit'le (beta/alpha/stable)
-  #    updater.rs bu dosyaları okur: updater/latest-<kanal>.json
+  # 6) Kanal manifestini main'e commit'le
+  #
+  # Uygulama bu dosyaları okuyor: updater/latest-<kanal>.json
+  # (bkz. src-tauri/src/updater.rs). Yalnızca YAYINLANAN kanalın dosyası
+  # güncelleniyor — Stable kanalı seçen kullanıcının alpha/beta sürümü
+  # görmemesinin tek ve yeterli sebebi bu.
   # ────────────────────────────────────────────────────
   update-channel-manifest:
-    needs: [prepare, verify-manifest, publish-release]
+    needs: [prepare, updater-manifest, publish-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -329,29 +436,33 @@ jobs:
         with:
           ref: main
 
-      - name: Yayınlanan latest.json'u indir
+      - name: Birleştirilmiş manifesti indir
+        uses: actions/download-artifact@v7
+        with:
+          name: updater-manifest
+          path: manifest-artifact
+
+      - name: Kanal dosyasına yerleştir
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
           mkdir -p updater
-          gh release download "${{ needs.prepare.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --pattern "latest.json" \
-            --output "updater/latest-${{ needs.prepare.outputs.channel }}.json" \
-            --clobber
+          cp manifest-artifact/latest.json "updater/latest-${CHANNEL}.json"
+          rm -rf manifest-artifact
 
       - name: Değişikliği main'e commit'le
         env:
           CHANNEL: ${{ needs.prepare.outputs.channel }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          CHAN="$CHANNEL"
-          if [ -f "updater/latest-${CHAN}.json" ]; then
+          if [ -f "updater/latest-${CHANNEL}.json" ]; then
             git config user.name  "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add "updater/latest-${CHAN}.json"
-            git commit -m "chore(updater): ${CHAN} kanal manifestini ${{ needs.prepare.outputs.tag }} olarak güncelle [skip ci]" \
+            git add "updater/latest-${CHANNEL}.json"
+            git commit -m "chore(updater): ${CHANNEL} kanal manifestini ${TAG} olarak güncelle [skip ci]" \
               || echo "Değişiklik yok, commit edilmedi."
             git push origin main || { echo "::error::git push başarısız oldu"; exit 1; }
           else
-            echo "Kanal manifesti bulunamadı, commit atlandı."
+            echo "::error::Kanal manifesti hazırlanamadı."
+            exit 1
           fi

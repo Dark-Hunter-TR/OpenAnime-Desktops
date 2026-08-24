@@ -4,6 +4,6 @@
   "identifier": "com.openanime.desktop.debug",
   "bundle": {
     "createUpdaterArtifacts": false,
-    "targets": ["nsis", "dmg"]
+    "targets": ["nsis", "dmg", "deb", "appimage"]
   }
 }

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "languages": ["Turkish"],
+        "template": "./nsis/installer.nsi",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "nsis/images/header.bmp"
+      }
+    }
+  }
+}

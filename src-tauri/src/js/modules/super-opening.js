@@ -25,13 +25,14 @@
 
   function getActiveVariant() {
     const val = localStorage.getItem(SUPER_OPENING_KEY);
-    // Varsayılan olarak "super_logo" seçili gelsin ki kullanıcı doğrudan videoyu görsün
+    // Varsayılan olarak sitenin KENDİ yükleme ekranı seçili gelsin — Süper
+    // Logo/Muptezel Anime birer isteğe bağlı ekstra, kullanıcı kendisi seçmeli.
     if (val === null) {
-      localStorage.setItem(SUPER_OPENING_KEY, VARIANTS.SUPER_LOGO);
-      return VARIANTS.SUPER_LOGO;
+      localStorage.setItem(SUPER_OPENING_KEY, VARIANTS.DEFAULT);
+      return VARIANTS.DEFAULT;
     }
     if (!Object.values(VARIANTS).includes(val)) {
-      return VARIANTS.SUPER_LOGO;
+      return VARIANTS.DEFAULT;
     }
     return val;
   }
@@ -670,8 +671,11 @@
     if (document.getElementById("tauri-super-opening-setting")) return;
     if (!window.location.pathname.includes("/settings")) return;
 
+    // Güncelleme kartı ARTIK EN ALTTA olacak şekilde tasarlandığı için
+    // (bkz. updater-ui.js -> injectUpdaterSetting) burada onu tercih ETMİYORUZ
+    // — aksi hâlde iki kart birbirini "ardıma ekle" ile kovalayıp sıralamayı
+    // çalışma zamanı yarışına bağımlı hâle getirirdi.
     const refCard =
-      document.getElementById("tauri-updater-settings-card") ||
       document.getElementById("tauri-super-notifications-setting") ||
       document.getElementById("tauri-discord-rpc-setting");
 

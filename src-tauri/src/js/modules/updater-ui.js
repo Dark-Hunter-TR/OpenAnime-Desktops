@@ -424,9 +424,19 @@ function injectUpdaterSetting() {
   settingsCard.className = `expander direction-down expandable ${hashes.expanderHash || "svelte-1b1dfzj"}`;
   settingsCard.setAttribute("role", "region");
 
-  // Süper Bildirimler kartı varsa onun ardına, yoksa Discord RPC kartının
-  // ardına enjekte et (sıra: Discord RPC → Süper Bildirimler → Güncelleme).
-  const updaterAnchor = document.getElementById("tauri-super-notifications-setting") || discordCard;
+  // Güncelleme kartı listenin EN ALTINDA olmalı (Discord RPC → Süper
+  // Bildirimler → Süper Açılış → Güncelleme). Süper Açılış kartı varsa onun
+  // ardına, yoksa Süper Bildirimler'in, o da yoksa Discord RPC'nin ardına
+  // enjekte edilir. Süper Açılış'ın kendi enjeksiyonu da (bkz.
+  // super-opening.js -> injectSuperOpeningSetting) AYNI mantıkla Güncelleme
+  // kartını değil yalnızca Süper Bildirimler'i tercih ediyor — hangisi önce
+  // çalışırsa çalışsın, `X.after(Y)` çağrısı Y'yi X'in HEMEN ardına koyup
+  // varsa X'in eski bir sonraki kardeşini Y'nin ardına iteceği için son
+  // sıralama her koşulda doğru çıkıyor (bkz. yorumdaki iki senaryo).
+  const updaterAnchor =
+    document.getElementById("tauri-super-opening-setting") ||
+    document.getElementById("tauri-super-notifications-setting") ||
+    discordCard;
   updaterAnchor.after(settingsCard);
 
   // Kart HTML Oluşturma ve Olayları Bağlama
@@ -673,7 +683,7 @@ function bindSettingsCardEvents(card, hashes) {
       
       try {
         const channel = localStorage.getItem("tauri-updater-channel") || "release";
-        const res = await window.__TAURI__.core.invoke("check_for_updates", { channel, force: true });
+        const res = await window.__TAURI__.core.invoke("updater_check", { channel, force: true });
         
         if (res.available) {
           showUpdateModal(res.version, res.body, res.date);
@@ -981,7 +991,12 @@ function showUpdateModal(version, changelog, date) {
   const overlay = document.createElement("div");
   overlay.id = "tauri-updater-modal-overlay";
   overlay.className = "content-dialog-smoke svelte-f1dwd4 darken";
-  overlay.style.cssText = "position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 9999999 !important; transition: all 0.3s ease; opacity: 0;";
+  // Sitenin kendi ContentDialog'unun (fluent-svelte-extra) kullandığı süreler:
+  // arka plan (smoke) 83ms fade, kart+kapatma düğmesi birlikte 167ms
+  // circOut ile scale(1.05 -> 1) + fade. Eskiden burada 300ms'lik tek bir
+  // opacity/translateY geçişi vardı — sitenin diyaloglarına göre gözle
+  // görülür biçimde yavaş ve "cansız" duruyordu.
+  overlay.style.cssText = "position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 9999999 !important; transition: opacity 0.083s ease; opacity: 0;";
 
   let parsedDateStr = "";
   if (date) {
@@ -996,17 +1011,18 @@ function showUpdateModal(version, changelog, date) {
   }
   const dateSpan = parsedDateStr ? ` - ${parsedDateStr}` : "";
 
-  // Random mascot selection matching "maskot değişiyor hep aynı şekild değil"
-  const setsukiMascots = [
-    "standing.png",
-    "straight-on.png",
-    "leaning.png"
-  ];
-  const randomSetsuki = "/setsuki/" + setsukiMascots[Math.floor(Math.random() * setsukiMascots.length)];
+  // openani.me'nin kendi Setsuki havuzu ve ağırlıkları (siteden 1:1 analiz
+  // edildi — OpenAnime-Theme/src/lib/DialogShell.svelte). "pajamas" diğer
+  // altısının dörtte biri sıklıkta çıkıyor, geri kalanı eşit ağırlıklı.
+  const setsukiNames = ["sitting", "standing", "jumping", "leaning", "straight-on", "looking-down", "pajamas"];
+  const setsukiWeights = [16, 16, 16, 16, 16, 16, 4];
+  const setsukiPool = setsukiWeights.flatMap((weight, index) => Array(weight).fill(index));
+  const randomSetsukiIndex = setsukiPool[Math.floor(Math.random() * setsukiPool.length)];
+  const randomSetsuki = "/setsuki/" + setsukiNames[randomSetsukiIndex] + ".png";
 
   overlay.innerHTML = `
-    <div class="content-dialog-container svelte-f1dwd4" style="display: flex !important; flex-direction: row !important; align-items: flex-start !important; justify-content: center !important; position: relative !important; gap: 5px !important;">
-      <div class="content-dialog size-max svelte-f1dwd4" role="dialog" aria-modal="true" id="about-dialog" style="transform: translateY(20px); transition: all 0.3s ease;">
+    <div id="tauri-updater-modal-wrap" class="content-dialog-container svelte-f1dwd4" style="display: flex !important; flex-direction: row !important; align-items: flex-start !important; justify-content: center !important; position: relative !important; gap: 8px !important; max-width: 600px; width: 100%; transform: scale(1.05); opacity: 0; transition: transform 0.167s cubic-bezier(0.33, 1, 0.68, 1), opacity 0.167s cubic-bezier(0.33, 1, 0.68, 1);">
+      <div class="content-dialog size-max svelte-f1dwd4" role="dialog" aria-modal="true" id="about-dialog">
         <div class="content-dialog-body svelte-f1dwd4">
           <div id="main" class="fds-theme-dark svelte-cc3kyp">
             <div id="card" class="svelte-cc3kyp">
@@ -1056,7 +1072,7 @@ function showUpdateModal(version, changelog, date) {
     </div>
   `;
 
-  const modal = overlay.querySelector("#about-dialog");
+  const wrap = overlay.querySelector("#tauri-updater-modal-wrap");
 
   const changelogContent = overlay.querySelector("#tauri-updater-changelog-content");
   if (changelogContent) {
@@ -1065,16 +1081,28 @@ function showUpdateModal(version, changelog, date) {
 
   document.body.appendChild(overlay);
 
-  setTimeout(() => {
-    overlay.style.opacity = "1";
-    modal.style.transform = "translateY(0)";
-  }, 50);
+  // Kart VE kapatma düğmesi aynı sarmalayıcının (wrap) çocukları, dolayısıyla
+  // TEK geçişle birlikte beliriyorlar — düğme kartın arkasından "zaten
+  // oradaymış" gibi ayrı ayrı belirmiyor (bkz. DialogShell.svelte notu).
+  //
+  // Çift rAF: WebView2/WebKitGTK bazen tek rAF'ta henüz uygulanmamış ilk
+  // stili (scale(1.05)/opacity:0) commit etmeden ikinci stille birleştirip
+  // geçişi atlayabiliyor — ilk rAF yalnızca "boyama planlandı" demek, asıl
+  // commit ikincide garanti.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      overlay.style.opacity = "1";
+      wrap.style.transform = "scale(1)";
+      wrap.style.opacity = "1";
+    });
+  });
 
   const close = () => {
     if (isUpdateInProgress) return;
     overlay.style.opacity = "0";
-    modal.style.transform = "translateY(20px)";
-    setTimeout(() => overlay.remove(), 300);
+    wrap.style.transform = "scale(1.05)";
+    wrap.style.opacity = "0";
+    setTimeout(() => overlay.remove(), 167);
   };
 
   overlay.querySelector("#update-cancel-btn").addEventListener("click", () => {
@@ -1100,7 +1128,7 @@ function showUpdateModal(version, changelog, date) {
     overlay.querySelector("#modal-download-progress-panel").style.display = "block";
 
     try {
-      await window.__TAURI__.core.invoke("start_update_download");
+      await window.__TAURI__.core.invoke("updater_download");
     } catch (e) {
       console.error("[Updater] Download start error:", e);
       isUpdateInProgress = false;
@@ -1178,8 +1206,8 @@ async function checkAutoUpdateOnStartup() {
     try {
       const channel = localStorage.getItem("tauri-updater-channel") || "release";
       const skipVersion = localStorage.getItem("tauri-updater-skip-version") || "";
-      
-      const res = await window.__TAURI__.core.invoke("check_for_updates", { channel });
+
+      const res = await window.__TAURI__.core.invoke("updater_check", { channel });
       
       if (res.available && res.version !== skipVersion) {
         showUpdateModal(res.version, res.body, res.date);

@@ -5,6 +5,6 @@ description = "Uygulama içi güncelleyici komutlarına izin verir (sürüm sorg
 [permission.commands]
 allow = [
     "get_app_version",
-    "check_for_updates",
-    "start_update_download"
+    "updater_check",
+    "updater_download"
 ]

@@ -105,6 +105,7 @@ mod native_tray_menu {
 mod super_notifications;
 
 mod updater;
+mod theme_app;
 mod local_video_server;
 
 #[cfg(target_os = "windows")]
@@ -989,6 +990,8 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     include_str!("js/modules/theme/theme-styles.js"),
     "\n",
     include_str!("js/modules/theme/theme-page-render.js"),
+    "\n",
+    include_str!("js/modules/theme/theme-install-modal.js"),
     "\n",
     include_str!("js/modules/theme/theme-observer.js"),
     "\n}\n",
@@ -2300,8 +2303,11 @@ pub fn run() {
             apply_theme_css,
             logger::get_session_log,
             updater::get_app_version,
-            updater::check_for_updates,
-            updater::start_update_download,
+            updater::updater_check,
+            updater::updater_download,
+            theme_app::theme_app_status,
+            theme_app::open_theme_app,
+            theme_app::install_theme_app,
             // DPI Proxy komutları
             reopen_with_proxy,
             set_zoom_level,
