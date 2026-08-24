@@ -396,6 +396,11 @@ jobs:
 
   # ────────────────────────────────────────────────────
   # 5) Taslak release'i canlıya al
+  #
+  # GitHub, release varlıklarını YALNIZCA alfabetik sıralar; imzalı paketlerin
+  # adı değiştirilemeyeceği için "düzgün sıra"yı açıklama metniyle çözüyoruz:
+  # kullanıcıya hangi dosyanın ne olduğu ve hangisini indirmesi gerektiği
+  # buradaki rehberle gösteriliyor.
   # ────────────────────────────────────────────────────
   publish-release:
     needs: [prepare, build, updater-manifest]
@@ -403,12 +408,47 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Taslağı yayınla
+      - name: Sürüm notu ve dosya rehberini yaz
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
-          gh release edit "${{ needs.prepare.outputs.tag }}" \
+          case "$CHANNEL" in
+            stable) chan_tr="Stable (güncel, kararlı sürüm)" ;;
+            beta)   chan_tr="Beta (yeni özellikler erken gelir, küçük sorunlar olabilir)" ;;
+            alpha)  chan_tr="Alpha (deneysel, her an bozulabilir)" ;;
+          esac
+
+          cat > release-notes.md <<EOF
+          ## 🚀 OpenAnime ${TAG}
+
+          > **Kanal:** ${chan_tr}
+
+          ### 📥 Hangi dosyayı indirmeliyim?
+          | İşletim sistemin | İndireceğin dosya |
+          |---|---|
+          | 🪟 Windows 10/11 (64-bit) | \`OpenAnime_${VERSION}_x64-setup.exe\` |
+          | 🍎 macOS (Apple Silicon & Intel) | \`OpenAnime_${VERSION}_universal.dmg\` |
+          | 🐧 Linux | \`OpenAnime_${VERSION}_amd64.AppImage\` veya \`.deb\` |
+
+          <details>
+          <summary>📁 Diğer dosyalar ne işe yarar?</summary>
+
+          | Dosya | Açıklama |
+          |---|---|
+          | \`OpenAnime-Debug_*\` | Geliştirici/test derlemeleri — normal kullanıcılar indirmesin |
+          | \`*.app.tar.gz\` | Uygulama içi otomatik güncelleyicinin (macOS) kullandığı paket |
+          | \`*.sig\` | Güncelleme paketlerinin dijital imzaları — elle indirilmez |
+          | \`latest.json\` | Otomatik güncelleme manifesti |
+
+          </details>
+          EOF
+
+          gh release edit "$TAG" \
             --draft=false \
+            --notes-file release-notes.md \
             --repo "${{ github.repository }}"
 
   # ────────────────────────────────────────────────────
