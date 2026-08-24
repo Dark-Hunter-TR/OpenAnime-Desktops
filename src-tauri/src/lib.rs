@@ -1686,6 +1686,35 @@ fn oa_save_webgpu_capture(
 }
 
 #[cfg(target_os = "windows")]
+/// macOS'ta App Nap / güç tasarrufu tabanlı kısıtlamaları (ekran-uyku,
+/// sistem boşta-uyku, arka plan QoS düşürme) uygulama boyunca devre dışı
+/// bırakır. Windows tarafında EcoQoS/bellek hedefi tuning'inin (bkz.
+/// refresh_perf_mode) macOS eşdeğeri hiç yoktu — WKWebView/WebGPU tarafında
+/// gerçek zamanlı kare oluşturma gibi sürekli GPU/CPU yükü olan bir iş
+/// varken sistemin gücü kısmasını önlemek istiyoruz.
+///
+/// `caffeinate` (sistemde her zaman hazır, macOS'un kendi CLI aracı) ile
+/// yapılıyor — Objective-C/objc2 API'lerine (NSProcessInfo.beginActivity)
+/// elle FFI yazmak yerine: bu makine yerelde Apple SDK/araç zinciri
+/// olmadığından o kodu ASLA derleyip doğrulayamam (bkz. `cargo check
+/// --target x86_64-apple-darwin` denemesi — bir C build script'inde
+/// tıkanıyor). `caffeinate` 15+ yıldır değişmeyen, stabil bir sistem aracı;
+/// burada hata riski çok daha düşük.
+///
+/// `-w <pid>`: caffeinate bu process çıkınca kendiliğinden sonlanır, ayrıca
+/// öldürmemiz gerekmiyor.
+#[cfg(target_os = "macos")]
+fn prevent_macos_app_nap() {
+    let pid = std::process::id().to_string();
+    match std::process::Command::new("caffeinate")
+        .args(["-d", "-i", "-w", &pid])
+        .spawn()
+    {
+        Ok(_) => dbg_log!("[macOS] caffeinate başlatıldı (App Nap/uyku engellendi, pid={})", pid),
+        Err(e) => dbg_log!("[macOS] caffeinate başlatılamadı: {}", e),
+    }
+}
+
 fn setup_windows_gpu_preference() {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_str) = exe_path.to_str() {
@@ -2065,6 +2094,11 @@ pub fn run() {
     {
         init_xlib_threads();
         configure_display_backend();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        prevent_macos_app_nap();
     }
 
     #[cfg(target_os = "windows")]
