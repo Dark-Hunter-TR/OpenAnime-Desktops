@@ -54,9 +54,9 @@
       s.textContent = [
         "body.oa-dashboard-active label.checkbox-container{align-self:flex-start;width:fit-content;}",
 
-        // Grup başlığı yalnızca DÜZEN tanımlar; yazı tipi/renk sitenin kendi
-        // .text-block.type-caption sınıfından, chevron ise sitenin kendi
-        // Expander ikonundan gelir (bkz. getExpanderHashes).
+        // Grup başlığı yalnızca DÜZEN tanımlar; yazı tipi/renk/kart görünümü
+        // sitenin kendi Expander bileşeninden canlı olarak devralınır
+        // (bkz. getExpanderSkin).
         ".oa-dash-group{display:flex;flex-direction:column;margin-bottom:4px;}",
         ".oa-dash-group-header{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;}",
         ".oa-dash-group-header .expander-chevron{pointer-events:none;display:flex;flex:0 0 auto;transition:transform .15s cubic-bezier(.55,0,.1,1);}",
