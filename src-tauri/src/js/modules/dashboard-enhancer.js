@@ -39,12 +39,16 @@
 //      olan alanlara (Anime/Fansub) dokunulmaz; yeni input
 //      oluşturulmaz → form hafızası ve Svelte etkilenmez.
 //
-//   6. SETLER: Anime/sezon/bölüm kuyruğu ile hızlı bölüm girişi.
-//      Panel "Oynatıcı N" başlığının üstünde; setler KALICIDIR
-//      (localStorage). "Forma yaz" YALNIZCA formu doldurur,
-//      gönderi kullanıcıdadır (yarı otomatik). Panelin kendi
-//      inputları "data-oa-ignore" ile işaretlenir → sahne anahtarı
-//      (input sayısı) değişmez, mevcut form hafızası bozulmaz.
+//   6. SETLER (v2): Anime/sezon/bölüm kuyruğu + içerik yönetimi.
+//      Set = varsayılanlar (fansub/katkı/args) + fansub havuzu (bağlantılı)
+//      + katkı havuzu + sezonlar. Bölümler nesnedir (override'lı):
+//      {e, fansub, katki, link, args, done} — boş alan set varsayılanından
+//      devralınır (eff()). Toplu dağıtım (fansub/katkı/bağlantı; sırayla
+//      bölüş veya hepsine aynı), bölüm editörü (◂ ▸ sıralı gezinme),
+//      site verisi ("İşlenen animeler" tablosundan öğrenim, scraper YOK).
+//      "Forma yaz" etkin değerleri yazar; gönderi kullanıcıdadır. Panelin
+//      kendi inputları "data-oa-ignore" ile işaretlenir → form hafızası
+//      ve sahne anahtarı bozulmaz.
 // ═══════════════════════════════════════════════════════════
 
 (function () {
@@ -101,13 +105,32 @@
         "body.oa-dashboard-active .oa-set-body,body.oa-dashboard-active .oa-season-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .18s cubic-bezier(.55,0,.1,1);}",
         "body.oa-dashboard-active .oa-set.open>.oa-set-body,body.oa-dashboard-active .oa-season.open>.oa-season-body{grid-template-rows:1fr;}",
         "body.oa-dashboard-active .oa-set-body-inner,body.oa-dashboard-active .oa-season-body-inner{min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:6px;padding:6px 0 2px 18px;}",
-        "body.oa-dashboard-active .oa-btn{font:inherit;font-size:12px;line-height:1.4;color:inherit;background:transparent;border:1px solid currentColor;border-radius:6px;padding:1px 9px;cursor:pointer;opacity:.7;white-space:nowrap;}",
+        "body.oa-dashboard-active .oa-btn{font:inherit;font-size:12px;line-height:1.4;color:var(--oa-btn-fg,inherit);background:var(--oa-btn-bg,transparent);border:1px solid var(--oa-btn-bd,currentColor);border-radius:var(--oa-btn-radius,6px);padding:var(--oa-btn-pad,1px 9px);cursor:pointer;opacity:.7;white-space:nowrap;}",
         "body.oa-dashboard-active .oa-btn:hover{opacity:1;}",
         "body.oa-dashboard-active .oa-btn.primary{opacity:1;font-weight:600;}",
+        "body.oa-dashboard-active .oa-btn.danger{color:#fff;background:var(--oa-danger,#c0392b);border-color:transparent;opacity:.85;}",
+        "body.oa-dashboard-active .oa-input{font:inherit;font-size:12px;color:var(--oa-in-fg,inherit);background:var(--oa-in-bg,transparent);border:1px solid var(--oa-in-bd,currentColor);border-radius:var(--oa-in-radius,6px);padding:var(--oa-in-pad,2px 8px);}",
+        "body.oa-dashboard-active .oa-input:focus{outline:1px solid var(--oa-btn-bd,currentColor);}",
+        "body.oa-dashboard-active .oa-input.w-name{width:150px;}",
+        "body.oa-dashboard-active .oa-input.w-link{flex:1;min-width:120px;}",
+        "body.oa-dashboard-active .oa-input.w-num{width:56px;}",
+        "body.oa-dashboard-active .oa-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}",
+        "body.oa-dashboard-active .oa-muted{opacity:.55;font-size:12px;}",
         "body.oa-dashboard-active .oa-ep-chips{display:flex;flex-wrap:wrap;gap:4px;}",
-        "body.oa-dashboard-active .oa-ep-chip{font:inherit;font-size:12px;line-height:1;padding:3px 9px;border-radius:999px;border:1px solid currentColor;opacity:.45;cursor:pointer;user-select:none;}",
-        "body.oa-dashboard-active .oa-ep-chip.sel{opacity:1;font-weight:600;}",
-        "body.oa-dashboard-active .oa-season-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}",
+        "body.oa-dashboard-active .oa-sub{display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px dashed var(--oa-in-bd,currentColor);border-radius:8px;opacity:.95;}",
+        "body.oa-dashboard-active .oa-sub-title{font-size:11px;opacity:.6;letter-spacing:.3px;}",
+        "body.oa-dashboard-active .oa-badge{font-size:11px;opacity:.55;white-space:nowrap;}",
+        "body.oa-dashboard-active .oa-ep-chip{position:relative;}",
+        "body.oa-dashboard-active .oa-ep-chip.ovr{border-style:dashed;opacity:.85;}",
+        "body.oa-dashboard-active .oa-ep-chip.done{opacity:1;background:var(--oa-ok-bg,rgba(48,164,108,.25));border-color:transparent;}",
+        "body.oa-dashboard-active .oa-ep-chip .ed{display:none;position:absolute;top:-6px;right:-6px;width:14px;height:14px;line-height:13px;text-align:center;font-size:10px;border-radius:50%;background:var(--oa-btn-bg,transparent);border:1px solid var(--oa-in-bd,currentColor);cursor:pointer;}",
+        "body.oa-dashboard-active .oa-ep-chip:hover .ed{display:block;}",
+        "body.oa-dashboard-active .oa-ep-editor{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border:1px solid var(--oa-in-bd,currentColor);border-radius:8px;}",
+        "body.oa-dashboard-active .oa-ep-editor .oa-lbl{font-size:11px;opacity:.55;min-width:110px;}",
+        "body.oa-dashboard-active .oa-dist{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border:1px dashed var(--oa-in-bd,currentColor);border-radius:8px;}",
+        "body.oa-dashboard-active .oa-pool{display:flex;flex-direction:column;gap:4px;}",
+        "body.oa-dashboard-active .oa-x{font:inherit;font-size:11px;line-height:1;background:transparent;border:none;color:inherit;opacity:.5;cursor:pointer;padding:2px;}",
+        "body.oa-dashboard-active .oa-x:hover{opacity:1;color:var(--oa-danger,#c0392b);}",
         "body.oa-dashboard-active .oa-range-in{font:inherit;font-size:12px;color:inherit;background:transparent;border:1px solid currentColor;border-radius:6px;padding:1px 8px;width:90px;}",
         "body.oa-dashboard-active .oa-rename{font:inherit;font-size:13px;color:inherit;background:transparent;border:1px solid currentColor;border-radius:6px;padding:1px 8px;min-width:140px;}",
         "body.oa-dashboard-active .oa-queue-bar,body.oa-dashboard-active .oa-done-bar{display:flex;align-items:center;gap:10px;padding:6px 10px;border:1px solid currentColor;border-radius:8px;margin-bottom:8px;}"
@@ -711,12 +734,43 @@
     var SETS_KEY = "oa_episode_sets";
     var QUEUE_KEY = "oa_episode_queue";
 
+    // ── v2 veri modeli ──
+    // set = { id, name, anime,
+    //         defaults: { katki, fansub, args, resolutions, softsub },
+    //         fansubs: [ {name, link} ],        // fansub havuzu (bağlantılı)
+    //         contributors: [ "isim", ... ],    // katkıda bulunan havuzu
+    //         seasons: [ { no, episodes: [ep] } ] }
+    // ep   = { e, fansub(null=set), katki(null=set), link, args(null=set), done }
+    // Bölüm bazlı override'lar boşsa set varsayılanı kullanılır (eff()).
+    function migrateSet(s) {
+      if (!s || typeof s.id !== "string") return null;
+      if (!s.defaults) {
+        // v1 → v2: düz alanlar + sayı bölümler
+        s.defaults = {
+          katki: s.katki || "",
+          fansub: s.fansub || "",
+          args: s.args || "",
+          resolutions: s.resolutions || {},
+          softsub: !!s.softsub
+        };
+        delete s.katki; delete s.fansub; delete s.args;
+        s.fansubs = (s.fansub ? [{ name: s.fansub, link: "" }] : []);
+        s.contributors = (s.defaults.katki || "").split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+        (s.seasons || []).forEach(function (sn) {
+          sn.episodes = (sn.episodes || []).map(function (x) {
+            return typeof x === "number" ? { e: x, fansub: null, katki: null, link: "", args: null, done: false } : x;
+          });
+        });
+      }
+      return s;
+    }
+
     function loadSets() {
       try {
         var v = JSON.parse(localStorage.getItem(SETS_KEY) || "[]");
         if (!Array.isArray(v)) return [];
         // Bozuk/eksik kayıtları sessizce ele; geri kalanı koru.
-        return v.filter(function (s) { return s && typeof s.id === "string"; });
+        return v.map(migrateSet).filter(Boolean);
       } catch (e) { return []; }
     }
 
@@ -748,6 +802,144 @@
     var _openSets = {};    // setId -> açık/kapalı
     var _openSeasons = {}; // setId:no -> açık/kapalı
     var _selEps = {};      // setId:no -> { bölümNo: true }
+    var _editKey = null;   // açık bölüm editörü: "setId:no:e" | null
+    var _distOpen = null;  // açık dağıtım şeridi: "setId:no" | null
+    var _distSel = {};     // dağıtım şeridi chip seçimleri (oturumluk)
+    var _setEditOpen = {}; // setId -> varsayılan/havuz editörü açık mı
+    var SITE_KEY = "oa_site_cache"; // { animeAdı: { sezonNo: maksBölüm } }
+
+    function findSet(id) {
+      var sets = loadSets();
+      for (var i = 0; i < sets.length; i++) if (sets[i].id === id) return sets[i];
+      return null;
+    }
+
+    function saveSet(updated) {
+      var sets = loadSets();
+      for (var i = 0; i < sets.length; i++) {
+        if (sets[i].id === updated.id) { sets[i] = updated; break; }
+      }
+      saveSets(sets);
+    }
+
+    // Bölümün ETKİN değerleri: override yoksa set varsayılanı.
+    function eff(set, ep) {
+      var d = set.defaults || {};
+      return {
+        fansub: (ep.fansub != null && ep.fansub !== "") ? ep.fansub : (d.fansub || ""),
+        katki: (ep.katki != null && ep.katki !== "") ? ep.katki : (d.katki || ""),
+        args: (ep.args != null && ep.args !== "") ? ep.args : (d.args || ""),
+        link: ep.link || "",
+        resolutions: d.resolutions || {},
+        softsub: !!d.softsub
+      };
+    }
+
+    function hasOverride(ep) {
+      return (ep.fansub != null && ep.fansub !== "") || (ep.katki != null && ep.katki !== "") ||
+             (ep.args != null && ep.args !== "") || !!(ep.link && ep.link.length);
+    }
+
+    function updateEpisode(setId, seasonNo, epNo, patch) {
+      var set = findSet(setId);
+      if (!set) return null;
+      (set.seasons || []).forEach(function (sn) {
+        if (sn.no !== seasonNo) return;
+        (sn.episodes || []).forEach(function (ep) {
+          if (ep.e !== epNo) return;
+          for (var k in patch) ep[k] = patch[k];
+        });
+      });
+      saveSet(set);
+      return set;
+    }
+
+    // ── Site verisi: scraper YOK. Yalnızca ekranda zaten görünen
+    //    "İşlenen animeler" tablosundan "Anime X. Sezon Y. Bölüm"
+    //    satırları okunur; anime → sezon → görülen maks bölüm öğrenilir.
+    function loadSiteCache() {
+      try {
+        var v = JSON.parse(localStorage.getItem(SITE_KEY) || "{}");
+        return (v && typeof v === "object") ? v : {};
+      } catch (e) { return {}; }
+    }
+
+    function saveSiteCache(c) {
+      try { localStorage.setItem(SITE_KEY, JSON.stringify(c)); } catch (e) {}
+    }
+
+    function learnFromProcessedTable() {
+      var rows = document.querySelectorAll("tr");
+      if (!rows.length) return;
+      var cache = loadSiteCache();
+      var changed = false;
+      var re = /^(.*?)\s*(\d+)\.\s*Sezon\s+(\d+)\.\s*Bölüm/i;
+      for (var i = 0; i < rows.length; i++) {
+        var t = (rows[i].textContent || "").replace(/\s+/g, " ").trim();
+        var m = re.exec(t);
+        if (!m || !m[1]) continue;
+        var anime = m[1].trim();
+        var s = parseInt(m[2], 10), e = parseInt(m[3], 10);
+        if (!anime || isNaN(s) || isNaN(e)) continue;
+        var seasons = cache[anime] || (cache[anime] = {});
+        if (!(seasons[s] >= e)) { seasons[s] = e; changed = true; }
+      }
+      if (changed) saveSiteCache(cache);
+    }
+
+    // Anime adına göre (kısmi eşleşme dahil) bilinen sezon verisini döndür.
+    function siteSeasonsFor(anime) {
+      if (!anime) return null;
+      var cache = loadSiteCache();
+      if (cache[anime]) return cache[anime];
+      for (var name in cache) {
+        if (name.indexOf(anime) !== -1 || anime.indexOf(name) !== -1) return cache[name];
+      }
+      return null;
+    }
+
+    // ── UI derisi: sitenin kendi buton/input'undan canlı örnekleme ──
+    // Ayarlar sayfası yaklaşımının aynısı: sınıflar svelte-hash'li olduğu
+    // için computed style değerleri CSS değişkenlerine yazılır; panel
+    // bileşenleri bu değişkenleri kullanır → tema/site tasarımı birebir.
+    var _uiSkinDone = false;
+
+    function getUiSkin() {
+      if (_uiSkinDone) return;
+      var root = sceneRoot();
+      if (!root) return;
+      // Kendi inputlarımızı (data-oa-ignore) hariç tut.
+      var inps = root.querySelectorAll("input, textarea");
+      var inp = null;
+      for (var i = 0; i < inps.length; i++) {
+        if (inps[i].type !== "hidden" && !inps[i].closest("[data-oa-ignore]")) { inp = inps[i]; break; }
+      }
+      var btn = null, btns = root.querySelectorAll("button");
+      for (var j = 0; j < btns.length; j++) {
+        var t = (btns[j].textContent || "").trim();
+        if (/oluştur|kaydet|gönder/i.test(t)) { btn = btns[j]; break; }
+      }
+      if (!inp && !btn) return; // canlı örnek yok → sonraki render'da dene
+      var bs = document.body.style;
+      if (inp) {
+        var ci = getComputedStyle(inp);
+        bs.setProperty("--oa-in-bg", ci.backgroundColor);
+        bs.setProperty("--oa-in-bd", ci.borderColor !== "none" ? ci.borderColor : ci.color);
+        bs.setProperty("--oa-in-fg", ci.color);
+        bs.setProperty("--oa-in-radius", ci.borderRadius);
+        bs.setProperty("--oa-in-pad", ci.padding);
+      }
+      if (btn) {
+        var cb = getComputedStyle(btn);
+        bs.setProperty("--oa-btn-bg", cb.backgroundColor);
+        bs.setProperty("--oa-btn-fg", cb.color);
+        bs.setProperty("--oa-btn-bd", cb.borderColor !== "none" ? cb.borderColor : cb.backgroundColor);
+        bs.setProperty("--oa-btn-radius", cb.borderRadius);
+        bs.setProperty("--oa-btn-pad", cb.padding);
+      }
+      _uiSkinDone = true;
+    }
+
 
     function isEpisodeCreateScene() {
       var sel = document.querySelector(".sidebar li.list-item.selected .text-block");
@@ -802,7 +994,9 @@
       };
     }
 
-    // Set verisini forma yaz (gönderi kullanıcıdadır)
+    // Set verisini forma yaz (gönderi kullanıcıdadır). data.link için
+    // formda "Bağlantı/Link/Video" etiketli alan VARSA oraya yazılır;
+    // yoksa panoya kopyalanır (en iyi çaba).
     function fillForm(data, s, e) {
       var root = sceneRoot();
       if (!root) return false;
@@ -821,6 +1015,20 @@
         });
       }
       if (f.softsub) setNativeCheck(f.softsub, !!data.softsub);
+      var link = data.link || "";
+      if (link) {
+        var linkField = null, labels = ["Bağlantı", "Link", "Video", "Video Bağlantısı", "URL"];
+        for (var i = 0; i < labels.length && !linkField; i++) linkField = findFieldByLabel(root, labels[i]);
+        if (linkField) {
+          setNativeValue(linkField, link);
+        } else {
+          try {
+            navigator.clipboard.writeText(link).then(function () {
+              console.debug(LOG, "formda bağlantı alanı yok → panoya kopyalandı");
+            }, function () {});
+          } catch (e2) {}
+        }
+      }
       console.debug(LOG, "form dolduruldu:", s + ". Sezon " + e + ". Bölüm");
       return true;
     }
@@ -842,19 +1050,23 @@
       var season = null;
       (set.seasons || []).forEach(function (sn) { if (sn.no === seasonNo) season = sn; });
       if (!season) return;
-      var eps = (season.episodes || []).slice().sort(function (a, b) { return a - b; });
+      var eps = (season.episodes || []).slice().sort(function (a, b) { return a.e - b.e; });
       if (eps.length === 0) return;
       var sel = _selEps[set.id + ":" + seasonNo];
       if (sel) {
-        var picked = eps.filter(function (x) { return sel[x]; });
+        var picked = eps.filter(function (x) { return sel[x.e]; });
         if (picked.length) eps = picked; // hiç seçim yoksa tüm bölümler
       }
       _doneMsg = "";
+      // Her bölümün ETKİN değerleri (override ?? set varsayılanı) baştan
+      // hesaplanır; kuyruk ilerlerken set düzenlense bile tutarlı kalır.
       _queue = {
         setId: set.id,
         anime: set.anime || "",
-        set: { anime: set.anime, katki: set.katki, fansub: set.fansub, args: set.args, resolutions: set.resolutions, softsub: set.softsub },
-        items: eps.map(function (x) { return { s: seasonNo, e: x }; }),
+        items: eps.map(function (ep) {
+          var v = eff(set, ep);
+          return { s: seasonNo, e: ep.e, fansub: v.fansub, katki: v.katki, args: v.args, link: v.link, resolutions: v.resolutions, softsub: v.softsub };
+        }),
         index: 0
       };
       saveQueue();
@@ -866,7 +1078,8 @@
       if (!_queue) return;
       if (!isEpisodeCreateScene()) return; // sahne dışı → kuyruk duraklar
       var it = _queue.items[_queue.index];
-      if (fillForm(_queue.set, it.s, it.e)) armAdvancePoll(it);
+      var data = { anime: _queue.anime, katki: it.katki, fansub: it.fansub, args: it.args, link: it.link, resolutions: it.resolutions, softsub: it.softsub };
+      if (fillForm(data, it.s, it.e)) armAdvancePoll(it);
     }
 
     // Gönderim tespiti: satır sayısı taban değerini aşana kadar yokla.
@@ -891,6 +1104,9 @@
 
     function advanceQueue() {
       if (!_queue) return;
+      // Gönderilen bölümü "tamamlandı" işaretle (set kalıcıdır).
+      var done = _queue.items[_queue.index];
+      if (done) updateEpisode(_queue.setId, done.s, done.e, { done: true });
       _queue.index++;
       if (_queue.index >= _queue.items.length) {
         _doneMsg = "Kuyruk tamamlandı (" + _queue.items.length + "/" + _queue.items.length + ")";
@@ -973,8 +1189,8 @@
       _panel.textContent = "";
       _panel.className = "oa-sets-panel" + (_panelOpen ? " open" : "");
       var skin = getExpanderSkin();
-
-      // Tamamlanan kuyruk bilgisi
+      getUiSkin();          // buton/input derisi (canlı örnekleme)
+      learnFromProcessedTable(); // "İşlenen animeler" tablosundan site verisi
       if (_doneMsg) {
         _panel.appendChild(elv("div", "oa-done-bar text-block type-caption text-secondary", _doneMsg));
       }
@@ -1036,26 +1252,52 @@
       _panel.appendChild(body);
     }
 
+    function dlEl(id, values) {
+      var dl = document.createElement("datalist");
+      dl.id = id;
+      (values || []).forEach(function (v) {
+        var o = document.createElement("option");
+        o.value = typeof v === "string" ? v : (v.name || "");
+        dl.appendChild(o);
+      });
+      return dl;
+    }
+
     function buildSetCard(skin, set) {
       var open = !!_openSets[set.id];
       var card = elv("div", ("oa-set " + skin.containerClass + (open ? " open" : "")).trim());
       if (skin.containerStyle) card.style.cssText += ";" + skin.containerStyle;
+
+      // Rozet: toplam / tamamlanan bölüm
+      var total = 0, done = 0;
+      (set.seasons || []).forEach(function (sn) {
+        (sn.episodes || []).forEach(function (ep) { total++; if (ep.done) done++; });
+      });
 
       var h = elv("div", "oa-set-header");
       var ch = elv("span", "expander-chevron");
       ch.innerHTML = skin.chevronHtml;
       h.appendChild(ch);
       h.appendChild(elv("span", skin.textClass, set.name || "Adsız set"));
+      h.appendChild(elv("span", "oa-badge", total ? done + "/" + total + " bölüm" : "boş"));
       var sp = elv("span");
       sp.style.cssText = "flex:1;";
       h.appendChild(sp);
       var ren = elv("button", "oa-btn", "Yeniden adlandır");
       ren.addEventListener("click", function (e) { e.stopPropagation(); startRename(set, ren); });
       h.appendChild(ren);
+      var edit = elv("button", "oa-btn" + (_setEditOpen[set.id] ? " primary" : ""), "Düzenle");
+      edit.addEventListener("click", function (e) {
+        e.stopPropagation();
+        _setEditOpen[set.id] = !_setEditOpen[set.id];
+        render();
+      });
+      h.appendChild(edit);
       var del = elv("button", "oa-btn danger", "Sil");
-      armConfirm(del, "Emin misin?", function () {
+      armConfirm(del, "Set silinsin mi?", function () {
         saveSets(loadSets().filter(function (s) { return s.id !== set.id; }));
         delete _openSets[set.id];
+        delete _setEditOpen[set.id];
         render();
       });
       h.appendChild(del);
@@ -1068,11 +1310,150 @@
 
       var body = elv("div", "oa-set-body");
       var innerB = elv("div", "oa-set-body-inner");
+      if (_setEditOpen[set.id]) innerB.appendChild(buildSetEditor(set));
       var seasons = (set.seasons || []).slice().sort(function (a, b) { return a.no - b.no; });
       seasons.forEach(function (sn) { innerB.appendChild(buildSeasonRow(skin, set, sn)); });
       body.appendChild(innerB);
       card.appendChild(body);
       return card;
+    }
+
+    // Set düzenleme: varsayılanlar + fansub havuzu (isim+bağlantı) +
+    // katkıda bulunan havuzu + sezon ekleme. Tüm inputlar anında kaydeder.
+    function buildSetEditor(set) {
+      var box = elv("div", "oa-sub");
+      var fsId = "oa-dl-fs-" + set.id, ktId = "oa-dl-kt-" + set.id;
+      box.appendChild(dlEl(fsId, set.fansubs || []));
+      box.appendChild(dlEl(ktId, set.contributors || []));
+      box.appendChild(elv("div", "oa-sub-title", "VARSAYILANLAR (bölüm override'ı yoksa kullanılır)"));
+
+      function defRow(label, key, listId, ph) {
+        var r = elv("div", "oa-row");
+        r.appendChild(elv("span", "oa-lbl", label));
+        var i = elv("input", "oa-input");
+        i.style.cssText = "flex:1;min-width:140px;";
+        i.placeholder = ph || "";
+        i.value = (set.defaults && set.defaults[key]) || "";
+        i.addEventListener("change", function () {
+          var s = findSet(set.id);
+          if (!s) return;
+          s.defaults = s.defaults || {};
+          s.defaults[key] = i.value.trim();
+          saveSet(s);
+        });
+        i.addEventListener("keydown", function (e) { e.stopPropagation(); });
+        if (listId) i.setAttribute("list", listId);
+        r.appendChild(i);
+        return r;
+      }
+      box.appendChild(defRow("Fansub", "fansub", fsId, "set varsayılanı"));
+      box.appendChild(defRow("Katkıda bulunanlar", "katki", ktId, "virgülle ayrılmış"));
+      box.appendChild(defRow("Player Arguments", "args", null, ""));
+
+      box.appendChild(elv("div", "oa-sub-title", "FANSUB HAVUZU (dağıtımda kullanılır)"));
+      var pool = elv("div", "oa-pool");
+      (set.fansubs || []).forEach(function (f, idx) {
+        pool.appendChild(buildFansubRow(set, idx));
+      });
+      var addFs = elv("button", "oa-btn", "+ Fansub ekle");
+      addFs.addEventListener("click", function () {
+        var s = findSet(set.id);
+        s.fansubs = s.fansubs || [];
+        s.fansubs.push({ name: "", link: "" });
+        saveSet(s);
+        render();
+      });
+      pool.appendChild(addFs);
+      box.appendChild(pool);
+
+      box.appendChild(elv("div", "oa-sub-title", "KATKIDA BULUNANLAR (dağıtımda kullanılır)"));
+      box.appendChild(buildContribPool(set));
+
+      var sr = elv("div", "oa-row");
+      sr.appendChild(elv("span", "oa-lbl", "Sezon ekle"));
+      var noInp = elv("input", "oa-input w-num");
+      noInp.placeholder = "no";
+      noInp.addEventListener("keydown", function (e) { e.stopPropagation(); });
+      sr.appendChild(noInp);
+      var addSn = elv("button", "oa-btn", "Ekle");
+      addSn.addEventListener("click", function () {
+        var n = parseInt(noInp.value, 10);
+        if (isNaN(n) || n < 1) return;
+        var s = findSet(set.id);
+        s.seasons = s.seasons || [];
+        for (var i = 0; i < s.seasons.length; i++) if (s.seasons[i].no === n) return;
+        s.seasons.push({ no: n, episodes: [] });
+        saveSet(s);
+        render();
+      });
+      sr.appendChild(addSn);
+      box.appendChild(sr);
+      return box;
+    }
+
+    // Fansub havuzu satırı: [ad] [bağlantı] [✕]
+    function buildFansubRow(set, idx) {
+      var f = (set.fansubs || [])[idx] || { name: "", link: "" };
+      var r = elv("div", "oa-row");
+      var n = elv("input", "oa-input w-name");
+      n.placeholder = "fansub adı";
+      n.value = f.name || "";
+      var l = elv("input", "oa-input w-link");
+      l.placeholder = "bağlantı (opsiyonel)";
+      l.value = f.link || "";
+      function upd() {
+        var s = findSet(set.id);
+        if (!s || !s.fansubs || !s.fansubs[idx]) return;
+        s.fansubs[idx] = { name: n.value.trim(), link: l.value.trim() };
+        saveSet(s);
+      }
+      [n, l].forEach(function (x) {
+        x.addEventListener("change", upd);
+        x.addEventListener("keydown", function (e) { e.stopPropagation(); });
+      });
+      var x = elv("button", "oa-x", "✕");
+      x.title = "Fansubu havuzdan çıkar";
+      x.addEventListener("click", function () {
+        var s = findSet(set.id);
+        s.fansubs.splice(idx, 1);
+        saveSet(s);
+        render();
+      });
+      r.appendChild(n); r.appendChild(l); r.appendChild(x);
+      return r;
+    }
+
+    // Katkıda bulunan havuzu: chip + ✕ ve ekleme inputu.
+    function buildContribPool(set) {
+      var kt = elv("div", "oa-row");
+      (set.contributors || []).forEach(function (c, idx) {
+        var chip = elv("span", "oa-ep-chip sel", c);
+        var x = elv("span", "oa-x", "✕");
+        x.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var s = findSet(set.id);
+          s.contributors.splice(idx, 1);
+          saveSet(s);
+          render();
+        });
+        chip.appendChild(x);
+        kt.appendChild(chip);
+      });
+      var addInp = elv("input", "oa-input");
+      addInp.placeholder = "ekle + Enter";
+      addInp.addEventListener("keydown", function (e) {
+        e.stopPropagation();
+        if (e.key !== "Enter") return;
+        var v = addInp.value.trim();
+        if (!v) return;
+        var s = findSet(set.id);
+        s.contributors = s.contributors || [];
+        if (s.contributors.indexOf(v) === -1) s.contributors.push(v);
+        saveSet(s);
+        render();
+      });
+      kt.appendChild(addInp);
+      return kt;
     }
 
     // Satır içi yeniden adlandırma (native prompt Tauri'de güvenilir değil)
@@ -1110,11 +1491,16 @@
       var open = !!_openSeasons[key];
       var row = elv("div", "oa-season" + (open ? " open" : ""));
 
+      var eps = (sn.episodes || []).slice().sort(function (a, b) { return a.e - b.e; });
+      var doneCount = 0;
+      eps.forEach(function (x) { if (x.done) doneCount++; });
+
       var h = elv("div", "oa-season-header");
       var ch = elv("span", "expander-chevron");
       ch.innerHTML = skin.chevronHtml;
       h.appendChild(ch);
-      h.appendChild(elv("span", skin.textClass, sn.no + ". Sezon · " + (sn.episodes || []).length + " bölüm"));
+      h.appendChild(elv("span", skin.textClass, sn.no + ". Sezon · " + eps.length + " bölüm" +
+        (doneCount ? " (" + doneCount + " hazır)" : "")));
       var sp = elv("span");
       sp.style.cssText = "flex:1;";
       h.appendChild(sp);
@@ -1129,6 +1515,29 @@
       var add = elv("button", "oa-btn", "Ekle");
       add.addEventListener("click", function (e) { e.stopPropagation(); addRange(set, sn, rangeInp); });
       h.appendChild(add);
+      // Site verisi biliniyorsa tek tıkla sezonu doldur.
+      var known = siteSeasonsFor(set.anime);
+      if (known && known[sn.no] > eps.length) {
+        var sug = elv("button", "oa-btn", "Site önerisi (1-" + known[sn.no] + ")");
+        sug.title = "Sitede görülen bölüm aralığından listeyi tamamlar";
+        sug.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var s = findSet(set.id);
+          if (!s) return;
+          (s.seasons || []).forEach(function (x) {
+            if (x.no !== sn.no) return;
+            var have = {};
+            (x.episodes || []).forEach(function (ep) { have[ep.e] = true; });
+            for (var n = 1; n <= known[sn.no]; n++) {
+              if (!have[n]) x.episodes.push({ e: n, fansub: null, katki: null, link: "", args: null, done: false });
+            }
+            x.episodes.sort(function (a, b) { return a.e - b.e; });
+          });
+          saveSet(s);
+          render();
+        });
+        h.appendChild(sug);
+      }
       var sdel = elv("button", "oa-btn danger", "×");
       armConfirm(sdel, "Sezon silinsin?", function () {
         var sets = loadSets();
@@ -1152,35 +1561,89 @@
       var body = elv("div", "oa-season-body");
       var innerB = elv("div", "oa-season-body-inner");
 
+      // Bölüm chip'leri: tık = seçim, ✎ (hover) / sağ tık = bölüm editörü.
+      // Durumlar: kalın=seçili, kesikli çerçeve=override'lı, yeşil=tamamlandı.
       var chips = elv("div", "oa-ep-chips");
-      var eps = (sn.episodes || []).slice().sort(function (a, b) { return a - b; });
       var sel = _selEps[key];
       eps.forEach(function (ep) {
-        var chip = elv("span", "oa-ep-chip" + (sel && sel[ep] ? " sel" : ""), String(ep));
+        var chip = elv("span", "oa-ep-chip" +
+          (sel && sel[ep.e] ? " sel" : "") +
+          (hasOverride(ep) ? " ovr" : "") +
+          (ep.done ? " done" : ""), String(ep.e));
+        chip.title = (ep.done ? "Tamamlandı · " : "") +
+          "fansub: " + (ep.fansub || "(set)") + " · link: " + (ep.link ? "var" : "yok") +
+          "\nTık: seç · ✎ / sağ tık: düzenle";
         chip.addEventListener("click", function () {
           var m = _selEps[key] || (_selEps[key] = {});
-          if (m[ep]) delete m[ep];
-          else m[ep] = true;
-          chip.classList.toggle("sel", !!m[ep]);
+          if (m[ep.e]) delete m[ep.e];
+          else m[ep.e] = true;
+          chip.classList.toggle("sel", !!m[ep.e]);
         });
+        chip.addEventListener("contextmenu", function (e) {
+          e.preventDefault();
+          _editKey = key + ":" + ep.e;
+          _distOpen = null;
+          render();
+        });
+        var ed = elv("span", "ed", "✎");
+        ed.addEventListener("click", function (e) {
+          e.stopPropagation();
+          _editKey = key + ":" + ep.e;
+          _distOpen = null;
+          render();
+        });
+        chip.appendChild(ed);
         chips.appendChild(chip);
       });
       innerB.appendChild(chips);
 
+      // Dağıtım şeridi / bölüm editörü (varsa) — chip'lerin hemen altında.
+      if (_distOpen && _distOpen.indexOf(key + ":") === 0) {
+        innerB.appendChild(buildDistStrip(set, sn, _distOpen.split(":").pop()));
+      }
+      if (_editKey && _editKey.indexOf(key + ":") === 0) {
+        innerB.appendChild(buildEpEditor(set, sn));
+      }
+
       var acts = elv("div", "oa-season-actions");
-      var allB = elv("button", "oa-btn", "Tümünü seç");
-      allB.addEventListener("click", function () {
+      function actBtn(txt, cls, fn) {
+        var b = elv("button", "oa-btn" + (cls ? " " + cls : ""), txt);
+        b.addEventListener("click", fn);
+        acts.appendChild(b);
+        return b;
+      }
+      actBtn("Tümünü seç", "", function () {
         var m = _selEps[key] || (_selEps[key] = {});
-        eps.forEach(function (ep) { m[ep] = true; });
+        eps.forEach(function (ep) { m[ep.e] = true; });
         render();
       });
-      acts.appendChild(allB);
-      var clrB = elv("button", "oa-btn", "Temizle");
-      clrB.addEventListener("click", function () { delete _selEps[key]; render(); });
-      acts.appendChild(clrB);
-      var runB = elv("button", "oa-btn primary", "Forma yaz");
-      runB.addEventListener("click", function () { startQueue(set, sn.no); });
-      acts.appendChild(runB);
+      actBtn("Temizle", "", function () { delete _selEps[key]; render(); });
+      actBtn("Fansub dağıt", _distOpen === key + ":fansub" ? "primary" : "", function () {
+        _distOpen = _distOpen === key + ":fansub" ? null : key + ":fansub";
+        _editKey = null;
+        render();
+      });
+      actBtn("Katkı dağıt", _distOpen === key + ":katki" ? "primary" : "", function () {
+        _distOpen = _distOpen === key + ":katki" ? null : key + ":katki";
+        _editKey = null;
+        render();
+      });
+      actBtn("Bağlantı dağıt", _distOpen === key + ":link" ? "primary" : "", function () {
+        _distOpen = _distOpen === key + ":link" ? null : key + ":link";
+        _editKey = null;
+        render();
+      });
+      actBtn("✓ İşaretle", "", function () {
+        var m = _selEps[key] || {};
+        var s = findSet(set.id);
+        (s.seasons || []).forEach(function (x) {
+          if (x.no !== sn.no) return;
+          (x.episodes || []).forEach(function (ep) { if (m[ep.e]) ep.done = true; });
+        });
+        saveSet(s);
+        render();
+      });
+      actBtn("Forma yaz", "primary", function () { startQueue(set, sn.no); });
       innerB.appendChild(acts);
 
       body.appendChild(innerB);
@@ -1188,7 +1651,217 @@
       return row;
     }
 
-    // "5-12" ya da "7" biçiminde bölüm ekleme (tekilleştirilmiş, sıralı)
+    // ── Toplu dağıtım şeridi ──
+    // Hedef: seçili bölümler (seçim yoksa sezonun tamamı).
+    // Mod: "round" = sırayla bölüş (1→A, 2→B, …), "all" = hepsine aynı.
+    function seasonEpsSorted(sn) {
+      return (sn.episodes || []).slice().sort(function (a, b) { return a.e - b.e; });
+    }
+
+    function buildDistStrip(set, sn, type) {
+      var key = set.id + ":" + sn.no;
+      var box = elv("div", "oa-dist");
+      var titles = { fansub: "FANSUB DAĞIT", katki: "KATKIDA BULUNAN DAĞIT", link: "BAĞLANTI DAĞIT" };
+      box.appendChild(elv("div", "oa-sub-title", titles[type] + " — hedef: seçili bölümler (seçim yoksa tümü)"));
+
+      var mode = elv("select", "oa-input");
+      var o1 = document.createElement("option"); o1.value = "round"; o1.textContent = "Sırayla bölüş";
+      var o2 = document.createElement("option"); o2.value = "all"; o2.textContent = "Hepsine aynı";
+      mode.appendChild(o1); mode.appendChild(o2);
+      mode.addEventListener("keydown", function (e) { e.stopPropagation(); });
+
+      // Seçim durumu (fansub/katki chip'leri için) — oturumluk.
+      _distSel[key] = _distSel[key] || {};
+
+      var pick = elv("div", "oa-row");
+      if (type === "fansub") {
+        (set.fansubs || []).forEach(function (f) {
+          if (!f.name) return;
+          var c = elv("span", "oa-ep-chip" + (_distSel[key]["fs:" + f.name] ? " sel" : ""), f.name + (f.link ? " 🔗" : ""));
+          c.title = f.link ? "Bağlantı: " + f.link : "Bağlantı girilmemiş";
+          c.addEventListener("click", function () {
+            var k = "fs:" + f.name;
+            if (_distSel[key][k]) delete _distSel[key][k];
+            else _distSel[key][k] = true;
+            c.classList.toggle("sel");
+          });
+          pick.appendChild(c);
+        });
+        if (!(set.fansubs || []).length) pick.appendChild(elv("span", "oa-muted", "Havuz boş — \"Düzenle\"den fansub ekle"));
+      } else if (type === "katki") {
+        (set.contributors || []).forEach(function (name) {
+          var c = elv("span", "oa-ep-chip" + (_distSel[key]["kt:" + name] ? " sel" : ""), name);
+          c.addEventListener("click", function () {
+            var k = "kt:" + name;
+            if (_distSel[key][k]) delete _distSel[key][k];
+            else _distSel[key][k] = true;
+            c.classList.toggle("sel");
+          });
+          pick.appendChild(c);
+        });
+        if (!(set.contributors || []).length) pick.appendChild(elv("span", "oa-muted", "Havuz boş — \"Düzenle\"den katkıda bulunan ekle"));
+      }
+      box.appendChild(pick);
+
+      var linksTa = null, alsoLink = null;
+      if (type === "link") {
+        linksTa = elv("textarea", "oa-input");
+        linksTa.placeholder = "Her satıra bir bağlantı — sırayla bölüşte sırayla yazılır";
+        linksTa.style.cssText = "width:100%;min-height:52px;resize:vertical;";
+        linksTa.addEventListener("keydown", function (e) { e.stopPropagation(); });
+        box.appendChild(linksTa);
+      } else if (type === "fansub") {
+        alsoLink = elv("input", "oa-input");
+        alsoLink.type = "checkbox";
+        alsoLink.addEventListener("keydown", function (e) { e.stopPropagation(); });
+      }
+
+      var row = elv("div", "oa-row");
+      if (type !== "link") row.appendChild(mode);
+      if (alsoLink) {
+        var lbl = elv("label", "oa-muted", "havuz bağlantısını da yaz");
+        lbl.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
+        var wrap = elv("span");
+        wrap.style.cssText = "display:flex;align-items:center;gap:4px;";
+        wrap.appendChild(alsoLink); wrap.appendChild(lbl);
+        row.appendChild(wrap);
+      }
+      var apply = elv("button", "oa-btn primary", "Uygula");
+      apply.addEventListener("click", function () {
+        var targets = seasonEpsSorted(sn).filter(function (ep) {
+          var m = _selEps[key];
+          return !m || m[ep.e];
+        });
+        if (!targets.length) return;
+        var values;
+        if (type === "link") {
+          values = (linksTa.value || "").split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean);
+        } else {
+          values = Object.keys(_distSel[key] || {})
+            .filter(function (k) { return _distSel[key][k]; })
+            .map(function (k) { return k.split(":").slice(1).join(":"); });
+        }
+        if (!values.length) return;
+        var m = mode.value;
+        var s = findSet(set.id);
+        if (!s) return;
+        var fsMap = {};
+        (s.fansubs || []).forEach(function (f) { if (f.name) fsMap[f.name] = f.link || ""; });
+        targets.forEach(function (ep, i) {
+          var v = m === "round" ? values[i % values.length] : values[0];
+          if (type === "fansub") {
+            ep.fansub = v;
+            if (alsoLink && alsoLink.checked && fsMap[v]) ep.link = fsMap[v];
+          } else if (type === "katki") {
+            ep.katki = v;
+          } else {
+            ep.link = v;
+          }
+        });
+        saveSet(s);
+        _distOpen = null;
+        _distSel[key] = {};
+        render();
+      });
+      row.appendChild(apply);
+      var close = elv("button", "oa-btn", "Kapat");
+      close.addEventListener("click", function () { _distOpen = null; _distSel[key] = {}; render(); });
+      row.appendChild(close);
+      box.appendChild(row);
+      return box;
+    }
+    // ── Bölüm editörü ──
+    // Tek bölümün override'larını düzenler (fansub/katkı/bağlantı/args +
+    // tamamlandı). ◂ ▸ ile sıralı gezinme; "✓ & sonraki" hızlı akış için.
+    function buildEpEditor(set, sn) {
+      var key = set.id + ":" + sn.no;
+      var epNo = parseInt(_editKey.split(":").pop(), 10);
+      var ep = null;
+      seasonEpsSorted(sn).forEach(function (x) { if (x.e === epNo) ep = x; });
+      if (!ep) return elv("div", "oa-muted", "Bölüm bulunamadı.");
+
+      var box = elv("div", "oa-ep-editor");
+      var fsId = "oa-dl-ef-" + set.id, ktId = "oa-dl-ek-" + set.id;
+      box.appendChild(dlEl(fsId, set.fansubs || []));
+      box.appendChild(dlEl(ktId, set.contributors || []));
+
+      var head = elv("div", "oa-row");
+      var prev = elv("button", "oa-btn", "◂");
+      prev.title = "Önceki bölüm";
+      var next = elv("button", "oa-btn", "▸");
+      next.title = "Sonraki bölüm";
+      head.appendChild(prev);
+      head.appendChild(elv("span", "oa-sub-title", epNo + ". Bölüm" + (ep.done ? " — tamamlandı ✓" : " — boş alanlar set varsayılanını kullanır")));
+      var sp = elv("span"); sp.style.cssText = "flex:1;";
+      head.appendChild(sp);
+      head.appendChild(next);
+      var close = elv("button", "oa-x", "✕");
+      close.addEventListener("click", function () { _editKey = null; render(); });
+      head.appendChild(close);
+      box.appendChild(head);
+
+      function goto(delta) {
+        var all = seasonEpsSorted(sn);
+        var idx = -1;
+        all.forEach(function (x, i) { if (x.e === epNo) idx = i; });
+        var t = all[idx + delta];
+        if (t) { _editKey = key + ":" + t.e; render(); }
+      }
+      prev.addEventListener("click", function () { goto(-1); });
+      next.addEventListener("click", function () { goto(1); });
+
+      function fieldRow(label, field, listId, ph) {
+        var r = elv("div", "oa-row");
+        r.appendChild(elv("span", "oa-lbl", label));
+        var i = elv("input", "oa-input");
+        i.style.cssText = "flex:1;min-width:160px;";
+        i.placeholder = ph || "";
+        i.value = ep[field] == null ? "" : String(ep[field]);
+        i.addEventListener("change", function () {
+          var patch = {};
+          patch[field] = i.value.trim();
+          updateEpisode(set.id, sn.no, epNo, patch);
+          render();
+        });
+        i.addEventListener("keydown", function (e) { e.stopPropagation(); });
+        if (listId) i.setAttribute("list", listId);
+        r.appendChild(i);
+        return r;
+      }
+      box.appendChild(fieldRow("Fansub", "fansub", fsId, "boşsa set varsayılanı"));
+      box.appendChild(fieldRow("Katkıda bulunanlar", "katki", ktId, "boşsa set varsayılanı"));
+      box.appendChild(fieldRow("Bağlantı", "link", null, "video / kaynak bağlantısı"));
+      box.appendChild(fieldRow("Player Arguments", "args", null, "boşsa set varsayılanı"));
+
+      var acts = elv("div", "oa-row");
+      var doneB = elv("button", "oa-btn" + (ep.done ? " primary" : ""), ep.done ? "✓ Tamamlandı (geri al)" : "✓ Tamamlandı olarak işaretle");
+      doneB.addEventListener("click", function () {
+        updateEpisode(set.id, sn.no, epNo, { done: !ep.done });
+        render();
+      });
+      acts.appendChild(doneB);
+      var saveNext = elv("button", "oa-btn primary", "✓ Kaydet & sonraki ▸");
+      saveNext.addEventListener("click", function () {
+        updateEpisode(set.id, sn.no, epNo, { done: true });
+        var all = seasonEpsSorted(sn);
+        var idx = -1;
+        all.forEach(function (x, i) { if (x.e === epNo) idx = i; });
+        var t = all[idx + 1];
+        _editKey = t ? key + ":" + t.e : null;
+        render();
+      });
+      acts.appendChild(saveNext);
+      var reset = elv("button", "oa-btn danger", "Override'ları sıfırla");
+      reset.title = "Bu bölümün fansub/katkı/bağlantı/args değerlerini temizler (set varsayılanına döner)";
+      reset.addEventListener("click", function () {
+        updateEpisode(set.id, sn.no, epNo, { fansub: null, katki: null, link: "", args: null });
+        render();
+      });
+      acts.appendChild(reset);
+      box.appendChild(acts);
+      return box;
+    }
+
     function addRange(set, sn, inp) {
       var v = (inp.value || "").trim();
       if (!v) return;
@@ -1206,27 +1879,36 @@
         for (var j = 0; j < seasons.length; j++) if (seasons[j].no === sn.no) { target = seasons[j]; break; }
         if (!target) { target = { no: sn.no, episodes: [] }; seasons.push(target); }
         var eps = target.episodes || (target.episodes = []);
-        for (var k = a; k <= b; k++) if (eps.indexOf(k) === -1) eps.push(k);
-        eps.sort(function (x, y) { return x - y; });
+        var have = {};
+        eps.forEach(function (ep) { have[ep.e] = true; });
+        for (var k = a; k <= b; k++) {
+          if (!have[k]) eps.push({ e: k, fansub: null, katki: null, link: "", args: null, done: false });
+        }
+        eps.sort(function (x, y) { return x.e - y.e; });
       }
       saveSets(sets);
       render();
     }
 
-    // O anki formu yeni set olarak kaydeder (anime adı + o anki sezon/bölüm)
+    // O anki formu yeni set olarak kaydeder (v2: varsayılanlar + havuzlar).
     function createSetFromForm() {
       var cap = captureForm();
       if (!cap) return;
+      var contributors = cap.katki.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
       var set = {
         id: "s" + Date.now(),
         name: cap.anime || "Set " + (loadSets().length + 1),
         anime: cap.anime,
-        katki: cap.katki,
-        fansub: cap.fansub,
-        args: cap.args,
-        resolutions: cap.resolutions,
-        softsub: cap.softsub,
-        seasons: [{ no: cap.sezon, episodes: [cap.bolum] }]
+        defaults: {
+          katki: cap.katki,
+          fansub: cap.fansub,
+          args: cap.args,
+          resolutions: cap.resolutions,
+          softsub: cap.softsub
+        },
+        fansubs: cap.fansub ? [{ name: cap.fansub, link: "" }] : [],
+        contributors: contributors,
+        seasons: [{ no: cap.sezon, episodes: [{ e: cap.bolum, fansub: null, katki: null, link: "", args: null, done: false }] }]
       };
       var sets = loadSets();
       sets.push(set);
