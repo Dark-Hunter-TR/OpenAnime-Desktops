@@ -34,6 +34,11 @@ html.desktop-theme-active .scene-inner-content .need-more-info[data-desktop-them
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
+    background: var(--fds-card-background-default, rgba(255,255,255,0.04)) !important;
+    border: 1px solid var(--fds-card-stroke-default, rgba(255,255,255,0.09)) !important;
+    border-radius: 18px !important;
+    padding: 48px 40px !important;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2) !important;
 }
 html.desktop-theme-active .scene-inner-content .need-more-info[data-desktop-theme="true"] .setsuki {
     display: flex !important;

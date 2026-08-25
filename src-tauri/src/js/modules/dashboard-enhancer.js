@@ -75,7 +75,7 @@
         // Grup başlığı yalnızca DÜZEN tanımlar; yazı tipi/renk/kart görünümü
         // sitenin kendi Expander bileşeninden canlı olarak devralınır
         // (bkz. getExpanderSkin).
-        ".oa-dash-group{display:flex;flex-direction:column;margin-bottom:4px;}",
+        ".oa-dash-group{display:flex;flex-direction:column;margin-bottom:6px;background:var(--oa-card,rgba(255,255,255,.0512));border:1px solid var(--oa-stroke,rgba(255,255,255,.0698));border-radius:var(--oa-r-panel,8px);box-shadow:0 2px 6px rgba(0,0,0,.14);overflow:hidden;}",
         ".oa-dash-group-header{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;}",
         ".oa-dash-group-header .expander-chevron{pointer-events:none;display:flex;flex:0 0 auto;transition:transform .15s cubic-bezier(.55,0,.1,1);}",
         ".oa-dash-group.open .oa-dash-group-header .expander-chevron{transform:rotate(180deg);}",
@@ -83,8 +83,11 @@
         // overflow:hidden YALNIZCA grup içi listededir — .sidebar'ın
         // kendisinin scroll/drag davranışına dokunulmaz.
         ".oa-dash-group-items{display:grid;grid-template-rows:0fr;transition:grid-template-rows .18s cubic-bezier(.55,0,.1,1);}",
-        ".oa-dash-group-list{display:flex;flex-direction:column;min-height:0;overflow:hidden;}",
-        ".oa-dash-group.open .oa-dash-group-items{grid-template-rows:1fr;}",
+        ".oa-dash-group-list{display:flex;flex-direction:column;min-height:0;overflow-y:auto;max-height:clamp(200px,38vh,340px);padding:2px 6px 6px;}",
+        ".oa-dash-group-list::-webkit-scrollbar{width:6px;}",
+        ".oa-dash-group-list::-webkit-scrollbar-track{background:transparent;}",
+        ".oa-dash-group-list::-webkit-scrollbar-thumb{background:var(--oa-stroke,rgba(255,255,255,.12));border-radius:3px;}",
+        ".oa-dash-group.open .oa-dash-group-items{grid-template-rows:minmax(0,1fr);}",
 
         // Başlık hover geri bildirimi (grup başlıkları + setler paneli)
         ".oa-dash-group-header,.oa-sets-header,.oa-set-header,.oa-season-header{transition:opacity .12s;}",
@@ -92,7 +95,9 @@
 
         // ── Setler paneli (yalnızca "Bölüm Oluştur" sahnesinde mount
         //    edilir; kurallar yine de rota class'ı altında scope'lu) ──
-        "body.oa-dashboard-active .oa-sets-panel{margin:0 0 16px;flex:0 0 auto;}",
+        "body.oa-dashboard-active .oa-sets-panel{margin:0 0 10px;flex:0 0 auto;background:var(--oa-card,rgba(255,255,255,.0512));border:1px solid var(--oa-stroke,rgba(255,255,255,.0698));border-radius:var(--oa-r-panel,8px);box-shadow:0 2px 6px rgba(0,0,0,.14);overflow-x:hidden;overflow-y:auto;max-height:min(72vh,640px);padding:8px 10px;}",
+        "body.oa-dashboard-active .oa-sets-panel::-webkit-scrollbar{width:7px;}",
+        "body.oa-dashboard-active .oa-sets-panel::-webkit-scrollbar-thumb{background:var(--oa-stroke,rgba(255,255,255,.14));border-radius:4px;}",
         "body.oa-dashboard-active .oa-sets-header{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;}",
         "body.oa-dashboard-active .oa-sets-header .expander-chevron{pointer-events:none;display:flex;flex:0 0 auto;transition:transform .15s cubic-bezier(.55,0,.1,1);}",
         "body.oa-dashboard-active .oa-sets-panel.open>.oa-sets-header .expander-chevron{transform:rotate(180deg);}",
@@ -105,35 +110,56 @@
         "body.oa-dashboard-active .oa-set-body,body.oa-dashboard-active .oa-season-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .18s cubic-bezier(.55,0,.1,1);}",
         "body.oa-dashboard-active .oa-set.open>.oa-set-body,body.oa-dashboard-active .oa-season.open>.oa-season-body{grid-template-rows:1fr;}",
         "body.oa-dashboard-active .oa-set-body-inner,body.oa-dashboard-active .oa-season-body-inner{min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:6px;padding:6px 0 2px 18px;}",
-        "body.oa-dashboard-active .oa-btn{font:inherit;font-size:12px;line-height:1.4;color:var(--oa-btn-fg,inherit);background:var(--oa-btn-bg,transparent);border:1px solid var(--oa-btn-bd,currentColor);border-radius:var(--oa-btn-radius,6px);padding:var(--oa-btn-pad,1px 9px);cursor:pointer;opacity:.7;white-space:nowrap;}",
-        "body.oa-dashboard-active .oa-btn:hover{opacity:1;}",
-        "body.oa-dashboard-active .oa-btn.primary{opacity:1;font-weight:600;}",
-        "body.oa-dashboard-active .oa-btn.danger{color:#fff;background:var(--oa-danger,#c0392b);border-color:transparent;opacity:.85;}",
-        "body.oa-dashboard-active .oa-input{font:inherit;font-size:12px;color:var(--oa-in-fg,inherit);background:var(--oa-in-bg,transparent);border:1px solid var(--oa-in-bd,currentColor);border-radius:var(--oa-in-radius,6px);padding:var(--oa-in-pad,2px 8px);}",
-        "body.oa-dashboard-active .oa-input:focus{outline:1px solid var(--oa-btn-bd,currentColor);}",
+        // ── Fluent tasarım token'ları ──
+        // Kaynak: fluent-svelte-extra (Button/TextBox/Expander token'ları) +
+        // /settings üzerinden ölçülmüş site değerleri (BELGELER/arayuz-bilgisi.md).
+        "body.oa-dashboard-active{--oa-accent:hsla(199,99%,69%,1);--oa-accent-hover:hsla(199,99%,74%,1);--oa-fill-default:rgba(255,255,255,.061);--oa-fill-secondary:rgba(255,255,255,.083);--oa-fill-tertiary:rgba(255,255,255,.045);--oa-fill-input-active:rgba(255,255,255,.07);--oa-stroke:rgba(255,255,255,.0698);--oa-text-2:rgba(255,255,255,.786);--oa-text-3:rgba(255,255,255,.5);--oa-card:rgba(255,255,255,.0512);--oa-danger:#ff99a4;--oa-ok:rgba(59,199,133,.22);--oa-r-control:4px;--oa-r-panel:8px;--oa-fast:83ms;}",
+        // Button (fluent .button.style-standard): fill + stroke, 83ms geçiş
+        "body.oa-dashboard-active .oa-btn{font:inherit;font-size:12px;line-height:1.3;color:inherit;background:var(--oa-fill-default);border:1px solid var(--oa-stroke);border-radius:var(--oa-r-control);padding:3px 10px 4px;cursor:pointer;white-space:nowrap;transition:background var(--oa-fast) ease,border-color var(--oa-fast) ease,color var(--oa-fast) ease;}",
+        "body.oa-dashboard-active .oa-btn:hover{background:var(--oa-fill-secondary);}",
+        "body.oa-dashboard-active .oa-btn:active{background:var(--oa-fill-tertiary);color:var(--oa-text-2);}",
+        "body.oa-dashboard-active .oa-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--oa-accent);}",
+        "body.oa-dashboard-active .oa-btn.primary{background:var(--oa-accent);border-color:transparent;color:rgba(0,20,26,.92);font-weight:600;}",
+        "body.oa-dashboard-active .oa-btn.primary:hover{background:var(--oa-accent-hover);}",
+        "body.oa-dashboard-active .oa-btn.danger{background:transparent;color:var(--oa-danger);}",
+        "body.oa-dashboard-active .oa-btn.danger:hover{background:rgba(255,51,102,.08);border-color:rgba(255,153,164,.4);}",
+        // TextBox (fluent .text-box-container): fill + stroke, focus'ta alt accent çizgisi
+        "body.oa-dashboard-active .oa-input,body.oa-dashboard-active .oa-range-in,body.oa-dashboard-active .oa-rename{font:inherit;font-size:12px;color:inherit;background:var(--oa-fill-default);border:1px solid var(--oa-stroke);border-radius:var(--oa-r-control);padding:3px 10px 4px;transition:background var(--oa-fast) ease,border-color var(--oa-fast) ease;}",
+        "body.oa-dashboard-active .oa-input:hover,body.oa-dashboard-active .oa-range-in:hover{background:var(--oa-fill-secondary);}",
+        "body.oa-dashboard-active .oa-input:focus,body.oa-dashboard-active .oa-input:focus-visible,body.oa-dashboard-active .oa-range-in:focus,body.oa-dashboard-active .oa-rename:focus{outline:none;background:var(--oa-fill-input-active);border-color:var(--oa-accent);box-shadow:inset 0 -1px 0 var(--oa-accent);}",
+        "body.oa-dashboard-active .oa-input::placeholder,body.oa-dashboard-active .oa-range-in::placeholder{color:var(--oa-text-3);}",
         "body.oa-dashboard-active .oa-input.w-name{width:150px;}",
         "body.oa-dashboard-active .oa-input.w-link{flex:1;min-width:120px;}",
         "body.oa-dashboard-active .oa-input.w-num{width:56px;}",
         "body.oa-dashboard-active .oa-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}",
-        "body.oa-dashboard-active .oa-muted{opacity:.55;font-size:12px;}",
+        "body.oa-dashboard-active .oa-season-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}",
+        "body.oa-dashboard-active .oa-muted{color:var(--oa-text-3);font-size:12px;}",
         "body.oa-dashboard-active .oa-ep-chips{display:flex;flex-wrap:wrap;gap:4px;}",
-        "body.oa-dashboard-active .oa-sub{display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px dashed var(--oa-in-bd,currentColor);border-radius:8px;opacity:.95;}",
-        "body.oa-dashboard-active .oa-sub-title{font-size:11px;opacity:.6;letter-spacing:.3px;}",
-        "body.oa-dashboard-active .oa-badge{font-size:11px;opacity:.55;white-space:nowrap;}",
-        "body.oa-dashboard-active .oa-ep-chip{position:relative;}",
-        "body.oa-dashboard-active .oa-ep-chip.ovr{border-style:dashed;opacity:.85;}",
-        "body.oa-dashboard-active .oa-ep-chip.done{opacity:1;background:var(--oa-ok-bg,rgba(48,164,108,.25));border-color:transparent;}",
-        "body.oa-dashboard-active .oa-ep-chip .ed{display:none;position:absolute;top:-6px;right:-6px;width:14px;height:14px;line-height:13px;text-align:center;font-size:10px;border-radius:50%;background:var(--oa-btn-bg,transparent);border:1px solid var(--oa-in-bd,currentColor);cursor:pointer;}",
+        // Kart/şerit yüzeyleri (fluent Expander/Flyout: card fill + stroke + gölge)
+        "body.oa-dashboard-active .oa-sub,body.oa-dashboard-active .oa-dist,body.oa-dashboard-active .oa-ep-editor,body.oa-dashboard-active .oa-queue-bar,body.oa-dashboard-active .oa-done-bar{background:var(--oa-card);border:1px solid var(--oa-stroke);border-radius:var(--oa-r-panel);box-shadow:0 2px 4px rgba(0,0,0,.13);}",
+        "body.oa-dashboard-active .oa-sub{display:flex;flex-direction:column;gap:4px;padding:8px 10px;}",
+        "body.oa-dashboard-active .oa-sub-title{font-size:11px;color:var(--oa-text-3);letter-spacing:.4px;font-weight:600;}",
+        "body.oa-dashboard-active .oa-badge{font-size:11px;color:var(--oa-text-3);white-space:nowrap;}",
+        "body.oa-dashboard-active .oa-ep-chip{position:relative;font:inherit;font-size:12px;line-height:1;padding:4px 10px 5px;border-radius:var(--oa-r-control);border:1px solid var(--oa-stroke);background:var(--oa-fill-default);color:var(--oa-text-2);cursor:pointer;user-select:none;transition:background var(--oa-fast) ease,border-color var(--oa-fast) ease;}",
+        "body.oa-dashboard-active .oa-ep-chip:hover{background:var(--oa-fill-secondary);color:inherit;}",
+        "body.oa-dashboard-active .oa-ep-chip.sel{background:hsla(199,99%,69%,.18);border-color:hsla(199,99%,69%,.5);color:inherit;font-weight:600;}",
+        "body.oa-dashboard-active .oa-ep-chip.ovr{border-style:dashed;}",
+        "body.oa-dashboard-active .oa-ep-chip.done{background:var(--oa-ok);border-color:transparent;color:inherit;}",
+        "body.oa-dashboard-active .oa-ep-chip .ed{display:none;position:absolute;top:-7px;right:-7px;width:15px;height:15px;line-height:13px;text-align:center;font-size:10px;border-radius:50%;background:var(--oa-fill-secondary);border:1px solid var(--oa-stroke);cursor:pointer;color:inherit;}",
         "body.oa-dashboard-active .oa-ep-chip:hover .ed{display:block;}",
-        "body.oa-dashboard-active .oa-ep-editor{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border:1px solid var(--oa-in-bd,currentColor);border-radius:8px;}",
-        "body.oa-dashboard-active .oa-ep-editor .oa-lbl{font-size:11px;opacity:.55;min-width:110px;}",
-        "body.oa-dashboard-active .oa-dist{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border:1px dashed var(--oa-in-bd,currentColor);border-radius:8px;}",
+        "body.oa-dashboard-active .oa-ep-editor{display:flex;flex-direction:column;gap:6px;padding:8px 10px;}",
+        "body.oa-dashboard-active .oa-ep-editor .oa-lbl{font-size:11px;color:var(--oa-text-3);min-width:110px;}",
+        "body.oa-dashboard-active .oa-dist{display:flex;flex-direction:column;gap:6px;padding:8px 10px;}",
         "body.oa-dashboard-active .oa-pool{display:flex;flex-direction:column;gap:4px;}",
         "body.oa-dashboard-active .oa-x{font:inherit;font-size:11px;line-height:1;background:transparent;border:none;color:inherit;opacity:.5;cursor:pointer;padding:2px;}",
-        "body.oa-dashboard-active .oa-x:hover{opacity:1;color:var(--oa-danger,#c0392b);}",
-        "body.oa-dashboard-active .oa-range-in{font:inherit;font-size:12px;color:inherit;background:transparent;border:1px solid currentColor;border-radius:6px;padding:1px 8px;width:90px;}",
-        "body.oa-dashboard-active .oa-rename{font:inherit;font-size:13px;color:inherit;background:transparent;border:1px solid currentColor;border-radius:6px;padding:1px 8px;min-width:140px;}",
-        "body.oa-dashboard-active .oa-queue-bar,body.oa-dashboard-active .oa-done-bar{display:flex;align-items:center;gap:10px;padding:6px 10px;border:1px solid currentColor;border-radius:8px;margin-bottom:8px;}"
+        "body.oa-dashboard-active .oa-x:hover{opacity:1;color:var(--oa-danger);}",
+        "body.oa-dashboard-active .oa-range-in{width:90px;}",
+        "body.oa-dashboard-active .oa-rename{min-width:140px;}",
+        "body.oa-dashboard-active .oa-queue-bar,body.oa-dashboard-active .oa-done-bar{display:flex;align-items:center;gap:10px;padding:6px 10px;margin-bottom:8px;}",
+        // ── Boş durum bölgeleri (isteğe bağlı içerik kartları) ──
+        // "Oynatıcı seç" ve "İşlenen anime yok" alanları daha ferah + kart görünümü
+        "body.oa-dashboard-active .root .options .center{min-height:150px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;}",
+        "body.oa-dashboard-active .encodes-main .center-warn{min-height:240px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:36px 28px;background:var(--oa-card,rgba(255,255,255,.03));border:1px dashed var(--oa-stroke,rgba(255,255,255,.14));border-radius:var(--oa-r-panel,8px);}"
       ].join("\n");
       document.head.appendChild(s);
     }
@@ -237,7 +263,9 @@
         // Kart görünümünü (tema renkleri dahil) birebir devral
         containerStyle: [
           "background:" + cs.backgroundColor,
+          "border:" + cs.border,
           "border-radius:" + cs.borderRadius,
+          "box-shadow:" + cs.boxShadow,
           "padding:" + cs.padding
         ].join(";") + ";",
         headerStyle: ""
@@ -870,7 +898,7 @@
 
     function learnFromProcessedTable() {
       var rows = document.querySelectorAll("tr");
-      if (!rows.length) return;
+      if (!rows.length) return false;
       var cache = loadSiteCache();
       var changed = false;
       var re = /^(.*?)\s*(\d+)\.\s*Sezon\s+(\d+)\.\s*Bölüm/i;
@@ -885,6 +913,7 @@
         if (!(seasons[s] >= e)) { seasons[s] = e; changed = true; }
       }
       if (changed) saveSiteCache(cache);
+      return changed;
     }
 
     // Anime adına göre (kısmi eşleşme dahil) bilinen sezon verisini döndür.
@@ -898,47 +927,10 @@
       return null;
     }
 
-    // ── UI derisi: sitenin kendi buton/input'undan canlı örnekleme ──
-    // Ayarlar sayfası yaklaşımının aynısı: sınıflar svelte-hash'li olduğu
-    // için computed style değerleri CSS değişkenlerine yazılır; panel
-    // bileşenleri bu değişkenleri kullanır → tema/site tasarımı birebir.
-    var _uiSkinDone = false;
-
-    function getUiSkin() {
-      if (_uiSkinDone) return;
-      var root = sceneRoot();
-      if (!root) return;
-      // Kendi inputlarımızı (data-oa-ignore) hariç tut.
-      var inps = root.querySelectorAll("input, textarea");
-      var inp = null;
-      for (var i = 0; i < inps.length; i++) {
-        if (inps[i].type !== "hidden" && !inps[i].closest("[data-oa-ignore]")) { inp = inps[i]; break; }
-      }
-      var btn = null, btns = root.querySelectorAll("button");
-      for (var j = 0; j < btns.length; j++) {
-        var t = (btns[j].textContent || "").trim();
-        if (/oluştur|kaydet|gönder/i.test(t)) { btn = btns[j]; break; }
-      }
-      if (!inp && !btn) return; // canlı örnek yok → sonraki render'da dene
-      var bs = document.body.style;
-      if (inp) {
-        var ci = getComputedStyle(inp);
-        bs.setProperty("--oa-in-bg", ci.backgroundColor);
-        bs.setProperty("--oa-in-bd", ci.borderColor !== "none" ? ci.borderColor : ci.color);
-        bs.setProperty("--oa-in-fg", ci.color);
-        bs.setProperty("--oa-in-radius", ci.borderRadius);
-        bs.setProperty("--oa-in-pad", ci.padding);
-      }
-      if (btn) {
-        var cb = getComputedStyle(btn);
-        bs.setProperty("--oa-btn-bg", cb.backgroundColor);
-        bs.setProperty("--oa-btn-fg", cb.color);
-        bs.setProperty("--oa-btn-bd", cb.borderColor !== "none" ? cb.borderColor : cb.backgroundColor);
-        bs.setProperty("--oa-btn-radius", cb.borderRadius);
-        bs.setProperty("--oa-btn-pad", cb.padding);
-      }
-      _uiSkinDone = true;
-    }
+    // ── UI derisi: Fluent tasarım token'ları CSS'e gömülü (injectCss) ──
+    // fluent-svelte-extra'nın Button/TextBox/Expander token'ları ile
+    // /settings'te ölçülen site değerleri birebir eşleştirildi; canlı
+    // örnekleme gereksizleşti.
 
 
     function isEpisodeCreateScene() {
@@ -1189,7 +1181,6 @@
       _panel.textContent = "";
       _panel.className = "oa-sets-panel" + (_panelOpen ? " open" : "");
       var skin = getExpanderSkin();
-      getUiSkin();          // buton/input derisi (canlı örnekleme)
       learnFromProcessedTable(); // "İşlenen animeler" tablosundan site verisi
       if (_doneMsg) {
         _panel.appendChild(elv("div", "oa-done-bar text-block type-caption text-secondary", _doneMsg));
@@ -1515,10 +1506,14 @@
       var add = elv("button", "oa-btn", "Ekle");
       add.addEventListener("click", function (e) { e.stopPropagation(); addRange(set, sn, rangeInp); });
       h.appendChild(add);
-      // Site verisi biliniyorsa tek tıkla sezonu doldur.
-      var known = siteSeasonsFor(set.anime);
+      // Site verisi: her zaman görünür — veri varsa tek tıkla doldurur,
+      // yoksa nedenini gösterir (tablo henüz öğrenilmedi / anime eşleşmedi).
+      var known = siteSeasonsFor(set.anime) || siteSeasonsFor(set.name);
+      var sug = elv("button", "oa-btn", known && known[sn.no]
+        ? "Site önerisi (1-" + known[sn.no] + ")"
+        : "Site verisi yok");
       if (known && known[sn.no] > eps.length) {
-        var sug = elv("button", "oa-btn", "Site önerisi (1-" + known[sn.no] + ")");
+        sug.classList.add("primary");
         sug.title = "Sitede görülen bölüm aralığından listeyi tamamlar";
         sug.addEventListener("click", function (e) {
           e.stopPropagation();
@@ -1536,8 +1531,15 @@
           saveSet(s);
           render();
         });
-        h.appendChild(sug);
+      } else {
+        sug.disabled = true;
+        sug.title = known && known[sn.no]
+          ? "Sezon listesi zaten tam"
+          : "Henüz öğrenilemedi — \"İşlenen animeler\" tablosunda bu anime göründüğünde otomatik gelir (set adı ile tablodaki anime adı aynı olmalı)";
+        sug.style.opacity = ".45";
+        sug.style.cursor = "default";
       }
+      h.appendChild(sug);
       var sdel = elv("button", "oa-btn danger", "×");
       armConfirm(sdel, "Sezon silinsin?", function () {
         var sets = loadSets();
@@ -1985,7 +1987,13 @@
       // kaçırsaydı bile gruplama/panel en geç 2 sn içinde kendini onarır.
       setInterval(function () {
         lightSync();
-        if (onDashboardRoute() && !_restoringPlayer) saveFormSnapshot();
+        if (onDashboardRoute() && !_restoringPlayer) {
+          saveFormSnapshot();
+          // Tablo satırları Svelte tarafından ASYNC yüklenir; render anında
+          // DOM'da olmayabilir. Öğrenme bu yüzden periyodik yürür ve yeni
+          // veri geldiğinde açık panel tazelenir ("Site önerisi" görünür olur).
+          if (learnFromProcessedTable() && _panel && _panelOpen) render();
+        }
       }, 2000);
     }
 
