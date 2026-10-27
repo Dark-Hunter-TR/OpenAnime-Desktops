@@ -15,7 +15,7 @@
 # karşılık geliyor, imza içeriği ile paketin indirme adresi eşleştiriliyor.
 # Böylece kaç iş paralel koştuğu ya da hangisinin önce bittiği önemsizleşiyor.
 #
-# Kullanım:  build-updater-manifest.sh <tag> <sürüm> <çıktı-dosyası>
+# Kullanım:  build-updater-manifest.sh <tag> <sürüm> <çıktı-dosyası> [sürüm-notu]
 # Ortam:     GH_TOKEN (ya da GITHUB_TOKEN), GITHUB_REPOSITORY
 
 set -euo pipefail
@@ -23,6 +23,7 @@ set -euo pipefail
 TAG="${1:?tag gerekli}"
 VERSION="${2:?sürüm gerekli}"
 OUT="${3:-latest.json}"
+NOTES="${4:-$TAG sürümü}"   # updater diyaloğunda gösterilen sürüm notu
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY gerekli}"
 
 # Taslak (draft) release'lerin varlıkları herkese açık adresten İNDİRİLEMİYOR;
@@ -95,7 +96,7 @@ fi
 
 jq -n \
   --arg version "$VERSION" \
-  --arg notes "$TAG sürümü" \
+  --arg notes "$NOTES" \
   --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson platforms "$platforms" \
   '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' > "$OUT"

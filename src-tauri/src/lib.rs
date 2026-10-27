@@ -221,6 +221,27 @@ mod gpu_switch_macos {
 /// Windows/macOS webview'ı WebGPU'yu zaten native sağladığından bu bayraklara
 /// ihtiyaç duymaz (shim `isLinux` kontrolüyle kendini zaten devre dışı bırakır).
 fn build_init_script() -> String {
+    let base = build_base_init_script();
+    // WebGPU teşhis aracı YALNIZCA debug (dev) derlemelerinde enjekte edilir.
+    // Site (MARINA) createShaderModule/createComputePipeline'ın native olup
+    // olmadığını toString() ile denetliyor; inspector bunları sarar. Release
+    // derlemelerinde site API'lerine hiçbir yama uygulanmaz.
+    if cfg!(debug_assertions) {
+        format!("{}\n{}", WEBGPU_INSPECTOR_SCRIPT, base)
+    } else {
+        base
+    }
+}
+
+/// webgpu-inspector.js kendi IIFE'sinde çalışır (ortak init script'in kapsamına
+/// karışmaz). Yalnızca `build_init_script` içinde debug derlemede kullanılır.
+const WEBGPU_INSPECTOR_SCRIPT: &str = concat!(
+    "(function () {\n",
+    include_str!("js/modules/webgpu-inspector.js"),
+    "\n})();\n"
+);
+
+fn build_base_init_script() -> String {
     #[cfg(target_os = "linux")]
     {
         // OPENANIME_DISABLE_WEBGPU=1: tanılama bayrağı — shim navigator.gpu'yu
@@ -966,23 +987,10 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     "\n}\n",
 
     // ──────────────────────────────────────────────
-    // BLOK 6C: WEBGPU PIPELINE TEŞHİS ARACI (yalnızca window.__oaInspectWebGPU=true)
-    // openani.me'nin kendi WebGPU oynatıcısını tersine mühendislik için GEÇİCİ
-    // bir teşhis aracı. GPUDevice/GPUCanvasContext/GPUCommandEncoder üzerindeki
-    // shader/doku/pass çağrılarını yakalar. Varsayılan KAPALI — hook'lar her
-    // sayfada kurulur ama yalnızca bayrak açıkken kayıt üretir (sıfır yan etki).
-    //
-    // NEDEN BURADA: site kendi device'ını isteyip ht.init()'i çalıştırmadan ÖNCE
-    // hook'ların kurulu olması şart. Bu blok document-start'ta çalışır ve
-    // webgpu-detect'ten bile önce gelir (adapter seçiminden önce). Log'lar
-    // oa_js_log → dbg_log! üzerinden gider, yani yalnızca dev build'de ya da
-    // OA_DEBUG=1 ile session loguna düşer (bkz. logger.rs).
+    // BLOK 6C: (kaldırıldı) WebGPU teşhis aracı artık burada DEĞİL.
+    // webgpu-inspector.js yalnızca debug derlemelerde, bu betiğin ÖNÜNE
+    // eklenir (bkz. build_init_script / WEBGPU_INSPECTOR_SCRIPT).
     // ──────────────────────────────────────────────
-    // GEÇİCİ KAPALI: site (MARINA) createShaderModule/createComputePipeline'ın
-    // native olup olmadığını toString() ile kontrol ediyor; inspector bunları sarıyor.
-    // Geri açmak için alt satırın başındaki // işaretini kaldır.
-    // include_str!("js/modules/webgpu-inspector.js"),
-    "\n",
 
     // ──────────────────────────────────────────────
     // BLOK 6D: WebGPU ADAPTER ALGILAMA

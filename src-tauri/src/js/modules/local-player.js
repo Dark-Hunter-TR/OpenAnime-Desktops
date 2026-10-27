@@ -477,31 +477,10 @@
     } catch (e) {}
   })();
 
-  // WebGPU doğrulama hataları JS'e istisna olarak DÜŞMEZ, cihaz üzerinden
-  // asenkron bildirilir (ör. 0x0 doku, geçersiz kopyalama). Tanı için
-  // yakalayıp saklıyoruz — siyah tuvalin sessiz sebebi çoğu zaman budur.
-  (function patchGpuDevice() {
-    try {
-      // GEÇİCİ KAPALI: GPU API yamalarını test için devre dışı bırak.
-      // Geri açmak için alttaki satırı sil.
-      return;
-      if (!navigator.gpu || !window.GPUAdapter || !GPUAdapter.prototype.requestDevice) return;
-      var _rd = GPUAdapter.prototype.requestDevice;
-      GPUAdapter.prototype.requestDevice = function () {
-        return _rd.apply(this, arguments).then(function (dev) {
-          try {
-            var n = 0;
-            dev.addEventListener("uncapturederror", function (ev) {
-              var m = (ev && ev.error && ev.error.message) || String(ev && ev.error);
-              if (!window.__oaGpuError) window.__oaGpuError = m.substring(0, 200);
-              if (n++ < 3) console.warn(TS() + "[LocalPlayer] WebGPU hatasi:", m);
-            });
-          } catch (x) {}
-          return dev;
-        });
-      };
-    } catch (e) {}
-  })();
+  // NOT: GPUAdapter.requestDevice yaması (uncapturederror yakalama) BİLEREK
+  // KALDIRILDI. Site (MARINA) GPU API'lerinin native olup olmadığını
+  // toString() ile denetliyor; prototip yamaları oynatıcıyı bozuyor. Siteye ait
+  // GPU API'lerine dokunan hiçbir kod buraya geri eklenmemeli.
 
   // NOT — DENENDİ VE İŞE YARAMADI, BİLEREK KALDIRILDI:
   // Bir ara `EncodingError: The source image cannot be decoded` (site

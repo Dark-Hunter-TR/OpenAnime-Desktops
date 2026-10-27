@@ -1,47 +1,30 @@
 name: '🧪 Test Build'
 
+# Hızlı deneme derlemesi. Yayın YAPMAZ: tag/release/manifest'e dokunmaz,
+# imza anahtarı kullanmaz. Çıktı her zaman artifact olarak yüklenir (7 gün).
+# Sürüm: <depodaki baz sürüm>-test.<çalıştırma no>
 on:
   workflow_dispatch:
     inputs:
       platform:
-        description: 'Build alınacak platform'
+        description: 'Platform'
         required: true
-        default: 'all'
         type: choice
+        default: all
         options:
           - all
           - windows-latest
           - macos-latest
           - ubuntu-latest
       build_mode:
-        description: 'Build modu (test-release = hızlı, release = full opt)'
+        description: 'Mod (test-release = hızlı, release = tam optimizasyon, debug)'
         required: true
-        default: 'test-release'
         type: choice
+        default: test-release
         options:
           - test-release
           - release
           - debug
-      upload_artifacts:
-        description: 'Artifact olarak yükle'
-        required: true
-        default: true
-        type: boolean
-      channel:
-        description: 'Sürüm kanalı — next-version.sh sayacına göre üretir'
-        required: true
-        default: 'test'
-        type: choice
-        options:
-          - test
-          - stable
-          - beta
-          - alpha
-      version:
-        description: 'Sürüm override (OPSİYONEL) — boş bırakılırsa otomatik hesaplanır. Örn: 1.1.3-test.4'
-        required: false
-        type: string
-        default: ''
 
 env:
   CARGO_TERM_COLOR: always
@@ -49,200 +32,54 @@ env:
   RUSTC_WRAPPER: "sccache"
 
 jobs:
-  # Sürümü release.yml ile AYNI betikten (scripts/next-version.sh) hesaplar.
-  # Test-build sürüm üretmez: yalnızca derleme çıktısının dosya adını sürüme
-  # göre scaffoldlar (set-version.mjs ile), hiçbir tag/release'e dokunmaz.
   prepare:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
-      tag: ${{ steps.meta.outputs.tag }}
-      channel: ${{ steps.meta.outputs.channel }}
+      matrix: ${{ steps.meta.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Sürümü hesapla
+      - name: Sürüm ve matris
         id: meta
         shell: bash
         env:
-          INPUT_CHANNEL: ${{ inputs.channel }}
-          INPUT_VERSION: ${{ inputs.version }}
-          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ inputs.platform }}
         run: |
-          TAG="$(bash scripts/next-version.sh "$INPUT_CHANNEL" "$INPUT_VERSION")"
-          VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          BASE="$(node -p "require('./package.json').version.split('-')[0]")"
+          VERSION="${BASE}-test.${GITHUB_RUN_NUMBER}"
+
+          WIN='{"platform":"windows-latest","args":"","target":"","rust_targets":"","label":"Windows-x64","bundle":"src-tauri/target"}'
+          MAC='{"platform":"macos-latest","args":"--target universal-apple-darwin","target":"universal-apple-darwin","rust_targets":"aarch64-apple-darwin,x86_64-apple-darwin","label":"macOS-Universal","bundle":"src-tauri/target/universal-apple-darwin"}'
+          LIN='{"platform":"ubuntu-latest","args":"","target":"","rust_targets":"","label":"Linux-x64","bundle":"src-tauri/target"}'
+          case "$PLATFORM" in
+            windows-latest) M="$WIN" ;;
+            macos-latest)   M="$MAC" ;;
+            ubuntu-latest)  M="$LIN" ;;
+            *)              M="$WIN,$MAC,$LIN" ;;
+          esac
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "channel=$INPUT_CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "matrix={\"include\":[$M]}" >> "$GITHUB_OUTPUT"
           {
-            echo "### 🧪 Test Build — Sürüm bilgisi"
-            echo "- **Tag:** \`$TAG\`"
-            echo "- **Kanal:** \`$INPUT_CHANNEL\`"
+            echo "### 🧪 Test Build"
             echo "- **Sürüm:** \`$VERSION\`"
+            echo "- **Platform:** \`$PLATFORM\` · **Mod:** \`${{ inputs.build_mode }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  windows:
-    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows-latest'
-    needs: [prepare]
-    runs-on: windows-latest
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.platform }}
+    env:
+      MODE: ${{ inputs.build_mode }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: windows-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            windows-cargo-
-
-      - name: Cache Tauri bundler (NSIS, Wix etc.)
-        uses: actions/cache@v6
-        with:
-          path: ~\AppData\Local\tauri
-          key: windows-tauri-bundler
-          restore-keys: |
-            windows-tauri-bundler-
-
-      - name: Cache Bun
-        uses: actions/cache@v6
-        with:
-          path: ~/.bun
-          key: windows-bun-${{ hashFiles('bun.lock', 'package.json') }}
-          restore-keys: |
-            windows-bun-
-
-      - name: Install frontend dependencies
-        run: bun install
-
-      - name: Sürüm alanlarını sürümle eşleşle
-        shell: bash
-        run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
-
-      - name: Build
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          releaseDraft: false
-          prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
-
-      - name: Upload artifacts
-        if: github.event.inputs.upload_artifacts == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: Windows-x64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
-          if-no-files-found: warn
-          retention-days: 7
-
-  macos:
-    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos-latest'
-    needs: [prepare]
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-
-      # universal binary için iki hedef de gerekli: tauri-cli ikisini ayrı ayrı
-      # derleyip `lipo` ile tek pakette birleştirir.
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: macos-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            macos-cargo-
-
-      - name: Cache Bun
-        uses: actions/cache@v6
-        with:
-          path: ~/.bun
-          key: macos-bun-${{ hashFiles('bun.lock', 'package.json') }}
-          restore-keys: |
-            macos-bun-
-
-      - name: Install frontend dependencies
-        run: bun install
-
-      - name: Sürüm alanlarını sürümle eşleşle
-        shell: bash
-        run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
-
-      # `--target` MUTLAKA `--` ayracından önce gelmeli: `--` sonrasındaki her şey
-      # doğrudan cargo'ya aktarılır ve tauri CLI onu görmez.
-      - name: Build
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          releaseDraft: false
-          prerelease: false
-          args: --target universal-apple-darwin ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
-
-      # Hedef verildiğinde çıktılar target/<triple>/<profil>/bundle altına düşer.
-      - name: Upload artifacts
-        if: github.event.inputs.upload_artifacts == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: macOS-Universal-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/universal-apple-darwin/${{ github.event.inputs.build_mode }}/bundle
-          if-no-files-found: warn
-          retention-days: 7
-
-  linux:
-    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ubuntu-latest'
-    needs: [prepare]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      # Tauri v2 (webkit2gtk-4.1) + native_player (gtk4 + wgpu) için sistem bağımlılıkları.
-      # libegl1-mesa-dev: wgpu'nun GLES arka ucu (Vulkan ash ile dinamik yüklenir,
-      # ama EGL için başlık gerekebilir).
       - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -265,11 +102,22 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Cache Tauri bundler (NSIS, Wix etc.)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\tauri
+          key: windows-tauri-bundler
+          restore-keys: |
+            windows-tauri-bundler-
 
       - name: Cache Rust dependencies
         uses: actions/cache@v6
@@ -277,42 +125,36 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: linux-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: ${{ matrix.label }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            linux-cargo-
+            ${{ matrix.label }}-cargo-
 
       - name: Cache Bun
         uses: actions/cache@v6
         with:
           path: ~/.bun
-          key: linux-bun-${{ hashFiles('bun.lock', 'package.json') }}
+          key: ${{ matrix.label }}-bun-${{ hashFiles('bun.lock', 'package.json') }}
           restore-keys: |
-            linux-bun-
+            ${{ matrix.label }}-bun-
 
       - name: Install frontend dependencies
         run: bun install
 
-      - name: Sürüm alanlarını sürümle eşleşle
+      - name: Sürüm alanlarını eşitle
         shell: bash
         run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
 
+      # `--target` MUTLAKA `--` ayracından önce: sonrası doğrudan cargo'ya gider.
+      # tauri.test.conf.json updater artifact'larını kapatır → imza gerekmez.
       - name: Build
         uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          releaseDraft: false
-          prerelease: false
-          args: ${{ github.event.inputs.build_mode == 'debug' && '--debug' || github.event.inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
+          args: ${{ matrix.args }} --config src-tauri/tauri.test.conf.json ${{ inputs.build_mode == 'debug' && '--debug' || inputs.build_mode == 'test-release' && '-- --profile test-release' || '' }} --verbose
 
       - name: Upload artifacts
-        if: github.event.inputs.upload_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: Linux-x64-${{ github.event.inputs.build_mode }}
-          path: src-tauri/target/${{ github.event.inputs.build_mode }}/bundle
+          name: ${{ matrix.label }}-${{ inputs.build_mode }}
+          path: ${{ matrix.bundle }}/${{ inputs.build_mode }}/bundle
           if-no-files-found: warn
           retention-days: 7
-

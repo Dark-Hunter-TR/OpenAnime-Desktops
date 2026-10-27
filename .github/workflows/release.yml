@@ -1,38 +1,55 @@
 name: '🚀 Publish'
 
-# Tag push edildiğinde otomatik build + yayın.
-# Veya GitHub Actions arayüzünden manuel trigger:
-#   - channel: stable | beta | alpha  (zorunlu)
-#   - version: OPSİYONEL — boş bırakılırsa scripts/next-version.sh otomatik
-#     hesaplar (bkz. release-preview.yml ile aynı mantık). İstersen override.
-# Tag push yolunda kanal, tag'in ön-sürüm son ekinden türetilir:
-#   v1.0.0          -> stable
-#   v1.1.0-beta.1   -> beta
-#   v1.2.0-alpha.1  -> alpha
+# Tek form, tek yol: Actions → Publish → Run workflow.
+# (Tag push ile yayın YOK — sürüm daima bu formdan çıkar.)
+#
+#   kanal      : beta (varsayılan) | alpha | stable
+#   sürüm      : boş = otomatik (scripts/next-version.sh); doluysa override
+#   notlar     : `;` ile ayrılmış maddeler. Stable'da ZORUNLU.
+#                Örn: Oynatıcı hızlandı; Altyazı kayması düzeltildi
+#   platformlar: all | windows-only  (stable her zaman all)
+#   dry_run    : işaretliyse yalnızca "ne yayınlanırdı?" özeti yazar, hiçbir
+#                şey derlenmez/yayınlanmaz.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       channel:
-        description: 'Release channel'
+        description: 'Kanal'
         required: true
         type: choice
+        default: beta
         options:
-          - stable
           - beta
           - alpha
+          - stable
       version:
-        description: 'Version (OPSİYONEL — boş bırakılırsa kanal kuralına göre otomatik hesaplanır; override için örn: 1.0.0)'
+        description: 'Sürüm (boş = otomatik). Override örn: 1.2.0 / 1.2.0-beta.1'
         required: false
         type: string
         default: ''
+      notes:
+        description: 'Sürüm notları — maddeleri ; ile ayır (stable için zorunlu)'
+        required: false
+        type: string
+        default: ''
+      platforms:
+        description: 'Platformlar (stable her zaman hepsi)'
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - windows-only
+      dry_run:
+        description: 'Sadece önizle (hiçbir şey yayınlama)'
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
-  # Aynı tag için tek yayın; devam eden bir yayını YARIDA KESME (release/tag
-  # silme ve manifest commit'i atomik olmayan işlemler).
-  group: publish-${{ github.ref_name }}
+  # Yayınlar sıraya girer; devam eden bir yayın YARIDA KESİLMEZ (release/tag ve
+  # manifest commit'i atomik olmayan işlemler).
+  group: publish
   cancel-in-progress: false
 
 permissions:
@@ -45,15 +62,7 @@ env:
 
 jobs:
   # ────────────────────────────────────────────────────
-  # 1) Sürüm + kanal türet
-  #
-  # workflow_dispatch'ta sürüm hesabı scripts/next-version.sh'a devredildi:
-  # boş sürüm = otomatik (stable: son stable'ın patch+1'i; beta/alpha: kanal
-  # sayacı + SemVer güvenli baz seçimi). Elle girilen sürüm override olur.
-  # Aynı betik release-preview.yml'de de çalıştığı için önizlemede görülen
-  # sürümle yayında oluşan sürüm aynı mantıktan çıkar.
-  #
-  # Tag push yolunda tag adı hâlâ kaynaktır ve kanal sonekten türetilir.
+  # 1) Sürüm, kanal, notlar, platform matrisi — ve ön kontroller
   # ────────────────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
@@ -62,104 +71,122 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       channel: ${{ steps.meta.outputs.channel }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      notes: ${{ steps.meta.outputs.notes }}
+      matrix: ${{ steps.meta.outputs.matrix }}
+      required_keys: ${{ steps.meta.outputs.required_keys }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Sürüm betiği testleri
+        run: bash scripts/next-version.test.sh
 
       - name: Sürüm ve kanalı hesapla
         id: meta
         shell: bash
         env:
-          INPUT_CHANNEL: ${{ inputs.channel }}
+          CHANNEL: ${{ inputs.channel }}
           INPUT_VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+          PLATFORMS: ${{ inputs.platforms }}
+          DRY_RUN: ${{ inputs.dry_run }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -z "$INPUT_CHANNEL" ]; then
-            # push: event'i — GITHUB_REF_NAME'den tag'ı parse et
-            TAG="${GITHUB_REF_NAME}"
-            VERSION="${TAG#v}"            # baştaki 'v' atılır
+          set -euo pipefail
 
-            # SemVer doğrulama (yalnızca -beta / -alpha ön-sürümlerine izin ver)
-            if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
-              echo "::error::Tag SemVer değil: $TAG (beklenen: v1.2.3 veya v1.2.3-beta.1)"
-              exit 1
-            fi
+          # Notlar: baştaki/sondaki boşluk ve boş maddeler atılır.
+          clean_notes=""
+          IFS=';' read -ra items <<< "$NOTES"
+          for it in "${items[@]:-}"; do
+            it="$(printf '%s' "$it" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+            [ -n "$it" ] || continue
+            clean_notes="${clean_notes:+$clean_notes;}$it"
+          done
 
-            case "$VERSION" in
-              *-beta*)  CHANNEL=beta ;;
-              *-alpha*) CHANNEL=alpha ;;
-              *-*)      echo "::error::Desteklenmeyen ön-sürüm son eki: $VERSION (yalnızca -beta / -alpha)"; exit 1 ;;
-              *)        CHANNEL=stable ;;
-            esac
-          else
-            # workflow_dispatch — channel zorunlu, version OPSİYONEL.
-            # Boş sürüm => scripts/next-version.sh otomatik hesaplar.
-            TAG="$(bash scripts/next-version.sh "$INPUT_CHANNEL" "$INPUT_VERSION")"
-            VERSION="${TAG#v}"
-            CHANNEL="$INPUT_CHANNEL"
+          if [ "$CHANNEL" = "stable" ] && [ -z "$clean_notes" ]; then
+            echo "::error::Stable yayında sürüm notu ZORUNLU (notlar alanını doldurun; maddeleri ; ile ayırın)."
+            exit 1
           fi
 
-          if [ "$CHANNEL" = "stable" ]; then PRE=false; else PRE=true; fi
+          TAG="$(bash scripts/next-version.sh "$CHANNEL" "$INPUT_VERSION")"
+          VERSION="${TAG#v}"
 
-          echo "tag=$TAG"           >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
-          echo "channel=$CHANNEL"   >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRE"    >> "$GITHUB_OUTPUT"
+          # Aynı tag zaten varsa yayın BAŞLAMADAN dur (derleme boşa gitmesin).
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::${TAG} etiketi zaten var. Farklı bir sürüm girin ya da boş bırakıp otomatik hesaplatın."
+            exit 1
+          fi
+
+          if [ "$CHANNEL" = "stable" ]; then PRE=false; PLATFORMS=all; else PRE=true; fi
+
+          WIN='{"platform":"windows-latest","args":"","target":"x86_64-pc-windows-msvc","rust_targets":"","label":"Windows-x64"}'
+          MAC='{"platform":"macos-latest","args":"--target universal-apple-darwin","target":"universal-apple-darwin","rust_targets":"aarch64-apple-darwin,x86_64-apple-darwin","label":"macOS-Universal"}'
+          LIN='{"platform":"ubuntu-latest","args":"","target":"x86_64-unknown-linux-gnu","rust_targets":"","label":"Linux-x64"}'
+          if [ "$PLATFORMS" = "windows-only" ]; then
+            MATRIX="{\"include\":[$WIN]}"
+            KEYS="windows-x86_64"
+          else
+            MATRIX="{\"include\":[$WIN,$MAC,$LIN]}"
+            KEYS="windows-x86_64 darwin-aarch64 darwin-x86_64 linux-x86_64"
+          fi
 
           {
-            echo "### 🚀 Yayın Bilgisi"
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "channel=$CHANNEL"
+            echo "prerelease=$PRE"
+            echo "notes=$clean_notes"
+            echo "matrix=$MATRIX"
+            echo "required_keys=$KEYS"
+            echo "dry_run=$DRY_RUN"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            if [ "$DRY_RUN" = "true" ]; then echo "### 🔍 Önizleme (hiçbir şey yayınlanmadı)"; else echo "### 🚀 Yayın Bilgisi"; fi
             echo "- **Tag:** \`$TAG\`"
-            echo "- **Sürüm:** \`$VERSION\`"
             echo "- **Kanal:** \`$CHANNEL\` (prerelease=$PRE)"
+            echo "- **Platformlar:** \`$PLATFORMS\`"
+            echo "- **Notlar:**"
+            if [ -n "$clean_notes" ]; then
+              IFS=';' read -ra n <<< "$clean_notes"
+              for x in "${n[@]}"; do echo "  - $x"; done
+            else
+              echo "  - _(girilmedi)_"
+            fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo ""
+              echo "Yayınlamak için aynı ayarlarla çalıştırın, **Sadece önizle** kutusunu kaldırın."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────────────────────────────────────────────────
-  # 2) Taslak release'i ÖNCEDEN aç
-  #
-  # Üç platform paralel derlendiği için bu adım şart: `tauri-action` release
-  # yoksa kendisi oluşturuyor ve aynı anda başlayan üç iş aynı tag'i yaratmaya
-  # çalışınca biri 422 ile düşüyor. Release'i burada tek seferde açıp aşağıya
-  # yalnızca `releaseId` geçiyoruz.
+  # 2) Taslak release'i ÖNCEDEN aç (paralel işlerin aynı tag'i yaratıp 422
+  #    almasını önler; id POST yanıtından okunur, listeye güvenilmez).
   # ────────────────────────────────────────────────────
   create-release:
     needs: prepare
+    if: needs.prepare.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.mk.outputs.release_id }}
     steps:
-      - uses: actions/checkout@v7
-
       - name: Taslak release'i oluştur (varsa yeniden kullan)
         id: mk
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
-          # Taslak release'ler `releases/tags/<tag>` ile BULUNAMIYOR (o uç nokta
-          # yalnızca yayınlanmışlara bakıyor); bu yüzden liste üzerinden arıyoruz.
-          #
-          # Ama liste uç noktası ANINDA TUTARLI DEĞİL: yeni açılan bir taslak
-          # birkaç saniye boyunca listede görünmeyebiliyor. Release'i açıp hemen
-          # ardından listede aramak tam da bu yüzden "oluşturulamadı" diye
-          # düşüyordu — release aslında oluşmuştu.
-          #
-          # Çözüm: id'yi aramıyoruz, release'i oluşturan POST'un YANITINDAN
-          # okuyoruz (`gh release create` yalnızca URL basıyor, id vermiyor;
-          # bu yüzden REST uç noktasını doğrudan çağırıyoruz). Listeye artık
-          # sadece "bu tag için taslak zaten var mı" kontrolü ve paralel bir işin
-          # release'i önce açtığı yarış durumu için başvuruyoruz.
+          # Taslaklar `releases/tags/<tag>` ile bulunamaz; liste üzerinden aranır.
+          # `head -1` KULLANILMAZ (pipefail altında SIGPIPE adımı düşürür).
           find_id() {
-            # `head -1` YOK: pipefail altında SIGPIPE (141) adımı sessizce
-            # düşürüyor. Tüm çıktıyı alıp ilk satırı bash içinde ayıklıyoruz.
             local out
             out="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
                    | jq -r --arg tag "$TAG" '[.[][] | select(.tag_name == $tag) | .id] | .[0] // empty')" \
               || return 1
             printf '%s' "${out%%$'\n'*}"
           }
-
-          # Yukarıdaki gecikmeye karşı artan beklemeyle yeniden dener.
           find_id_retry() {
             local id delay
             for delay in 0 2 4 8 15; do
@@ -170,7 +197,6 @@ jobs:
           }
 
           ID="$(find_id || true)"
-
           if [ -z "$ID" ]; then
             if RESPONSE="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases" \
                  -f "tag_name=$TAG" \
@@ -181,8 +207,6 @@ jobs:
                  -f 'body=Otomatik yayın — varlıklar yükleniyor…')"; then
               ID="$(printf '%s' "$RESPONSE" | jq -r '.id // empty')"
             else
-              # 422 already_exists: aynı tag için release başka bir yerde
-              # açılmış olabilir. Listede belirmesini bekleyip yeniden ara.
               echo "Release oluşturma isteği reddedildi, mevcut release aranıyor…"
               ID="$(find_id_retry)"
             fi
@@ -196,7 +220,8 @@ jobs:
           echo "Taslak release id: $ID"
 
   # ────────────────────────────────────────────────────
-  # 3) Derle + TASLAK release'e yükle (Windows + macOS + Linux paralel)
+  # 3) Derle + TASLAK release'e yükle (seçilen platformlar paralel)
+  #    Yalnızca release derlemesi — debug build artık yayına girmez.
   # ────────────────────────────────────────────────────
   build:
     needs: [prepare, create-release]
@@ -204,33 +229,9 @@ jobs:
       contents: write
     strategy:
       # Bir platform patlarsa diğerlerinin sonucunu da görmek istiyoruz;
-      # eksik platformu aşağıdaki manifest işi zaten yakalıyor.
+      # eksik platformu manifest işi yakalıyor.
       fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            args: ''
-            debug_args: ''
-            target: x86_64-pc-windows-msvc
-            rust-targets: ''
-            label: Windows-x64
-          # macOS: universal binary (Intel + Apple Silicon tek .app/.dmg içinde).
-          # tauri-cli, aarch64 ve x86_64 hedeflerini AYRI AYRI derleyip `lipo` ile
-          # birleştirir — bu yüzden iki rustup target'ı da kurulu olmak zorunda
-          # (aşağıdaki `rust-targets`). Debug derlemesi bilerek universal DEĞİL:
-          # yalnızca test amaçlı olduğu için CI süresini iki katına çıkarmaya değmez.
-          - platform: macos-latest
-            args: '--target universal-apple-darwin'
-            debug_args: ''
-            target: universal-apple-darwin
-            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
-            label: macOS-Universal
-          - platform: ubuntu-latest
-            args: ''
-            debug_args: ''
-            target: x86_64-unknown-linux-gnu
-            rust-targets: ''
-            label: Linux-x64
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -239,9 +240,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Tauri v2 (webkit2gtk-4.1) + native_player (gtk4 + wgpu) için sistem
-      # bağımlılıkları. libegl1-mesa-dev: wgpu'nun GLES arka ucu (Vulkan ash
-      # ile dinamik yüklenir, ama EGL için başlık gerekebilir).
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-latest'
         run: |
@@ -256,7 +254,6 @@ jobs:
             libegl1-mesa-dev \
             pkg-config
 
-      # Toolchain + sccache
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.7
 
@@ -265,17 +262,17 @@ jobs:
         with:
           node-version: lts/*
 
+      # macOS universal: iki rustup hedefi de gerekli (lipo ile birleştirilir).
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust-targets }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.x
 
-      # Cache
       - name: Cache Tauri bundler (NSIS, Wix etc.)
         if: matrix.platform == 'windows-latest'
         uses: actions/cache@v6
@@ -303,27 +300,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-
 
-      # Sürüm alanları derlemeden ÖNCE yazılıyor: paketin, ikilinin ve updater
-      # manifestinin sürümü birbirine uymak zorunda. Depodaki değer ne olursa
-      # olsun tag kazanır. `Cargo.lock` da güncelleniyor (bkz. scripts/set-version.mjs)
-      # — aksi hâlde lock dosyası "güncel değil" diye ayrı bir sorun çıkarabilir.
-      - name: Sürüm alanlarını tag ile eşitle
+      # Paketin, ikilinin ve updater manifestinin sürümü eşit olmak zorunda;
+      # depodaki değer ne olursa olsun formdaki sürüm kazanır.
+      - name: Sürüm alanlarını eşitle
         shell: bash
         run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
 
       - name: Install frontend dependencies
         run: bun install
 
-      # Stable: İMZALI derleme. tauri-action createUpdaterArtifacts=true olduğu
-      # için latest.json + .sig üretir. İmzalama secret'ları ZORUNLU; yoksa
-      # updater manifesti üretilmez ve aşağıdaki manifest işi BİLEREK patlar.
-      #
-      # macOS universal notu: tauri-action, universal bir .app.tar.gz gördüğünde
-      # latest.json'a HEM darwin-aarch64 HEM darwin-x86_64 anahtarlarını (aynı
-      # dosyayı işaret ederek) yazar. Updater istemcisi çalışma anında yalnızca
-      # `darwin-{arch}` arar, `darwin-universal` diye bir geri düşüş YOKTUR —
-      # yani tek universal paket her iki mimarideki kullanıcıya da ulaşır.
-      - name: Build & Publish (Stable, imzalı)
+      # İMZALI derleme: createUpdaterArtifacts=true → .sig üretilir. Secret
+      # yoksa manifest işi BİLEREK patlar.
+      # macOS universal: tauri-action latest.json'a darwin-aarch64 ve
+      # darwin-x86_64 anahtarlarını (aynı dosya) yazar; updater `darwin-universal`
+      # aramaz, bu yüzden iki anahtar da gerekli.
+      - name: Build & Upload (imzalı)
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -333,23 +324,8 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }} --verbose
 
-      # Debug sürümü: tauri.debug.conf.json ile override.
-      #   - createUpdaterArtifacts=false -> imza yok, bu yüzden imza anahtarı VERİLMEZ
-      #   - productName="OpenAnime-Debug" -> dosya adı stable'dan farklı olur, üzerine yazmaz
-      - name: Build & Publish (Debug)
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --debug --config src-tauri/tauri.debug.conf.json ${{ matrix.debug_args }} --verbose
-
   # ────────────────────────────────────────────────────
-  # 4) Çok platformlu updater manifestini kur ve doğrula
-  #
-  # tauri-action her işte kendi latest.json'unu yükleyip diğerlerini eziyor;
-  # bu yüzden manifesti release varlıklarından yeniden kuruyoruz
-  # (bkz. scripts/build-updater-manifest.sh).
+  # 4) Çok platformlu updater manifesti (notlarıyla) kur ve doğrula
   # ────────────────────────────────────────────────────
   updater-manifest:
     needs: [prepare, build]
@@ -362,19 +338,26 @@ jobs:
       - name: Manifesti üret
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NOTES: ${{ needs.prepare.outputs.notes }}
         run: |
-          bash scripts/build-updater-manifest.sh \
-            "${{ needs.prepare.outputs.tag }}" \
-            "${{ needs.prepare.outputs.version }}" \
-            latest.json
+          # Updater diyaloğunda gösterilecek düz metin: maddeler satır satır.
+          if [ -n "$NOTES" ]; then
+            UPDATER_NOTES="$(printf '%s' "$NOTES" | tr ';' '\n' | sed 's/^/• /')"
+          else
+            UPDATER_NOTES="$TAG sürümü"
+          fi
+          bash scripts/build-updater-manifest.sh "$TAG" "$VERSION" latest.json "$UPDATER_NOTES"
 
-      # Üç platformun da manifeste girdiğini doğruluyoruz. Eksik bir anahtar,
-      # o platformdaki kullanıcının hiç güncelleme almaması demek — sessizce
-      # geçilecek bir durum değil.
-      - name: Bütün platformlar var mı?
+      # Seçilen platformların hepsi manifeste girmeli; eksik anahtar = o
+      # platformdaki kullanıcı güncelleme almaz. Sessizce geçilmez.
+      - name: Gerekli platformlar var mı?
+        env:
+          KEYS: ${{ needs.prepare.outputs.required_keys }}
         run: |
           missing=0
-          for key in windows-x86_64 darwin-aarch64 darwin-x86_64 linux-x86_64; do
+          for key in $KEYS; do
             if ! jq -e --arg k "$key" '.platforms[$k].url' latest.json >/dev/null; then
               echo "::error::Manifestte $key eksik"
               missing=1
@@ -395,12 +378,8 @@ jobs:
           path: latest.json
 
   # ────────────────────────────────────────────────────
-  # 5) Taslak release'i canlıya al
-  #
-  # GitHub, release varlıklarını YALNIZCA alfabetik sıralar; imzalı paketlerin
-  # adı değiştirilemeyeceği için "düzgün sıra"yı açıklama metniyle çözüyoruz:
-  # kullanıcıya hangi dosyanın ne olduğu ve hangisini indirmesi gerektiği
-  # buradaki rehberle gösteriliyor.
+  # 5) Taslağı canlıya al: "Yenilikler" + indirme rehberi.
+  #    Stable → Latest; beta/alpha → prerelease.
   # ────────────────────────────────────────────────────
   publish-release:
     needs: [prepare, build, updater-manifest]
@@ -408,56 +387,66 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Sürüm notu ve dosya rehberini yaz
+      - name: Sürüm notunu yaz ve yayınla
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
           CHANNEL: ${{ needs.prepare.outputs.channel }}
+          NOTES: ${{ needs.prepare.outputs.notes }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
           case "$CHANNEL" in
-            stable) chan_tr="Stable (güncel, kararlı sürüm)" ;;
+            stable) chan_tr="Stable (kararlı sürüm)" ;;
             beta)   chan_tr="Beta (yeni özellikler erken gelir, küçük sorunlar olabilir)" ;;
             alpha)  chan_tr="Alpha (deneysel, her an bozulabilir)" ;;
           esac
 
-          cat > release-notes.md <<EOF
-          ## 🚀 OpenAnime ${TAG}
+          {
+            echo "## 🚀 OpenAnime ${TAG}"
+            echo
+            echo "> **Kanal:** ${chan_tr}"
+            echo
+            if [ -n "$NOTES" ]; then
+              echo "### ✨ Yenilikler"
+              IFS=';' read -ra items <<< "$NOTES"
+              for it in "${items[@]}"; do echo "- $it"; done
+              echo
+            fi
+            echo "### 📥 Hangi dosyayı indirmeliyim?"
+            echo "| İşletim sistemin | İndireceğin dosya |"
+            echo "|---|---|"
+            echo "| 🪟 Windows 10/11 (64-bit) | \`OpenAnime_${VERSION}_x64-setup.exe\` |"
+            echo "| 🍎 macOS (Apple Silicon & Intel) | \`OpenAnime_${VERSION}_universal.dmg\` |"
+            echo "| 🐧 Linux | \`OpenAnime_${VERSION}_amd64.AppImage\` veya \`.deb\` |"
+            echo
+            echo "<details>"
+            echo "<summary>📁 Diğer dosyalar ne işe yarar?</summary>"
+            echo
+            echo "| Dosya | Açıklama |"
+            echo "|---|---|"
+            echo "| \`*.app.tar.gz\` | Uygulama içi otomatik güncelleyicinin (macOS) kullandığı paket |"
+            echo "| \`*.sig\` | Güncelleme paketlerinin dijital imzaları — elle indirilmez |"
+            echo "| \`latest.json\` | Otomatik güncelleme manifesti |"
+            echo
+            echo "</details>"
+          } > release-notes.md
 
-          > **Kanal:** ${chan_tr}
-
-          ### 📥 Hangi dosyayı indirmeliyim?
-          | İşletim sistemin | İndireceğin dosya |
-          |---|---|
-          | 🪟 Windows 10/11 (64-bit) | \`OpenAnime_${VERSION}_x64-setup.exe\` |
-          | 🍎 macOS (Apple Silicon & Intel) | \`OpenAnime_${VERSION}_universal.dmg\` |
-          | 🐧 Linux | \`OpenAnime_${VERSION}_amd64.AppImage\` veya \`.deb\` |
-
-          <details>
-          <summary>📁 Diğer dosyalar ne işe yarar?</summary>
-
-          | Dosya | Açıklama |
-          |---|---|
-          | \`OpenAnime-Debug_*\` | Geliştirici/test derlemeleri — normal kullanıcılar indirmesin |
-          | \`*.app.tar.gz\` | Uygulama içi otomatik güncelleyicinin (macOS) kullandığı paket |
-          | \`*.sig\` | Güncelleme paketlerinin dijital imzaları — elle indirilmez |
-          | \`latest.json\` | Otomatik güncelleme manifesti |
-
-          </details>
-          EOF
+          if [ "$PRERELEASE" = "true" ]; then
+            LATEST_FLAG="--latest=false"; PRE_FLAG="--prerelease"
+          else
+            LATEST_FLAG="--latest"; PRE_FLAG="--prerelease=false"
+          fi
 
           gh release edit "$TAG" \
             --draft=false \
+            $PRE_FLAG $LATEST_FLAG \
             --notes-file release-notes.md \
             --repo "${{ github.repository }}"
 
   # ────────────────────────────────────────────────────
-  # 6) Kanal manifestini main'e commit'le
-  #
-  # Uygulama bu dosyaları okuyor: updater/latest-<kanal>.json
-  # (bkz. src-tauri/src/updater.rs). Yalnızca YAYINLANAN kanalın dosyası
-  # güncelleniyor — Stable kanalı seçen kullanıcının alpha/beta sürümü
-  # görmemesinin tek ve yeterli sebebi bu.
+  # 6) Kanal manifestini main'e yaz (GitHub API → "Verified" commit).
+  #    Yalnızca yayınlanan kanalın dosyası güncellenir.
   # ────────────────────────────────────────────────────
   update-channel-manifest:
     needs: [prepare, updater-manifest, publish-release]
@@ -465,37 +454,58 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: main
-
       - name: Birleştirilmiş manifesti indir
         uses: actions/download-artifact@v7
         with:
           name: updater-manifest
           path: manifest-artifact
 
-      - name: Kanal dosyasına yerleştir
+      - name: Kanal dosyasını commit'le
+        shell: bash
         env:
-          CHANNEL: ${{ needs.prepare.outputs.channel }}
-        run: |
-          mkdir -p updater
-          cp manifest-artifact/latest.json "updater/latest-${CHANNEL}.json"
-          rm -rf manifest-artifact
-
-      - name: Değişikliği main'e commit'le
-        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHANNEL: ${{ needs.prepare.outputs.channel }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          if [ -f "updater/latest-${CHANNEL}.json" ]; then
-            git config user.name  "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add "updater/latest-${CHANNEL}.json"
-            git commit -m "chore(updater): ${CHANNEL} kanal manifestini ${TAG} olarak güncelle [skip ci]" \
-              || echo "Değişiklik yok, commit edilmedi."
-            git push origin main || { echo "::error::git push başarısız oldu"; exit 1; }
+          set -euo pipefail
+          FILE="updater/latest-${CHANNEL}.json"
+          CONTENT="$(base64 -w0 manifest-artifact/latest.json)"
+          for attempt in 1 2 3; do
+            SHA="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${FILE}?ref=main" --jq .sha 2>/dev/null || true)"
+            args=(-X PUT "repos/${GITHUB_REPOSITORY}/contents/${FILE}"
+                  -f "message=chore(updater): ${CHANNEL} kanal manifestini ${TAG} olarak güncelle [skip ci]"
+                  -f "content=${CONTENT}" -f "branch=main")
+            [ -n "$SHA" ] && args+=(-f "sha=${SHA}")
+            if gh api "${args[@]}" >/dev/null; then
+              echo "✅ ${FILE} güncellendi (${TAG})"
+              exit 0
+            fi
+            echo "Deneme $attempt başarısız (eşzamanlı değişiklik olabilir), yeniden…"
+            sleep $((attempt * 3))
+          done
+          echo "::error::Kanal manifesti main'e yazılamadı."
+          exit 1
+
+  # ────────────────────────────────────────────────────
+  # 7) Hata/iptal olursa YARIM kalan TASLAK release'i sil.
+  #    Yayınlanmış (draft=false) bir release'e asla dokunmaz.
+  # ────────────────────────────────────────────────────
+  cleanup:
+    needs: [create-release, build, updater-manifest, publish-release, update-channel-manifest]
+    if: ${{ always() && (failure() || cancelled()) && needs.create-release.outputs.release_id != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Taslak release'i temizle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          DRAFT="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${ID}" --jq .draft 2>/dev/null || echo gone)"
+          if [ "$DRAFT" = "true" ]; then
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${ID}"
+            echo "🧹 Yarım kalan taslak release silindi (id=${ID})."
           else
-            echo "::error::Kanal manifesti hazırlanamadı."
-            exit 1
+            echo "Release taslak değil ($DRAFT); dokunulmadı."
           fi
