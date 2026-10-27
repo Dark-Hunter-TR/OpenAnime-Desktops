@@ -1883,27 +1883,18 @@ fn get_super_opening_video_url(
     Ok(format!("http://127.0.0.1:{}/local-video?path={}&t={}", port, encoded, state.token))
 }
 
-#[derive(serde::Serialize)]
-struct SuperOpeningMedia {
-    data: String,
-    mime: String,
-}
-
 /// Süper Açılış MP4 videosunu (super_logo varyantı) doğrudan Tauri IPC
-/// üzerinden (ağ isteği YOK) JS'e base64 olarak taşır. `muptezel_anime`
+/// üzerinden (ağ isteği YOK) HAM BAYT olarak JS'e taşır — base64/JSON katmanı
+/// yok (≈%33 daha az veri, kodlama/çözme CPU'su yok). `muptezel_anime`
 /// varyantı bu komutu hiç çağırmaz — o Canvas ile render edilir.
-/// `get_super_opening_video_url`'in aksine bu bir HTTP isteği değil — bu
-/// yüzden Private Network Access / mixed-content gibi tarayıcı
-/// korumalarına hiç takılmaz. JS tarafı base64'ü dönen `mime` tipine göre
-/// Blob'a çevirip `<video>` öğesine verir.
+/// Bir HTTP isteği olmadığı için Private Network Access / mixed-content
+/// korumalarına takılmaz. Tüm medya adayları video/mp4'tür.
 #[tauri::command]
-fn get_super_opening_video_data(app: tauri::AppHandle, variant: String) -> Result<SuperOpeningMedia, String> {
-    use base64::Engine;
-
+async fn get_super_opening_video_data(app: tauri::AppHandle, variant: String) -> Result<tauri::ipc::Response, String> {
     let (path, mime) = resolve_super_opening_video_path(&app, media_names_for_variant(&variant))
         .ok_or_else(|| "No super opening video file found on disk".to_string())?;
 
-    let bytes = std::fs::read(&path).map_err(|e| {
+    let bytes = tokio::fs::read(&path).await.map_err(|e| {
         format!("Video dosyası okunamadı ({}): {}", path.to_string_lossy(), e)
     })?;
 
@@ -1914,10 +1905,7 @@ fn get_super_opening_video_data(app: tauri::AppHandle, variant: String) -> Resul
         mime
     );
 
-    Ok(SuperOpeningMedia {
-        data: base64::engine::general_purpose::STANDARD.encode(&bytes),
-        mime: mime.to_string(),
-    })
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// ────────────────────────────────────────────────────────────

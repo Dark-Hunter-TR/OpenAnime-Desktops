@@ -276,6 +276,12 @@
         if (overlay.parentNode) {
           overlay.parentNode.removeChild(overlay);
         }
+        // Canvas varyantı: WebGL kaynaklarını serbest bırak (fade bittikten SONRA —
+        // bağlam kaybı çizimi silerdi).
+        if (typeof overlay._oaDispose === "function") {
+          try { overlay._oaDispose(); } catch (e) {}
+          overlay._oaDispose = null;
+        }
       }, 550);
     }
 
@@ -292,53 +298,27 @@
       return;
     }
 
-    // Medya baytlarını Rust'tan DOĞRUDAN Tauri IPC ile al — 127.0.0.1'e HTTP
-    // isteği YOK. `openani.me` PUBLIC bir https sayfası olduğundan,
-    // WebView2/Chromium'un Private Network Access koruması ona giden
-    // 127.0.0.1 <video src> isteklerini SESSİZCE engelliyordu (video hiç
-    // görünmüyordu — hata bile fırlatmıyordu). IPC bir ağ isteği olmadığı
-    // için bu korumaya hiç takılmaz. Rust tarafı dosyayı video/mp4 MIME
-    // tipiyle birlikte döner. Çözülen payload aynı uygulama oturumu boyunca
-    // sessionStorage'da CACHE'lenir (tekrar dosya okuma+encode+IPC
-    // round-trip'i gerekmez); uygulama tamamen kapanıp yeniden açıldığında
-    // sessionStorage zaten temizlenmiş olur.
-    const VIDEO_DATA_CACHE_KEY = `tauri-super-opening-media-cache-${variant}`;
-
-    function base64ToObjectUrl(base64, mime) {
-      const binary = atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      return URL.createObjectURL(new Blob([bytes], { type: mime }));
-    }
-
+    // Medya baytlarını Rust'tan DOĞRUDAN Tauri IPC ile (ham ikili yanıt) al —
+    // 127.0.0.1'e HTTP isteği YOK: `openani.me` PUBLIC bir https sayfası
+    // olduğundan WebView2'nin Private Network Access koruması o istekleri
+    // SESSİZCE engelliyordu. Base64/JSON/sessionStorage katmanı kaldırıldı:
+    // açılış oturum başına tek kez oynadığı için önbelleğin hiçbir işe yaradığı
+    // yoktu, yalnızca ~1.6 MB RAM tutuyordu.
     async function requestMedia() {
-      let cached = null;
+      if (!(window.__TAURI__ && window.__TAURI__.core)) return null;
+      let buf;
       try {
-        const raw = sessionStorage.getItem(VIDEO_DATA_CACHE_KEY);
-        if (raw) cached = JSON.parse(raw);
-      } catch (e) {}
-
-      let media = cached;
-      if (!media) {
-        if (!(window.__TAURI__ && window.__TAURI__.core)) return null;
-        try {
-          media = await window.__TAURI__.core.invoke("get_super_opening_video_data", { variant });
-        } catch (e) {
-          console.warn("[Süper Açılış] Medya verisi alınamadı:", e);
-          return null;
-        }
-        if (media && media.data && media.mime) {
-          try { sessionStorage.setItem(VIDEO_DATA_CACHE_KEY, JSON.stringify(media)); } catch (e) {}
-        }
+        buf = await window.__TAURI__.core.invoke("get_super_opening_video_data", { variant });
+      } catch (e) {
+        console.warn("[Süper Açılış] Medya verisi alınamadı:", e);
+        return null;
       }
-
-      if (!media || !media.data || !media.mime) return null;
+      if (!buf || !buf.byteLength) return null;
       try {
-        const url = base64ToObjectUrl(media.data, media.mime);
-        return { url, mime: media.mime };
+        const url = URL.createObjectURL(new Blob([buf], { type: "video/mp4" }));
+        return { url, mime: "video/mp4" };
       } catch (e) {
         console.warn("[Süper Açılış] Medya verisi çözümlenemedi:", e);
-        try { sessionStorage.removeItem(VIDEO_DATA_CACHE_KEY); } catch (e2) {}
         return null;
       }
     }
@@ -379,9 +359,6 @@
     });
     video.addEventListener("error", (err) => {
       console.warn("[Süper Açılış] Video oynatılırken hata:", err, video.error);
-      // Cache'lenmiş payload bozuk/geçersiz olabilir — sonraki denemenin
-      // taze veri istemesi için sil.
-      try { sessionStorage.removeItem(VIDEO_DATA_CACHE_KEY); } catch (e) {}
       cleanupObjectUrl();
       finishOpening();
     });
@@ -457,6 +434,7 @@
         resolve();
         return;
       }
+      overlay._oaDispose = engine.dispose;
 
       // TEK gerçek kaynak: açılış animasyonu KESİN OLARAK INTRO_DURATION_MS
       // (3 saniye) sürer. Bitiş koşulu SADECE geçen süreye bakar — "N döngü
