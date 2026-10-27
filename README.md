@@ -78,7 +78,7 @@ flowchart TB
 | **Native Çekirdek** | `src-tauri/src/*.rs` | Pencere & tepsi, GPU anahtarlama, performans modu, bağlantı kurtarma, Discord RPC, bildirimler, yerel video sunucusu, güncelleme, IPC komutları |
 | **Arayüz Modülleri** | `src-tauri/src/js/` | Webview'a enjekte edilen özel titlebar, kısayollar, zoom, link filtreleme, önbellek, tema ve yerel kütüphane katmanları |
 | **SvelteKit Kabuğu** | `src/` | Çevrimdışı/splash ekranları ve statik kabuk (offline navigasyon hedefi) |
-| **CI/CD** | `.github/workflows/` | Windows & macOS için otomatik derleme/yayınlama |
+| **CI/CD** | `.github/workflows/` | Windows, macOS & Linux için derleme, yayınlama ve geri çekme |
 
 ---
 
@@ -272,7 +272,6 @@ macOS'ta yayınlanan paketlerle birebir aynı **evrensel (Intel + Apple Silicon)
 ```bash
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 bun run tauri build --target universal-apple-darwin
-# npm ile: npm run tauri -- build --target universal-apple-darwin
 ```
 
 Çıktı: `src-tauri/target/universal-apple-darwin/release/bundle/dmg/OpenAnime_<sürüm>_universal.dmg`
@@ -281,14 +280,11 @@ bun run tauri build --target universal-apple-darwin
 
 ## <img src="https://api.iconify.design/fluent/cloud-24-filled.svg?color=%2362cdfe&width=26&height=26" width="26" />&nbsp; CI/CD — Otomatik Bulut Derleme
 
-Her platforma yerel erişiminiz yoksa `.github/workflows/` altındaki GitHub Actions iş akışlarını kullanabilirsiniz. Bir sürüm etiketi (tag) push edildiğinde Windows ve macOS runner'ları paketleri otomatik derler:
+Her platforma yerel erişiminiz yoksa `.github/workflows/` altındaki GitHub Actions iş akışlarını kullanabilirsiniz. Tüm iş akışları **Actions** sekmesinden elle (workflow_dispatch) başlatılır:
 
-```bash
-git tag v1.0.2
-git push origin v1.0.2
-```
-
-Derleme tamamlandığında kurulum dosyaları deponun **Releases** sekmesinde otomatik yayınlanır. Ayrıca `🧪 Test Build` iş akışı **workflow_dispatch** ile elle tetiklenebilir (platform ve build modu seçilerek).
+- **🚀 Publish** — sürüm yayınlar. Form: kanal (beta/alpha/stable), sürüm (boşsa otomatik), `;` ile ayrılmış sürüm notları (stable için zorunlu), platformlar ve "Sadece önizle" kutusu. Windows, macOS ve Linux paketleri derlenir, notlar release metnine ve updater manifestine yazılır.
+- **⚠️ Geri Çek** — sorunlu bir sürümü geri çeker (release'e uyarı yazar, kanal manifestini önceki sağlam sürüme döndürür).
+- **🧪 Test Build** — yayın yapmadan deneme derlemesi (platform + mod seçilir, çıktı artifact olarak indirilir).
 
 ---
 

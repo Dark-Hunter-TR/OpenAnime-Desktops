@@ -1140,6 +1140,14 @@ pub(crate) fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<()
     let parsed_url = url.parse::<tauri::Url>()
         .map_err(|e| format!("Invalid URL: {}", e))?;
 
+    // Yalnızca http(s): file:, javascript:, tauri: gibi şemalar yeni pencerede
+    // açılmaz. (Dış https adresleri bilerek hâlâ uygulama içinde açılır — dış
+    // giriş sağlayıcıları vb. akışlar buna dayanıyor; bu pencerelerde IPC yok,
+    // capability yalnızca openani.me için tanımlı.)
+    if !matches!(parsed_url.scheme(), "http" | "https") {
+        return Err(format!("Desteklenmeyen URL şeması: {}", parsed_url.scheme()));
+    }
+
     let app_handle = app.clone();
     let win_builder = WebviewWindowBuilder::new(
         app,
@@ -1784,6 +1792,13 @@ fn get_local_video_port(state: tauri::State<'_, Arc<local_video_server::LocalVid
     Ok(*port)
 }
 
+/// Yerel video sunucusunun bu oturuma özel erişim anahtarı. Her istekte
+/// `&t=<anahtar>` olarak gönderilmek zorunda; anahtarsız istek 403 alır.
+#[tauri::command]
+fn get_local_video_token(state: tauri::State<'_, Arc<local_video_server::LocalVideoState>>) -> String {
+    state.token.clone()
+}
+
 /// "super_logo" varyantının olası dosya adları — SADECE MP4.
 const SUPER_LOGO_MEDIA_NAMES: &[(&str, &str)] = &[
     ("superlogo.mp4", "video/mp4"),
@@ -1865,7 +1880,7 @@ fn get_super_opening_video_url(
         .ok_or_else(|| "No super opening video file found on disk".to_string())?;
     let path_str = path.to_string_lossy().to_string();
     let encoded = percent_encoding::utf8_percent_encode(&path_str, percent_encoding::NON_ALPHANUMERIC).to_string();
-    Ok(format!("http://127.0.0.1:{}/local-video?path={}", port, encoded))
+    Ok(format!("http://127.0.0.1:{}/local-video?path={}&t={}", port, encoded, state.token))
 }
 
 #[derive(serde::Serialize)]
@@ -1942,6 +1957,11 @@ async fn pick_mp4_file() -> Result<String, String> {
 #[tauri::command]
 async fn read_file_head(path: String, max_bytes: u32) -> Result<Vec<u8>, String> {
     use tokio::io::AsyncReadExt;
+
+    // Yalnızca video/medya uzantılı dosyalar — uzaktan sayfa keyfi dosya okuyamasın.
+    if !local_video_server::has_media_extension(&path) {
+        return Err("Desteklenmeyen dosya türü".to_string());
+    }
 
     let mut file = tokio::fs::File::open(&path)
         .await
@@ -2555,6 +2575,7 @@ pub fn run() {
             close_window_label,
             // 🎥 Local video server — port sorgula & süper açılış videosu
             get_local_video_port,
+            get_local_video_token,
             get_super_opening_video_url,
             get_super_opening_video_data,
             // "???"

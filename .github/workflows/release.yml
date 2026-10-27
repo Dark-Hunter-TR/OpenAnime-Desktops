@@ -52,8 +52,9 @@ concurrency:
   group: publish
   cancel-in-progress: false
 
+# Varsayılan salt-okunur; yazma yetkisi yalnızca ihtiyacı olan job'larda.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -167,6 +168,8 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       release_id: ${{ steps.mk.outputs.release_id }}
     steps:
@@ -304,7 +307,9 @@ jobs:
       # depodaki değer ne olursa olsun formdaki sürüm kazanır.
       - name: Sürüm alanlarını eşitle
         shell: bash
-        run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/set-version.mjs "$VERSION"
 
       - name: Install frontend dependencies
         run: bun install
@@ -368,9 +373,10 @@ jobs:
       - name: Manifesti release'e yükle
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          gh release upload "${{ needs.prepare.outputs.tag }}" latest.json \
-            --repo "${{ github.repository }}" --clobber
+          gh release upload "$TAG" latest.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
 
       - uses: actions/upload-artifact@v7
         with:
@@ -442,7 +448,7 @@ jobs:
             --draft=false \
             $PRE_FLAG $LATEST_FLAG \
             --notes-file release-notes.md \
-            --repo "${{ github.repository }}"
+            --repo "$GITHUB_REPOSITORY"
 
   # ────────────────────────────────────────────────────
   # 6) Kanal manifestini main'e yaz (GitHub API → "Verified" commit).

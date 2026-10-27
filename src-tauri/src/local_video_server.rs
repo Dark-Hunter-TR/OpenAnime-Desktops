@@ -21,11 +21,53 @@
 /// ────────────────────────────────────────────────────────────
 
 use regex::Regex;
+use std::collections::HashSet;
+use std::hash::{BuildHasher, Hasher};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use tiny_http::{Header, Response, Server, StatusCode};
+
+/// Sunucunun servis edebileceği dosya uzantıları (küçük harf). Yerel video
+/// seçicisinin kabul ettiği uzantılar + HLS parçaları. Bunların dışındaki
+/// hiçbir dosya (belge, anahtar, kimlik bilgisi…) bu sunucudan okunamaz.
+const MEDIA_EXTS: &[&str] = &[
+    "mp4", "m4v", "mkv", "webm", "avi", "mov", "wmv", "flv", "3gp", "ogv", "ogg", "mpg",
+    "mpeg", "ts", "m2ts", "mts", "m3u8", "m4s", "aac", "ac3",
+];
+
+/// Yol, izin verilen bir medya uzantısına mı sahip? (`read_file_head` da kullanır.)
+pub fn has_media_extension(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| MEDIA_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// Origin başlığı yalnızca openani.me (ve alt alanları) ise kabul edilir.
+fn origin_allowed(origin: &str) -> bool {
+    origin == "https://openani.me"
+        || (origin.starts_with("https://") && origin.ends_with(".openani.me"))
+}
+
+static URI_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"URI="([^"]*)""#).unwrap());
+
+/// Her açılışta üretilen rastgele erişim anahtarı (128 bit). OS'tan tohumlanan
+/// `RandomState` ile türetilir; dışarıdan tahmin edilemez.
+fn generate_token() -> String {
+    let mut out = String::with_capacity(32);
+    for i in 0..2u64 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(i);
+        if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            h.write_u128(d.as_nanos());
+        }
+        out.push_str(&format!("{:016x}", h.finish()));
+    }
+    out
+}
 
 // ════════════════════════════════════════════════════════════
 // STATE
@@ -34,12 +76,37 @@ use tiny_http::{Header, Response, Server, StatusCode};
 /// Paylaşılan durum — port + videoId → dosya yolu eşlemesi
 pub struct LocalVideoState {
     pub port: Mutex<u16>,
+    /// Her istekte `t=` parametresiyle gelmek zorunda olan gizli anahtar.
+    pub token: String,
+    /// Sunucunun yeniden yazdığı HLS playlist'lerinin atıf yaptığı ek dosyalar
+    /// (anahtar/init gibi uzantısı medya olmayanlar). Yalnızca playlist'ten gelir.
+    extra_allowed: Mutex<HashSet<String>>,
 }
 
 impl LocalVideoState {
     pub fn new() -> Self {
         Self {
             port: Mutex::new(0),
+            token: generate_token(),
+            extra_allowed: Mutex::new(HashSet::new()),
+        }
+    }
+
+    fn path_allowed(&self, path: &str) -> bool {
+        has_media_extension(path)
+            || self
+                .extra_allowed
+                .lock()
+                .map(|set| set.contains(path))
+                .unwrap_or(false)
+    }
+
+    fn allow_extra(&self, path: &str) {
+        if let Ok(mut set) = self.extra_allowed.lock() {
+            if set.len() > 50_000 {
+                set.clear();
+            }
+            set.insert(path.to_string());
         }
     }
 }
@@ -63,35 +130,58 @@ pub fn start_server(state: &Arc<LocalVideoState>) -> Result<u16, String> {
     // State'i thread'lere geçir
     let shared_state = state.clone();
 
-    // Thread pool — 4 thread ile eşzamanlı istekleri işle
     thread::spawn(move || {
-        let _state = shared_state;
         for request in server.incoming_requests() {
             let url = request.url().to_string();
             let headers = request.headers().iter()
                 .map(|h| (h.field.to_string().to_lowercase(), String::from_utf8_lossy(h.value.as_bytes()).to_string()))
                 .collect::<Vec<_>>();
+            let st = shared_state.clone();
 
             thread::spawn(move || {
+                let header_of = |name: &str| {
+                    headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+                };
+                let origin = header_of("origin");
+
+                // Kötü niyetli bir sayfadan gelen istek: Origin varsa openani.me olmalı.
+                if let Some(ref o) = origin {
+                    if !origin_allowed(o) {
+                        let _ = request.respond(Response::from_string("Forbidden").with_status_code(403));
+                        return;
+                    }
+                }
+
                 if url == "/" || url == "/ping" {
                     let resp = Response::from_string("OK")
-                        .with_header(cors_header());
+                        .with_header(cors_header(origin.as_deref()));
                     let _ = request.respond(resp);
                     return;
                 }
 
                 if url.starts_with("/local-video") {
                     let query = url.split('?').nth(1).unwrap_or("");
+
+                    // Erişim anahtarı yoksa/yanlışsa dosyaya hiç dokunma.
+                    if extract_query_param(query, "t").as_deref() != Some(st.token.as_str()) {
+                        let _ = request.respond(Response::from_string("Forbidden").with_status_code(403));
+                        return;
+                    }
+
                     let file_path = extract_query_param(query, "path");
-                    let range_header = headers.iter()
-                        .find(|(k, _)| k == "range")
-                        .map(|(_, v)| v.clone());
+                    let range_header = header_of("range");
 
                     if let Some(ref path) = file_path {
+                        if !st.path_allowed(path) {
+                            let _ = request.respond(
+                                Response::from_string("Forbidden: desteklenmeyen dosya türü").with_status_code(403),
+                            );
+                            return;
+                        }
                         if is_hls_playlist(path) {
-                            serve_playlist(request, path);
+                            serve_playlist(request, path, &st, origin.as_deref());
                         } else {
-                            serve_file(request, path, range_header);
+                            serve_file(request, path, range_header, origin.as_deref());
                         }
                     } else {
                         let resp = Response::from_string("HATA: 'path' parametresi gerekli")
@@ -114,8 +204,16 @@ pub fn start_server(state: &Arc<LocalVideoState>) -> Result<u16, String> {
 // YARDIMCILAR
 // ════════════════════════════════════════════════════════════
 
-fn cors_header() -> Header {
-    Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap()
+/// CORS yalnızca izin verilen Origin'e yansıtılır (`*` YOK). Origin yoksa
+/// (medya öğesi doğrudan istiyorsa) tarayıcı CORS aramaz; yalnız Vary döner.
+fn cors_header(origin: Option<&str>) -> Header {
+    match origin {
+        Some(o) if origin_allowed(o) => {
+            Header::from_bytes(&b"Access-Control-Allow-Origin"[..], o.as_bytes())
+                .unwrap_or_else(|_| Header::from_bytes(&b"Vary"[..], &b"Origin"[..]).unwrap())
+        }
+        _ => Header::from_bytes(&b"Vary"[..], &b"Origin"[..]).unwrap(),
+    }
 }
 
 fn extract_query_param(query: &str, name: &str) -> Option<String> {
@@ -166,9 +264,10 @@ fn serve_file(
     request: tiny_http::Request,
     file_path: &str,
     range_header: Option<String>,
+    origin: Option<&str>,
 ) {
     let mime = get_mime_type(file_path);
-    let cors = cors_header();
+    let cors = cors_header(origin);
 
     // Dosya metadata
     let metadata = match std::fs::metadata(file_path) {
@@ -187,12 +286,38 @@ fn serve_file(
     // ── Range isteği var mı? (seeking) ──
     if let Some(ref range) = range_header {
         if let Some(range_val) = range.strip_prefix("bytes=") {
-            let parts: Vec<&str> = range_val.split('-').collect();
-            let start: u64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-            let end: u64 = if parts.len() > 1 && !parts[1].is_empty() {
-                parts[1].parse().unwrap_or(file_size - 1)
-            } else {
-                file_size - 1
+            // "a-b", "a-" ve "-n" (son n bayt) biçimleri; geçersiz/çakışan aralık → 416.
+            let parsed: Option<(u64, u64)> = (|| {
+                if file_size == 0 {
+                    return None;
+                }
+                let (a, b) = range_val.split_once('-')?;
+                let last = file_size - 1;
+                let (start, end) = if a.is_empty() {
+                    let n: u64 = b.parse().ok()?;
+                    if n == 0 {
+                        return None;
+                    }
+                    (file_size.saturating_sub(n), last)
+                } else {
+                    let start: u64 = a.parse().ok()?;
+                    let end: u64 = if b.is_empty() { last } else { b.parse().ok()? };
+                    (start, end.min(last))
+                };
+                if start > end || start >= file_size {
+                    return None;
+                }
+                Some((start, end))
+            })();
+
+            let Some((start, end)) = parsed else {
+                let resp = Response::from_string("Range Not Satisfiable")
+                    .with_status_code(416)
+                    .with_header(
+                        Header::from_bytes(&b"Content-Range"[..], format!("bytes */{}", file_size).as_bytes()).unwrap(),
+                    );
+                let _ = request.respond(resp);
+                return;
             };
 
             let content_length = end - start + 1;
@@ -272,8 +397,13 @@ fn serve_file(
 // gerçek konuma göre çözüp yine /local-video?path=... sarmalayıcısına
 // çevirmek. Böylece hls.js her parçayı da bizim server'dan ister ve
 // Range/CORS zaten var olan serve_file() yolundan geçer.
-fn serve_playlist(request: tiny_http::Request, file_path: &str) {
-    let cors = cors_header();
+fn serve_playlist(
+    request: tiny_http::Request,
+    file_path: &str,
+    state: &LocalVideoState,
+    origin: Option<&str>,
+) {
+    let cors = cors_header(origin);
 
     let raw = match std::fs::read_to_string(file_path) {
         Ok(s) => s,
@@ -286,7 +416,7 @@ fn serve_playlist(request: tiny_http::Request, file_path: &str) {
     };
 
     let base_dir = Path::new(file_path).parent().unwrap_or_else(|| Path::new(""));
-    let rewritten = rewrite_playlist(&raw, base_dir);
+    let rewritten = rewrite_playlist(&raw, base_dir, state);
     let bytes = rewritten.into_bytes();
     let len = bytes.len();
 
@@ -309,8 +439,7 @@ fn serve_playlist(request: tiny_http::Request, file_path: &str) {
 /// (segment ya da alt-varyant .m3u8 — master/media playlist farkı gözetmeye
 /// gerek yok, ikisi de aynı kuralla çözülür). `#EXT-X-KEY` / `#EXT-X-MAP`
 /// gibi etiket satırlarındaki `URI="..."` alanı da ayrıca çözülür.
-fn rewrite_playlist(content: &str, base_dir: &Path) -> String {
-    let key_re = Regex::new(r#"URI="([^"]*)""#).unwrap();
+fn rewrite_playlist(content: &str, base_dir: &Path, state: &LocalVideoState) -> String {
     let mut out = String::with_capacity(content.len() + 256);
 
     for line in content.lines() {
@@ -321,15 +450,15 @@ fn rewrite_playlist(content: &str, base_dir: &Path) -> String {
         }
         if trimmed.starts_with('#') {
             if trimmed.contains("URI=\"") {
-                let replaced = key_re.replace(line, |caps: &regex::Captures| {
-                    format!("URI=\"{}\"", resolve_uri(base_dir, &caps[1]))
+                let replaced = URI_RE.replace(line, |caps: &regex::Captures| {
+                    format!("URI=\"{}\"", resolve_uri(base_dir, &caps[1], state))
                 });
                 out.push_str(&replaced);
             } else {
                 out.push_str(line);
             }
         } else {
-            out.push_str(&resolve_uri(base_dir, trimmed));
+            out.push_str(&resolve_uri(base_dir, trimmed, state));
         }
         out.push('\n');
     }
@@ -339,12 +468,21 @@ fn rewrite_playlist(content: &str, base_dir: &Path) -> String {
 /// Playlist içindeki bir URI değerini (segment/alt-playlist/anahtar/init) diskteki
 /// gerçek dosyaya göre çözüp `/local-video?path=...` sarmalayıcısına çevirir.
 /// Zaten mutlak bir HTTP(S) URL ise ya da zaten bizim sarmalayıcımızsa dokunmaz.
-fn resolve_uri(base_dir: &Path, value: &str) -> String {
+fn resolve_uri(base_dir: &Path, value: &str, state: &LocalVideoState) -> String {
     if value.starts_with("http://") || value.starts_with("https://") || value.starts_with("/local-video") {
         return value.to_string();
     }
     let joined = base_dir.join(value);
     let abs = joined.to_string_lossy().to_string();
+    // Playlist'in atıf yaptığı dosya (anahtar/init dahil) bu oturumda servis
+    // edilebilir — yalnızca playlist klasörünün İÇİNDEKİ göreli yollar için
+    // (mutlak yol ya da `..` ile dışarı çıkan atıf istisna açmaz).
+    let rel = Path::new(value);
+    let stays_inside = !rel.is_absolute()
+        && !rel.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::Prefix(_)));
+    if stays_inside {
+        state.allow_extra(&abs);
+    }
     let encoded = percent_encoding::utf8_percent_encode(&abs, percent_encoding::NON_ALPHANUMERIC).to_string();
-    format!("/local-video?path={}", encoded)
+    format!("/local-video?path={}&t={}", encoded, state.token)
 }

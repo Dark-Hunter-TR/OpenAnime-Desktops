@@ -434,11 +434,15 @@
       } catch (e) { return {}; }
     }
 
+    var _lastFormMemoryJson = null;
     function saveFormMemory(data) {
       try {
         var keys = Object.keys(data);
         while (keys.length > FORM_MEMORY_MAX) { delete data[keys.shift()]; }
-        sessionStorage.setItem(FORM_MEMORY_KEY, JSON.stringify(data));
+        var json = JSON.stringify(data);
+        if (json === _lastFormMemoryJson) return; // değişmemiş snapshot — yazma
+        _lastFormMemoryJson = json;
+        sessionStorage.setItem(FORM_MEMORY_KEY, json);
       } catch (e) {}
     }
 
@@ -927,9 +931,13 @@
       try { localStorage.setItem(SITE_KEY, JSON.stringify(c)); } catch (e) {}
     }
 
+    var _lastProcessedSig = null;
     function learnFromProcessedTable() {
       var rows = document.querySelectorAll("tr");
       if (!rows.length) return false;
+      var sig = rows.length + "|" + (rows[rows.length - 1].textContent || "");
+      if (sig === _lastProcessedSig) return false; // tablo değişmedi
+      _lastProcessedSig = sig;
       var cache = loadSiteCache();
       var changed = false;
       var re = /^(.*?)\s*(\d+)\.\s*Sezon\s+(\d+)\.\s*Bölüm/i;
@@ -2213,6 +2221,7 @@
       // GÜVENLİK AĞI: lightSync aynı interval'de — observer bir mutasyonu
       // kaçırsaydı bile gruplama/panel en geç 2 sn içinde kendini onarır.
       setInterval(function () {
+        if (document.hidden) return;
         lightSync();
         if (onDashboardRoute() && !_restoringPlayer) {
           saveFormSnapshot();

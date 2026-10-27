@@ -2,28 +2,36 @@
 
 {
 let isUpdateInProgress = false;
+// Progress listener'ın güncel modal overlay'i (her açılışta güncellenir)
+let activeUpdateOverlay = null;
 
 // LocalStorage varsayılan değerlerini başlat (İlk kurulum / İlk açılış)
-if (localStorage.getItem("tauri-updater-auto-check") === null) {
-  localStorage.setItem("tauri-updater-auto-check", "true");
-}
+try {
+  if (localStorage.getItem("tauri-updater-auto-check") === null) {
+    localStorage.setItem("tauri-updater-auto-check", "true");
+  }
+} catch (_) {}
 // İlk açılışta kanal, KURULU sürümün kanalından türetilir (1.2.0-beta.1 → beta,
 // 1.2.0-alpha.1 → alpha, 1.2.0 → release). Sonrasında yalnızca kullanıcı
 // değiştirir; bu blok kayıtlı bir tercihi ASLA ezmez.
-if (localStorage.getItem("tauri-updater-channel") === null) {
-  const initChannel = (ver) => {
-    const v = String(ver || "");
-    const chan = v.includes("-alpha") ? "alpha" : v.includes("-beta") ? "beta" : "release";
-    if (localStorage.getItem("tauri-updater-channel") === null) {
-      localStorage.setItem("tauri-updater-channel", chan);
+try {
+  if (localStorage.getItem("tauri-updater-channel") === null) {
+    const initChannel = (ver) => {
+      const v = String(ver || "");
+      const chan = v.includes("-alpha") ? "alpha" : v.includes("-beta") ? "beta" : "release";
+      try {
+        if (localStorage.getItem("tauri-updater-channel") === null) {
+          localStorage.setItem("tauri-updater-channel", chan);
+        }
+      } catch (_) {}
+    };
+    try {
+      window.__TAURI__.core.invoke("get_app_version").then(initChannel).catch(() => initChannel(""));
+    } catch (_) {
+      initChannel("");
     }
-  };
-  try {
-    window.__TAURI__.core.invoke("get_app_version").then(initChannel).catch(() => initChannel(""));
-  } catch (_) {
-    initChannel("");
   }
-}
+} catch (_) {}
 
 // Fluent System Icons (fluenticons.co)
 const downloadIconSvg = `
@@ -1158,6 +1166,7 @@ function showUpdateModal(version, changelog, date, sourceLabel) {
     }
   });
 
+  activeUpdateOverlay = overlay;
   setupProgressListener(overlay);
 }
 
@@ -1180,10 +1189,11 @@ function setupProgressListener(modalElement = null) {
         updateStatus(`Hata: ${data.message}`, "error");
       }
 
-      if (modalElement && document.getElementById("tauri-updater-modal-overlay")) {
-        const modalBar = modalElement.querySelector("#modal-updater-progress-bar");
-        const modalPercent = modalElement.querySelector("#modal-updater-percent-text");
-        const modalStatus = modalElement.querySelector("#modal-updater-status-text");
+      const modalEl = activeUpdateOverlay;
+      if (modalEl && document.getElementById("tauri-updater-modal-overlay")) {
+        const modalBar = modalEl.querySelector("#modal-updater-progress-bar");
+        const modalPercent = modalEl.querySelector("#modal-updater-percent-text");
+        const modalStatus = modalEl.querySelector("#modal-updater-status-text");
 
         if (modalBar) modalBar.style.width = `${percent}%`;
         if (modalPercent) modalPercent.textContent = `${percent}%`;
@@ -1208,7 +1218,7 @@ function setupProgressListener(modalElement = null) {
           }
         }
       }
-    });
+    }).catch(function(e){ console.warn("[Updater] listen hatası", e); });
     window.hasUpdateProgressListener = true;
   }
 }

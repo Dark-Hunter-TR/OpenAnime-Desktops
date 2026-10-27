@@ -62,6 +62,8 @@
           clearInterval(rec.id);
           rec.id = null;
         }
+        const i = _bgTimers.indexOf(rec);
+        if (i >= 0) _bgTimers.splice(i, 1);
       },
     };
   };

@@ -5,6 +5,7 @@ description = "Allows frontend to control local video streaming server (get port
 [permission.commands]
 allow = [
     "get_local_video_port",
+    "get_local_video_token",
     "register_local_video",
     "pick_mp4_file",
     "read_file_head",

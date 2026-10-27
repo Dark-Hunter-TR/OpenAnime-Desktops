@@ -26,6 +26,9 @@ on:
           - release
           - debug
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
@@ -45,6 +48,7 @@ jobs:
         shell: bash
         env:
           PLATFORM: ${{ inputs.platform }}
+          MODE: ${{ inputs.build_mode }}
         run: |
           set -euo pipefail
           BASE="$(node -p "require('./package.json').version.split('-')[0]")"
@@ -64,7 +68,7 @@ jobs:
           {
             echo "### 🧪 Test Build"
             echo "- **Sürüm:** \`$VERSION\`"
-            echo "- **Platform:** \`$PLATFORM\` · **Mod:** \`${{ inputs.build_mode }}\`"
+            echo "- **Platform:** \`$PLATFORM\` · **Mod:** \`$MODE\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build:
@@ -142,7 +146,9 @@ jobs:
 
       - name: Sürüm alanlarını eşitle
         shell: bash
-        run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/set-version.mjs "$VERSION"
 
       # `--target` MUTLAKA `--` ayracından önce: sonrası doğrudan cargo'ya gider.
       # tauri.test.conf.json updater artifact'larını kapatır → imza gerekmez.

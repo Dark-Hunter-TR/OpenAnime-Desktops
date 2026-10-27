@@ -415,7 +415,11 @@
       var tx = db.transaction("new-infra-videos", "readwrite");
       var store = tx.objectStore("new-infra-videos");
       store.put({ videoId: videoId, mp4File: blob });
-      await new Promise(function(r) { tx.oncomplete = r; });
+      await new Promise(function(resolve, reject) {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("abort"));
+      });
       console.log("[LocalLib] ✅ Blob yazıldı:", videoId, blob.size + " bytes");
 
       // 8. episodeStorage'a ekle

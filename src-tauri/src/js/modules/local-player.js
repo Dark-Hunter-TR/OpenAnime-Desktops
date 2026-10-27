@@ -31,6 +31,7 @@
   var STREAM_MARK = "/local-video?path=";
 
   var port = null;
+  var token = null; // sunucu erişim anahtarı — port ile BİRLİKTE hazır olur (port truthy ⇒ token var)
   var lastMeta = null; // son metadata (re-init için — MutationObserver addedNodes'da kullanılır)
   var T0 = 0;          // ilk intercept zamanı (performans ölçümü)
 
@@ -48,7 +49,7 @@
   }
 
   function streamUrl(filePath) {
-    return "http://127.0.0.1:" + port + STREAM_MARK + encodeURIComponent(filePath);
+    return "http://127.0.0.1:" + port + STREAM_MARK + encodeURIComponent(filePath) + "&t=" + token;
   }
 
   // .m3u8 — DOĞRULANDI: site blob içeriğine/mime'a bakıp .m3u8 için KENDİ
@@ -79,13 +80,18 @@
   // (localStorage'a YAZMA — orada eski oturumun portu kalır ve yanlış olur.)
   try {
     var cachedPort = parseInt(sessionStorage.getItem("local_video_port") || "", 10);
-    if (cachedPort > 0) port = cachedPort;
+    var cachedToken = sessionStorage.getItem("local_video_token") || "";
+    if (cachedPort > 0 && cachedToken) { port = cachedPort; token = cachedToken; }
   } catch (e) {}
 
   (async function() {
     try {
       if (typeof __TAURI__ !== "undefined" && __TAURI__.core) {
-        port = await __TAURI__.core.invoke("get_local_video_port");
+        var freshToken = await __TAURI__.core.invoke("get_local_video_token");
+        var freshPort = await __TAURI__.core.invoke("get_local_video_port");
+        token = freshToken;
+        port = freshPort;
+        sessionStorage.setItem("local_video_token", token);
         sessionStorage.setItem("local_video_port", port);
       }
     } catch (e) {}

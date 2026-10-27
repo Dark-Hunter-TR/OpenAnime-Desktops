@@ -186,6 +186,7 @@ window.__openAnimeIsLoggedIn = function() {
 // --- HTML5 Notification & Web Push Auto-Grant Override ---
 (function() {
   function grantNotificationPermission() {
+    if (grantNotificationPermission._done) return; grantNotificationPermission._done = true;
     try {
       // 1. Mock PushSubscription
       function MockPushSubscription() {
@@ -257,6 +258,11 @@ window.__openAnimeIsLoggedIn = function() {
         }, 50);
       };
 
+      if (typeof EventTarget !== 'undefined') {
+        mockNotification.prototype = Object.create(EventTarget.prototype);
+        mockNotification.prototype.constructor = mockNotification;
+      }
+
       mockNotification.prototype.close = function() {
         setTimeout(() => {
           if (typeof this.onclose === 'function') {
@@ -264,11 +270,6 @@ window.__openAnimeIsLoggedIn = function() {
           }
         }, 50);
       };
-
-      if (typeof EventTarget !== 'undefined') {
-        mockNotification.prototype = Object.create(EventTarget.prototype);
-        mockNotification.prototype.constructor = mockNotification;
-      }
 
       Object.defineProperty(mockNotification, 'permission', {
         get: function() { return 'granted'; },
