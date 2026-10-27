@@ -26,11 +26,12 @@
   function getActiveVariant() {
     let val = null;
     try { val = localStorage.getItem(SUPER_OPENING_KEY); } catch (_) {}
-    // Varsayılan olarak sitenin KENDİ yükleme ekranı seçili gelsin — Süper
-    // Logo/Muptezel Anime birer isteğe bağlı ekstra, kullanıcı kendisi seçmeli.
+    // Hiç tercih kaydedilmemişse (ilk kurulum) Muptezel Anime gelir: Canvas ile
+    // gerçek zamanlı çizilir, MP4 dosyası okunmaz/IPC ile taşınmaz (RAM yükü yok).
+    // Kayıtlı bir tercih (site ekranı dahil) ASLA ezilmez.
     if (val === null) {
-      try { localStorage.setItem(SUPER_OPENING_KEY, VARIANTS.DEFAULT); } catch (_) {}
-      return VARIANTS.DEFAULT;
+      try { localStorage.setItem(SUPER_OPENING_KEY, VARIANTS.MUPTEZEL_ANIME); } catch (_) {}
+      return VARIANTS.MUPTEZEL_ANIME;
     }
     if (!Object.values(VARIANTS).includes(val)) {
       return VARIANTS.DEFAULT;
