@@ -978,7 +978,10 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // oa_js_log → dbg_log! üzerinden gider, yani yalnızca dev build'de ya da
     // OA_DEBUG=1 ile session loguna düşer (bkz. logger.rs).
     // ──────────────────────────────────────────────
-    include_str!("js/modules/webgpu-inspector.js"),
+    // GEÇİCİ KAPALI: site (MARINA) createShaderModule/createComputePipeline'ın
+    // native olup olmadığını toString() ile kontrol ediyor; inspector bunları sarıyor.
+    // Geri açmak için alt satırın başındaki // işaretini kaldır.
+    // include_str!("js/modules/webgpu-inspector.js"),
     "\n",
 
     // ──────────────────────────────────────────────
@@ -1700,7 +1703,6 @@ fn oa_save_webgpu_capture(
     Ok(path.to_string_lossy().to_string())
 }
 
-#[cfg(target_os = "windows")]
 /// macOS'ta App Nap / güç tasarrufu tabanlı kısıtlamaları (ekran-uyku,
 /// sistem boşta-uyku, arka plan QoS düşürme) uygulama boyunca devre dışı
 /// bırakır. Windows tarafında EcoQoS/bellek hedefi tuning'inin (bkz.

@@ -482,6 +482,9 @@
   // yakalayıp saklıyoruz — siyah tuvalin sessiz sebebi çoğu zaman budur.
   (function patchGpuDevice() {
     try {
+      // GEÇİCİ KAPALI: GPU API yamalarını test için devre dışı bırak.
+      // Geri açmak için alttaki satırı sil.
+      return;
       if (!navigator.gpu || !window.GPUAdapter || !GPUAdapter.prototype.requestDevice) return;
       var _rd = GPUAdapter.prototype.requestDevice;
       GPUAdapter.prototype.requestDevice = function () {
