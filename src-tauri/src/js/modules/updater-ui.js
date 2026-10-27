@@ -7,8 +7,22 @@ let isUpdateInProgress = false;
 if (localStorage.getItem("tauri-updater-auto-check") === null) {
   localStorage.setItem("tauri-updater-auto-check", "true");
 }
+// İlk açılışta kanal, KURULU sürümün kanalından türetilir (1.2.0-beta.1 → beta,
+// 1.2.0-alpha.1 → alpha, 1.2.0 → release). Sonrasında yalnızca kullanıcı
+// değiştirir; bu blok kayıtlı bir tercihi ASLA ezmez.
 if (localStorage.getItem("tauri-updater-channel") === null) {
-  localStorage.setItem("tauri-updater-channel", "release");
+  const initChannel = (ver) => {
+    const v = String(ver || "");
+    const chan = v.includes("-alpha") ? "alpha" : v.includes("-beta") ? "beta" : "release";
+    if (localStorage.getItem("tauri-updater-channel") === null) {
+      localStorage.setItem("tauri-updater-channel", chan);
+    }
+  };
+  try {
+    window.__TAURI__.core.invoke("get_app_version").then(initChannel).catch(() => initChannel(""));
+  } catch (_) {
+    initChannel("");
+  }
 }
 
 // Fluent System Icons (fluenticons.co)
