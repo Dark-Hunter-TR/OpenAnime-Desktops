@@ -295,10 +295,13 @@ async function initOpenAnimeLogoAnimator(canvas) {
   // çalıştığında Rust'tan lazy çekilir. Böylece ~244KB base64 her webview'da
   // parse edilip bellekte tutulmaz (bkz. oa_get_logo_textures). data: URI
   // oldukları için ağ isteği değildir, WebView2 PNA korumasına takılmaz.
-  // IPC çağrısı hemen BAŞLATILIR ama burada beklenmez: shader derleme/linkleme
-  // (GPU sürecinde) ile doku IPC'si paralel ilerler. Doku yüklemesi aşağıda,
-  // linkleme başladıktan sonra bekleniyor.
-  const texturesPromise = loadLogoTextures();
+  const textures = await loadLogoTextures();
+  if (!textures) {
+    console.warn("[Logo Animator] Dokular alınamadı, açılış geçiliyor.");
+    return null;
+  }
+  const spin = loadTexture(textures.spin);
+  const centerTex = loadTexture(textures.center);
 
   const uniformNames = [
     "u_resolution", "u_spinTexture", "u_centerTexture", "u_time",
@@ -409,33 +412,10 @@ async function initOpenAnimeLogoAnimator(canvas) {
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
-  const textures = await texturesPromise;
-  if (!textures) {
-    console.warn("[Logo Animator] Dokular alınamadı, açılış geçiliyor.");
-    return null;
-  }
-  const spin = loadTexture(textures.spin);
-  const centerTex = loadTexture(textures.center);
-
-  // Açılış bitip overlay kaldırıldığında GPU kaynaklarını AÇIKÇA serbest bırak
-  // (canvas DOM'dan çıksa da WebGL bağlamı GC'ye kadar VRAM/RAM tutar).
-  function dispose() {
-    try {
-      gl.deleteTexture(spin.texture);
-      gl.deleteTexture(centerTex.texture);
-      gl.deleteProgram(program);
-      gl.deleteBuffer(positionBuffer);
-      gl.deleteBuffer(uvBuffer);
-      const lose = gl.getExtension("WEBGL_lose_context");
-      if (lose) lose.loseContext();
-    } catch (e) {}
-  }
-
   return {
     ready: Promise.all([spin.ready, centerTex.ready, waitForLink()]).then(
       ([, , linked]) => linked
     ),
     renderFrame,
-    dispose,
   };
 }

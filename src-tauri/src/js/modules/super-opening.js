@@ -276,12 +276,6 @@
         if (overlay.parentNode) {
           overlay.parentNode.removeChild(overlay);
         }
-        // Canvas varyantı: WebGL kaynaklarını serbest bırak (fade bittikten SONRA —
-        // bağlam kaybı çizimi silerdi).
-        if (typeof overlay._oaDispose === "function") {
-          try { overlay._oaDispose(); } catch (e) {}
-          overlay._oaDispose = null;
-        }
       }, 550);
     }
 
@@ -434,7 +428,6 @@
         resolve();
         return;
       }
-      overlay._oaDispose = engine.dispose;
 
       // TEK gerçek kaynak: açılış animasyonu KESİN OLARAK INTRO_DURATION_MS
       // (3 saniye) sürer. Bitiş koşulu SADECE geçen süreye bakar — "N döngü
