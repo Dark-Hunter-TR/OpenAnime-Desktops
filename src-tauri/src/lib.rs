@@ -220,6 +220,29 @@ mod gpu_switch_macos {
 ///   oluşturma devre dışı kalır.
 /// Windows/macOS webview'ı WebGPU'yu zaten native sağladığından bu bayraklara
 /// ihtiyaç duymaz (shim `isLinux` kontrolüyle kendini zaten devre dışı bırakır).
+fn strip_heavy_modules(script: &str) -> String {
+    const BEGIN: &str = "/*@OA_HEAVY_BEGIN*/";
+    const END: &str = "/*@OA_HEAVY_END*/";
+    let mut out = String::with_capacity(script.len());
+    let mut rest = script;
+    while let Some(b) = rest.find(BEGIN) {
+        out.push_str(&rest[..b]);
+        match rest[b..].find(END) {
+            Some(e) => rest = &rest[b + e + END.len()..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn build_settings_init_script() -> String {
+    strip_heavy_modules(&build_init_script())
+}
+
 fn build_init_script() -> String {
     let base = build_base_init_script();
     // WebGPU teşhis aracı YALNIZCA debug (dev) derlemelerinde enjekte edilir.
@@ -470,6 +493,50 @@ fn set_background_suspend(window: &tauri::WebviewWindow, mode: BgMode) {
     });
 }
 
+#[cfg(target_os = "windows")]
+const BACKGROUND_WAKE_INTERVAL_SECS: u64 = 30;
+
+#[cfg(target_os = "windows")]
+const BACKGROUND_WAKE_STREAM_GRACE_MS: u64 = 5_000;
+
+#[cfg(target_os = "windows")]
+async fn background_wake_cycle(app: &tauri::AppHandle) {
+    if !super_notifications::needs_live_page(app) {
+        return;
+    }
+    let windows = app.webview_windows();
+    if windows.is_empty() {
+        return;
+    }
+    let all_hidden = windows
+        .values()
+        .all(|w| w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(true));
+    if !all_hidden {
+        return;
+    }
+    let Some((label, window)) = windows
+        .iter()
+        .find(|(l, _)| l.as_str() == "main")
+        .or_else(|| windows.iter().next())
+        .map(|(l, w)| (l.clone(), w.clone()))
+    else {
+        return;
+    };
+
+    super_notifications::set_periodic_wake(true);
+    set_background_suspend(&window, BgMode::Foreground);
+    emit_background_state(app, &label, "foreground");
+
+    super_notifications::refresh_gateway_token_for_wake(app).await;
+    tokio::time::sleep(std::time::Duration::from_millis(
+        BACKGROUND_WAKE_STREAM_GRACE_MS,
+    ))
+    .await;
+
+    super_notifications::set_periodic_wake(false);
+    update_background_mode(app, &label);
+}
+
 /// Webview'a arka plan (tepsi/minimize) durumunu bildirir.
 ///
 /// JS tarafı (js/modules/background-mode.js) bunu alınca Page Visibility
@@ -561,30 +628,13 @@ fn update_background_mode(app: &tauri::AppHandle, label: &str) {
         }
     }
 
-    let mut mode = if !hidden {
+    let mode = if !hidden {
         BgMode::Foreground
     } else if playing {
         BgMode::Media
     } else {
         BgMode::DeepSleep
     };
-
-    // SÜPER BİLDİRİM İSTİSNASI: açıkken arka plandaki pencere RENDER ETMEYE
-    // devam etmeli. Vanguard `Gateway-Token`'ı yalnızca render eden sayfada
-    // tazelenebiliyor (canlı testle kanıtlandı — `Media`da 4 tam sayfa
-    // yenilemesine rağmen token bir kez bile tazelenmedi, çünkü Media
-    // `SetIsVisible(false)` demek ve rAF/canvas durur; Cloudflare challenge'ı
-    // da tam olarak ona dayanıyor). `Foreground` modu `Resume()` +
-    // `SetIsVisible(true)` uygular; pencerenin kendisi (HWND) `hide()` ile
-    // gizli kaldığı için kullanıcı hiçbir şey görmez, ama motor çalışır.
-    // TAKAS: TrySuspend/working-set trim uygulanamaz → tepside RAM düşmez.
-    if mode != BgMode::Foreground && super_notifications::needs_live_page(app) {
-        dbg_log!(
-            "[PerfMode] Süper Bildirim açık → {} penceresi arka planda canlı tutuluyor (render sürüyor)",
-            label
-        );
-        mode = BgMode::Foreground;
-    }
 
     // JS'e ÖNCE haber ver: DeepSleep'te motor donduğu için sinyal sonradan
     // gönderilseydi sayfaya hiç ulaşmazdı.
@@ -628,14 +678,7 @@ fn enter_tray_background(app: &tauri::AppHandle, label: &str) {
     // Gizlenme ANINDAKİ oynatma durumu kararı belirler: video oynuyorsa sayfa
     // "media" moduna (timer'ların çoğu durur, Discord RPC + oynatıcı bildirimi
     // sürer), oynamıyorsa "hidden" moduna (her şey durur) geçer.
-    //
-    // Süper Bildirimler açıkken İKİSİ DE OLMAZ: sayfaya "foreground" denir ki
-    // TÜM timer'lar (özellikle 30 sn'lik Gateway-Token yansıtması) çalışmaya
-    // devam etsin ve Page Visibility geçersiz kılınmasın — Vanguard challenge'ı
-    // sayfanın kendini görünür sanmasına bağlı (bkz. update_background_mode).
-    let js_mode = if super_notifications::needs_live_page(app) {
-        "foreground"
-    } else if playing {
+    let js_mode = if playing {
         "media"
     } else {
         "hidden"
@@ -878,11 +921,13 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // ──────────────────────────────────────────────
     include_str!("js/modules/networkStore.js"),
     "\n",
+    "\n/*@OA_HEAVY_BEGIN*/\n",
     "{\nconst NETWORK_CACHE_CSS = String.raw`",
     include_str!("js/modules/network-cache.css"),
     "`;\n",
     include_str!("js/modules/network-cache.js"),
     "}\n",
+    "\n/*@OA_HEAVY_END*/\n",
     "{\n",
     include_str!("js/modules/image-rightsizer.js"),
     "\n}\n",
@@ -898,8 +943,10 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // Sonraki bloklardaki webgpu-inspector.js/webgpu-detect.js'in
     // navigator.gpu'yu bulabilmesi için ONLARDAN ÖNCE gelmeli.
     // ──────────────────────────────────────────────
+    "\n/*@OA_HEAVY_BEGIN*/\n",
     include_str!("js/modules/webgpu-native-shim.js"),
     "\n",
+    "\n/*@OA_HEAVY_END*/\n",
 
     // ──────────────────────────────────────────────
     // BLOK 4: PENCERE & ARAYÜZ KONTROLLERİ
@@ -927,11 +974,13 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // API'sini yayımlar. Sıra önemsiz: kısayol, API'yi kayıt anında değil
     // tuşa basıldığında çağırır.
     // ──────────────────────────────────────────────
+    "\n/*@OA_HEAVY_BEGIN*/\n",
     "{\nconst QUICK_SEARCH_CSS = String.raw`",
     include_str!("js/modules/quick-search.css"),
     "`;\n",
     include_str!("js/modules/quick-search.js"),
     "}\n",
+    "\n/*@OA_HEAVY_END*/\n",
 
     include_str!("js/modules/link-interceptor.js"),
     "\n",
@@ -980,11 +1029,13 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // NOT: textures.js (~244KB base64) artık BURAYA gömülmez — yalnızca ilgili
     // varyant çalıştığında `oa_get_logo_textures` komutuyla lazy çekilir.
     // ──────────────────────────────────────────────
+    "\n/*@OA_HEAVY_BEGIN*/\n",
     "{\n",
     include_str!("js/modules/logo-animator/logo-animator.js"),
     "\n",
     include_str!("js/modules/super-opening.js"),
     "\n}\n",
+    "\n/*@OA_HEAVY_END*/\n",
 
     // ──────────────────────────────────────────────
     // BLOK 6C: (kaldırıldı) WebGPU teşhis aracı artık burada DEĞİL.
@@ -1025,8 +1076,10 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // BLOK 7C: YEREL KÜTÜPHANE YÖNETİMİ
     // Sidebar butonu + bölüm ekle butonu + library yönetimi
     // ──────────────────────────────────────────────
+    "\n/*@OA_HEAVY_BEGIN*/\n",
     include_str!("js/modules/local-library.js"),
     "\n",
+    "\n/*@OA_HEAVY_END*/\n",
 
     // ──────────────────────────────────────────────
     // BLOK 7D: DASHBOARD İYİLEŞTİRMELERİ
@@ -1040,8 +1093,10 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // tıklama döngüsüne giriyordu. Aynı işi enhancer'ın adım 2'si
     // (dialogu kapat) zaten güvenli yapıyor.
     // ──────────────────────────────────────────────
+    "\n/*@OA_HEAVY_BEGIN*/\n",
     include_str!("js/modules/dashboard-enhancer.js"),
     "\n",
+    "\n/*@OA_HEAVY_END*/\n",
 
     // ──────────────────────────────────────────────
     // BLOK 8: TEMA SİSTEMİ
@@ -1148,6 +1203,7 @@ pub(crate) fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<()
         return Err(format!("Desteklenmeyen URL şeması: {}", parsed_url.scheme()));
     }
 
+    let parsed_url_is_settings = parsed_url.path().starts_with("/settings");
     let app_handle = app.clone();
     let win_builder = WebviewWindowBuilder::new(
         app,
@@ -1174,7 +1230,7 @@ pub(crate) fn build_new_window(app: &tauri::AppHandle, url: String) -> Result<()
         });
         tauri::webview::NewWindowResponse::Deny
     })
-    .initialization_script(build_init_script());
+    .initialization_script(if parsed_url_is_settings { build_settings_init_script() } else { build_init_script() });
 
     // macOS: `decorations(false)` bırakıyor bazı tao/macOS sürüm
     // kombinasyonlarında pencereyi NSWindowCollectionBehavior::FullScreenPrimary
@@ -1271,7 +1327,7 @@ fn spawn_tray_session_window(app: &tauri::AppHandle) -> Result<(), String> {
         });
         tauri::webview::NewWindowResponse::Deny
     })
-    .initialization_script(build_init_script());
+    .initialization_script(build_settings_init_script());
 
     // bkz. build_new_window'daki macOS decorations/fullscreen açıklaması.
     #[cfg(target_os = "macos")]
@@ -2405,6 +2461,20 @@ pub fn run() {
                     });
                 }
 
+                #[cfg(target_os = "windows")]
+                {
+                    let app_for_wake = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_secs(
+                                BACKGROUND_WAKE_INTERVAL_SECS,
+                            ))
+                            .await;
+                            background_wake_cycle(&app_for_wake).await;
+                        }
+                    });
+                }
+
                 // Tepsi ikonu ve tıklama/eylem izleyicisini her zaman başlat!
                 match super_notifications::ensure_tray(app.handle()) {
                     Ok(()) => log!("[OpenAnime] Tepsi ikonu oluşturuldu"),
@@ -2430,7 +2500,10 @@ pub fn run() {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     let quitting = APP_QUITTING.load(std::sync::atomic::Ordering::SeqCst);
 
-                    if !quitting {
+                    if !quitting && label != "main" {
+                        api.prevent_close();
+                        let _ = window.destroy();
+                    } else if !quitting {
                         api.prevent_close();
 
                         // ── X = "uygulamayı tepsiye park et" ──────────────

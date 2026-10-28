@@ -2210,6 +2210,7 @@
 
       var raf = null;
       var obs = new MutationObserver(function () {
+        if (document.hidden) return;
         if (_groupingBusy) { _missedMutation = true; return; } // düşme — işaretle, busy bitince işlenir
         if (raf) return;
         raf = requestAnimationFrame(function () { raf = null; check(); });
@@ -2220,7 +2221,7 @@
       // fırlatmayabildiği için her 2 sn'de bir tam kayıt alınır.
       // GÜVENLİK AĞI: lightSync aynı interval'de — observer bir mutasyonu
       // kaçırsaydı bile gruplama/panel en geç 2 sn içinde kendini onarır.
-      setInterval(function () {
+      (window.oaBgInterval || setInterval)(function () {
         if (document.hidden) return;
         lightSync();
         if (onDashboardRoute() && !_restoringPlayer) {

@@ -797,7 +797,7 @@ pub fn start_listener(app: &AppHandle) {
             // listesiyle yakalanıyor (tazelik + `seen` süzgeçleri tekrarı eler).
             let token_stale = gateway_token_age(&app)
                 .is_none_or(|age| age >= Duration::from_millis(GATEWAY_TOKEN_MAX_AGE_MS));
-            if token_stale && !crate::any_window_foreground(&app) {
+            if token_stale && !window_foreground_or_waking(&app) {
                 if !waiting_for_foreground {
                     waiting_for_foreground = true;
                     crate::dbg_log!(
@@ -1445,9 +1445,26 @@ pub fn sn_set_gateway_token(app: AppHandle, token: String) -> Result<(), String>
 /// Bu bilinçli bir takas — özelliğin tepside çalışmasının bilinen tek yolu.
 /// (X artık önce hafif `/settings` sayfasına gittiği için canlı tutulan sayfa
 /// oynatıcı değil, ucuz bir ayar sayfası oluyor — bkz. lib.rs CloseRequested.)
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn needs_live_page(app: &AppHandle) -> bool {
     app.try_state::<SuperNotifState>()
         .is_some_and(|s| s.enabled.load(Ordering::SeqCst))
+}
+
+static PERIODIC_WAKE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+pub(crate) fn set_periodic_wake(active: bool) {
+    PERIODIC_WAKE_ACTIVE.store(active, Ordering::SeqCst);
+}
+
+fn window_foreground_or_waking(app: &AppHandle) -> bool {
+    PERIODIC_WAKE_ACTIVE.load(Ordering::SeqCst) || crate::any_window_foreground(app)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) async fn refresh_gateway_token_for_wake(app: &AppHandle) -> bool {
+    refresh_gateway_token(app, "periyodik uyanma").await
 }
 
 /// Gateway-Token'ın yaşı (hiç alınmadıysa None).
@@ -1482,7 +1499,7 @@ async fn refresh_gateway_token(app: &AppHandle, reason: &str) -> bool {
     // tazelenmedi; tazelenme ancak pencere ön plana döndüğü an gerçekleşti.
     // Bu yüzden arka plandayken denemenin FAYDASI YOK, ZARARI VAR (garantili
     // 400 alan istekler + boşuna sayfa yeniden yüklemeleri).
-    if !crate::any_window_foreground(app) {
+    if !window_foreground_or_waking(app) {
         crate::dbg_log!(
             "[SüperBildirim] token tazeleme atlandı ({}): pencere arka planda, Vanguard render eden sayfa istiyor",
             reason

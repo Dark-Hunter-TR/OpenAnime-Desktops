@@ -1724,6 +1724,7 @@
 
   try {
     const runInjections = () => {
+      if (document.hidden) return;
       if (window.__WEBGPU_DIAGNOSTICS__) {
         injectDiagnosticsToModal(window.__WEBGPU_DIAGNOSTICS__);
       }
@@ -1734,7 +1735,7 @@
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
     // Fallback interval checks to catch dynamic async React portals
-    setInterval(runInjections, 500);
+    (window.oaBgInterval || setInterval)(runInjections, 500);
   } catch (err) {
     console.warn("[WebGPU Shim] Failed to start diagnostics mutation observer:", err);
   }
