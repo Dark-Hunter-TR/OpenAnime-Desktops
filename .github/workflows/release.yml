@@ -347,9 +347,9 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
           NOTES: ${{ needs.prepare.outputs.notes }}
         run: |
-          # Updater diyaloğunda gösterilecek düz metin: maddeler satır satır.
+          # Updater diyaloğunda gösterilecek düz metin: maddeler satır satır, `# ` başlıklar düz satır.
           if [ -n "$NOTES" ]; then
-            UPDATER_NOTES="$(printf '%s' "$NOTES" | tr ';' '\n' | sed 's/^/• /')"
+            UPDATER_NOTES="$(printf '%s' "$NOTES" | tr ';' '\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; /^$/d; s/^# //; t; s/^/• /')"
           else
             UPDATER_NOTES="$TAG sürümü"
           fi
@@ -393,6 +393,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+
       - name: Sürüm notunu yaz ve yayınla
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -402,41 +404,7 @@ jobs:
           NOTES: ${{ needs.prepare.outputs.notes }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
-          case "$CHANNEL" in
-            stable) chan_tr="Stable (kararlı sürüm)" ;;
-            beta)   chan_tr="Beta (yeni özellikler erken gelir, küçük sorunlar olabilir)" ;;
-            alpha)  chan_tr="Alpha (deneysel, her an bozulabilir)" ;;
-          esac
-
-          {
-            echo "## 🚀 OpenAnime ${TAG}"
-            echo
-            echo "> **Kanal:** ${chan_tr}"
-            echo
-            if [ -n "$NOTES" ]; then
-              echo "### ✨ Yenilikler"
-              IFS=';' read -ra items <<< "$NOTES"
-              for it in "${items[@]}"; do echo "- $it"; done
-              echo
-            fi
-            echo "### 📥 Hangi dosyayı indirmeliyim?"
-            echo "| İşletim sistemin | İndireceğin dosya |"
-            echo "|---|---|"
-            echo "| 🪟 Windows 10/11 (64-bit) | \`OpenAnime_${VERSION}_x64-setup.exe\` |"
-            echo "| 🍎 macOS (Apple Silicon & Intel) | \`OpenAnime_${VERSION}_universal.dmg\` |"
-            echo "| 🐧 Linux | \`OpenAnime_${VERSION}_amd64.AppImage\` veya \`.deb\` |"
-            echo
-            echo "<details>"
-            echo "<summary>📁 Diğer dosyalar ne işe yarar?</summary>"
-            echo
-            echo "| Dosya | Açıklama |"
-            echo "|---|---|"
-            echo "| \`*.app.tar.gz\` | Uygulama içi otomatik güncelleyicinin (macOS) kullandığı paket |"
-            echo "| \`*.sig\` | Güncelleme paketlerinin dijital imzaları — elle indirilmez |"
-            echo "| \`latest.json\` | Otomatik güncelleme manifesti |"
-            echo
-            echo "</details>"
-          } > release-notes.md
+          bash scripts/release-notes.sh "$CHANNEL" "$NOTES" > release-notes.md
 
           if [ "$PRERELEASE" = "true" ]; then
             LATEST_FLAG="--latest=false"; PRE_FLAG="--prerelease"

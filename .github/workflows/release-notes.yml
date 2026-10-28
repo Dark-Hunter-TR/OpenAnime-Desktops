@@ -1,0 +1,54 @@
+name: 'Sürüm Notunu Düzenle'
+
+# Yayınlanmış bir sürümün release metnini yeniden yazar (dosyalara dokunmaz).
+# Notlar: `;` ile ayrılmış maddeler, `# ` ile başlayan madde bölüm başlığı olur.
+#   Örn: # Yeni Özellikler;Oynatıcı hızlandı;# Hata Düzeltmeleri;Kayma giderildi
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Sürüm (örn: 1.1.3 veya 1.2.0-beta.1)'
+        required: true
+        type: string
+      notes:
+        description: 'Notlar — maddeleri ; ile ayır, bölüm başlığı için "# Başlık"'
+        required: true
+        type: string
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  edit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Release metnini yaz
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          VERSION="${INPUT_VERSION#v}"
+          TAG="v${VERSION}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(beta|alpha)\.[0-9]+)?$ ]]; then
+            echo "::error::Geçersiz sürüm: $INPUT_VERSION"; exit 1
+          fi
+          case "$VERSION" in
+            *-beta.*)  CHANNEL=beta ;;
+            *-alpha.*) CHANNEL=alpha ;;
+            *)         CHANNEL=stable ;;
+          esac
+          ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .id)" \
+            || { echo "::error::${TAG} için yayınlanmış release yok."; exit 1; }
+          bash scripts/release-notes.sh "$CHANNEL" "$NOTES" > body.md
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${ID}" -F body=@body.md >/dev/null
+          echo "${TAG} release metni güncellendi."
+          cat body.md

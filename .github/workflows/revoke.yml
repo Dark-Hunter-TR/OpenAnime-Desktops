@@ -1,7 +1,7 @@
 name: '⚠️ Geri Çek'
 
 # Sorunlu bir sürümü geri çeker (dosyaları silmez):
-#   1. Release'in başına "⚠️ Geri çekildi" uyarısı yazılır, prerelease yapılır
+#   1. Release'in başına "Geri çekildi" uyarısı yazılır, prerelease yapılır
 #      (Latest rozeti kalkar).
 #   2. Kanal manifesti (updater/latest-<kanal>.json) bu sürümü gösteriyorsa,
 #      aynı kanaldaki bir önceki SAĞLAM sürüme döndürülür; yoksa stable
@@ -56,11 +56,11 @@ jobs:
           BODY="$(printf '%s' "$REL" | jq -r '.body // ""')"
 
           # 1) Release notu + prerelease
-          if printf '%s' "$BODY" | head -c 200 | grep -q '⚠️ Geri çekildi'; then
+          if printf '%s' "$BODY" | head -c 200 | grep -q 'Geri çekildi\.'; then
             echo "Release zaten geri çekilmiş, not eklenmedi."
           else
             {
-              echo "> ⚠️ **Geri çekildi** — bu sürüm sorun nedeniyle önerilmiyor.${REASON:+ Sebep: ${REASON}}"
+              echo "> **Geri çekildi.** Bu sürüm sorun nedeniyle önerilmiyor.${REASON:+ Sebep: ${REASON}}"
               echo "> Lütfen daha yeni bir sürüm kullanın."
               echo
               printf '%s\n' "$BODY"
@@ -90,7 +90,7 @@ jobs:
             | jq -r --arg pat "$pat" --arg self "$TAG" '
                 [.[][] | select(.draft == false and .tag_name != $self
                                 and (.tag_name | test($pat))
-                                and ((.body // "") | contains("⚠️ Geri çekildi") | not))
+                                and ((.body // "") | contains("Geri çekildi.") | not))
                        | .tag_name] | .[]')"
           PREV=""
           while read -r c; do
