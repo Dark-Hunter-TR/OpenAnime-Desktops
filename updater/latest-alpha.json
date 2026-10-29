@@ -1,11 +1,23 @@
 {
-  "version": "1.1.4-alpha.1",
-  "notes": "• Süper Bildirim açıkken tepside 30 sn'de bir uyanıp RAM düşürüldü\n• ayarlar penceresi kapanınca yok ediliyor\n• arka plan timer'ları durduruldu",
-  "pub_date": "2026-10-28T17:41:14Z",
+  "version": "1.1.4-alpha.2",
+  "notes": "• Logo animasyonundaki başlangıç gecikmesi giderildi, açılış anında başlıyor  Güncelleme bildirim penceresindeki görsel sadeleştirildi  İyileştirmeler  Açılışta sitenin kendi splash ekranının anlık görünmesi engellendi  Koyu açılış arkaplanı sayfa yüklenmeden önce devreye alınıyor",
+  "pub_date": "2026-10-29T14:00:18Z",
   "platforms": {
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMU1IUnJXNisrK25aelRQeEk4ZXR0SXg2cGR1bC9mQ0ttUERVd1EwU3JBWThRWUN0Mk1iVkhuL25DOXNsbkRJYUcxMkIyUW9CWlozOUpSZzVXbTRiSmdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjgyMjIwCWZpbGU6T3BlbkFuaW1lXzEuMS40LWFscGhhLjJfYW1kNjQuQXBwSW1hZ2UKeXZZNHhUVnF6RWtOMFljR0Z6NmRzc1Z4aDZSYytKTDd5eVo4U25XS0ZRcHJSWkErK3NFTEVCY1VxalFpSllQTzVpNW5YdzBWUHIvLzduWWViRSs3Qnc9PQo=",
+      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.1.4-alpha.2/OpenAnime_1.1.4-alpha.2_amd64.AppImage"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUhVZTc5OFpUNEE0WDZkMm9aNW1ZQ3gyZnBrUEdTS3gwZ201WUxqM0dSWXo5bDdEM2JjZXZVUzFNRHg1bVJQTnZFbUVuMnMrdWljc20zN2F5VW54aEFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjgyMzkzCWZpbGU6T3BlbkFuaW1lLmFwcC50YXIuZ3oKWENmSmFDd040dlgzTmszejhieWZjclZwd2Y0NmpjdlFVZ29FaTh4T2ZkNTQ0N1NZRjRiRUVVNGxjWDdEbnlTbXp1NU11UFFxYTRBd09OaXNoellZQnc9PQo=",
+      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.1.4-alpha.2/OpenAnime_1.1.4-alpha.2_universal.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUhVZTc5OFpUNEE0WDZkMm9aNW1ZQ3gyZnBrUEdTS3gwZ201WUxqM0dSWXo5bDdEM2JjZXZVUzFNRHg1bVJQTnZFbUVuMnMrdWljc20zN2F5VW54aEFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjgyMzkzCWZpbGU6T3BlbkFuaW1lLmFwcC50YXIuZ3oKWENmSmFDd040dlgzTmszejhieWZjclZwd2Y0NmpjdlFVZ29FaTh4T2ZkNTQ0N1NZRjRiRUVVNGxjWDdEbnlTbXp1NU11UFFxYTRBd09OaXNoellZQnc9PQo=",
+      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.1.4-alpha.2/OpenAnime_1.1.4-alpha.2_universal.app.tar.gz"
+    },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMU0xMWRBOEFwZUVKL05UWVNLR3pHZy9JUnZLQ1pJekY0UmdRS2NSb3YxSkxxaTIxOTUvNkwrZkpzS3R4WXpadkRGK1pvK1FKeEFmZWZ1UGhEaVVldUFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjA5MjUzCWZpbGU6T3BlbkFuaW1lXzEuMS40LWFscGhhLjFfeDY0LXNldHVwLmV4ZQo3MDZDV1FTMGIzb01hODUrVVByWHgrQ3pxTWNubDJTZnlxYmYydG1ONEpmZkM3TnljdnBTdTlpVkxQNTZUMFpDNVYwVHpzYlZaWmVjb3BNMHo3SFFBdz09Cg==",
-      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.1.4-alpha.1/OpenAnime_1.1.4-alpha.1_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdHJqVStGRUpEMUt5M3d2Zm5qYk1CNUltUk50Z0piSTdlY0NsSVN4UHBNcHZhdUZjOStaUnNiOTlaN1o1ZTVmY2M3UjhmWTVMS3NIUkxtTlVnaWVaNWtIazN4VFZwTVE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjgyMjI5CWZpbGU6T3BlbkFuaW1lXzEuMS40LWFscGhhLjJfeDY0LXNldHVwLmV4ZQpkMkp1Wi84NFIzekpMNDRQY2JtRDBKSGVZM3BQNUxWL3Ivczd0UTVTWDZzcXdnOGlTQXQ5YXhlL1gwQ1cwNm04ZnpRQlVBc2Y4dXJNN2JaVDVXWmNBUT09Cg==",
+      "url": "https://github.com/Dark-Hunter-TR/OpenAnime-Desktops/releases/download/v1.1.4-alpha.2/OpenAnime_1.1.4-alpha.2_x64-setup.exe"
     }
   }
 }
