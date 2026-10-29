@@ -1059,9 +1059,6 @@ function showUpdateModal(version, changelog, date, sourceLabel) {
                 <span class="text-block type-caption text-tertiary svelte-9tjxrp">Sürüm v${version}${dateSpan}${sourceSpan}</span>
               </div>
             </div>
-            <div class="image-wrapper no-select loaded" id="setsuki">
-              <img alt="Setsuki" src="${randomSetsuki}">
-            </div>
           </div>
           <div id="content" class="svelte-cc3kyp">
             <h4 class="text-block type-subtitle svelte-9tjxrp">Sürüm Notları</h4>

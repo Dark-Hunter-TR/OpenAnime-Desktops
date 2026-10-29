@@ -122,6 +122,30 @@
     overlayCreated = true;
     markShownThisSession();
 
+    // Sitenin KENDİ #splash-screen ekranının parse edildiği mikrosaniyede dahi
+    // ekrana çizilmesini engellemek ve arkaplanı anında koyu yapmak için CSS enjekte et:
+    const antiSplashStyle = document.createElement("style");
+    antiSplashStyle.id = "oa-anti-splash";
+    antiSplashStyle.textContent = `
+      html, body {
+        background-color: #0b0d12 !important;
+      }
+      #splash-screen, .splash-screen, [data-splash-screen] {
+        display: none !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+      }
+    `;
+    const styleTarget = document.head || document.documentElement;
+    if (styleTarget) {
+      styleTarget.appendChild(antiSplashStyle);
+    } else {
+      document.addEventListener("DOMContentLoaded", () => {
+        (document.head || document.documentElement).appendChild(antiSplashStyle);
+      }, { once: true });
+    }
+
     // En üst katmanda tam ekran overlay oluştur (Max Z-Index)
     const overlay = document.createElement("div");
     overlay.id = "super-opening-overlay";
@@ -142,13 +166,15 @@
       transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1) !important;
     `;
 
-    const container = document.documentElement || document.body;
-    if (container) {
-      container.appendChild(overlay);
-    } else {
-      document.addEventListener("DOMContentLoaded", () => {
-        (document.body || document.documentElement).appendChild(overlay);
-      });
+    function attachOverlay() {
+      const target = document.body || document.documentElement;
+      if (target && overlay.parentNode !== target) {
+        target.appendChild(overlay);
+      }
+    }
+    attachOverlay();
+    if (!document.body) {
+      document.addEventListener("DOMContentLoaded", attachOverlay, { once: true });
     }
 
     let videoFinished = false;
@@ -268,7 +294,16 @@
       // Video bittikten hemen sonra hydration/route geçişiyle sitenin kendi
       // splash'ı geç gelebiliyor — birkaç saniye daha avlanmaya devam edip
       // ondan sonra gözlemciyi bırakıyoruz.
-      setTimeout(stopSplashObserver, 4000);
+      setTimeout(() => {
+        stopSplashObserver();
+        if (antiSplashStyle && antiSplashStyle.parentNode) {
+          antiSplashStyle.parentNode.removeChild(antiSplashStyle);
+        }
+        const earlyEl = document.getElementById("oa-early-bg");
+        if (earlyEl && earlyEl.parentNode) {
+          earlyEl.parentNode.removeChild(earlyEl);
+        }
+      }, 4000);
 
       overlay.style.setProperty("opacity", "0", "important");
       setTimeout(() => {

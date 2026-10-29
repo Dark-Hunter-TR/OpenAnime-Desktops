@@ -898,6 +898,8 @@ fn oa_set_player_playing(playing: bool, window: tauri::WebviewWindow, app: tauri
 
 const COMMON_INIT_SCRIPT: &str = concat!(
     "(function () {\nif (window.self !== window.top) {\n  let isBuilder = false;\n  try {\n    isBuilder = window.location.search.includes(\"theme_builder=true\") || sessionStorage.getItem(\"theme_builder_active\") === \"true\";\n  } catch (e) {}\n  if (!isBuilder) return;\n}\n",
+    // Süper Açılış: Sayfa yüklenmeye başlar başlamaz sitenin kendi splash ekranını gizle ve arka planı anında hazırla
+    "try {\n  const _v = localStorage.getItem(\"tauri-super-opening-variant\");\n  const _s = sessionStorage.getItem(\"tauri-super-opening-shown-session\") === \"1\";\n  if (_v !== \"default\" && !_s) {\n    const _el = document.createElement(\"style\");\n    _el.id = \"oa-early-bg\";\n    _el.textContent = \"html, body { background-color: #0b0d12 !important; } #splash-screen, .splash-screen, [data-splash-screen] { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; }\";\n    (document.head || document.documentElement).appendChild(_el);\n  }\n} catch (e) {}\n",
 
     // ──────────────────────────────────────────────
     // BLOK 1: TAURI BRIDGE (UPDATED MOCKS)
@@ -1026,11 +1028,11 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // "Muptezel Anime" varyantının Canvas render motoru, super-opening.js'in
     // kendi IIFE'sinden de erişilebilmesi için AYNI blokta ondan önce
     // enjekte edilir (sloppy-mode function hoisting sayesinde görünür).
-    // NOT: textures.js (~244KB base64) artık BURAYA gömülmez — yalnızca ilgili
-    // varyant çalıştığında `oa_get_logo_textures` komutuyla lazy çekilir.
     // ──────────────────────────────────────────────
     "\n/*@OA_HEAVY_BEGIN*/\n",
     "{\n",
+    include_str!("js/modules/logo-animator/textures.js"),
+    "\n",
     include_str!("js/modules/logo-animator/logo-animator.js"),
     "\n",
     include_str!("js/modules/super-opening.js"),

@@ -10,5 +10,6 @@ allow = [
     "pick_mp4_file",
     "read_file_head",
     "get_super_opening_video_url",
-    "get_super_opening_video_data"
+    "get_super_opening_video_data",
+    "oa_get_logo_textures"
 ]
