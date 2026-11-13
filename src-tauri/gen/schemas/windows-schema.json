@@ -345,6 +345,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Allows frontend to list registered browsers and scan their download folders (read-only)",
+          "type": "string",
+          "const": "allow-browser-discovery",
+          "markdownDescription": "Allows frontend to list registered browsers and scan their download folders (read-only)"
+        },
+        {
           "description": "Allows invoking Discord RPC commands",
           "type": "string",
           "const": "allow-discord-rpc",

@@ -1,0 +1,6 @@
+[[permission]]
+identifier = "allow-browser-discovery"
+description = "Allows frontend to list registered browsers and scan their download folders (read-only)"
+
+[permission.commands]
+allow = ["browser_discover_downloads"]

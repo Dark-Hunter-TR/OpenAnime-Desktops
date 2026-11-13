@@ -26,6 +26,7 @@
     // Fallback: user-agent sniffing
     const ua = navigator.userAgent || '';
     if (/macintosh|mac os x/i.test(ua)) return 'macos';
+    if (/linux/i.test(ua)) return 'linux';
     return 'windows';
   }
 

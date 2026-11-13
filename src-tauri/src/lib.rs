@@ -109,6 +109,8 @@ mod super_notifications;
 mod updater;
 mod theme_app;
 mod local_video_server;
+// Tarayıcı indirme klasörü keşfi (kayıt tabanlı; yalnız okur).
+mod browser_paths;
 
 #[cfg(target_os = "windows")]
 #[link(name = "shell32")]
@@ -1175,7 +1177,15 @@ pub(crate) fn platform_user_agent() -> &'static str {
     {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    // Linux UA'sında "Linux" GEÇMEK ZORUNDA: webgpu-native-shim.js ilk satırda
+    // `navigator.userAgent.includes("linux")` kontrolü yapıp değilse hiç kurulmuyor
+    // (webgpu-native-shim.js:3-4). Bu düz metin UA ile shim Linux'ta hiç devreye
+    // girmiyordu; platform bilgisi de siteden gizleniyordu.
+    #[cfg(target_os = "linux")]
+    {
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 OpenAnime/0.1.0 (Desktop) Tauri/1.0.1"
     }
@@ -2668,6 +2678,8 @@ pub fn run() {
             pick_mp4_file,
             // 📄 Dosyanın ilk N baytını oku (IndexedDB dummy blob için)
             read_file_head,
+            // 🌐 Kayıtlı tarayıcılardan indirme klasörü keşfi (salt okunur)
+            browser_paths::browser_discover_downloads,
             // JS hata köprüsü (webview console/onerror → terminal log)
             oa_js_log,
             // WebGPU teşhis — binary capture (LUT) dosyaya yaz

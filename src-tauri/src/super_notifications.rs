@@ -797,11 +797,19 @@ pub fn start_listener(app: &AppHandle) {
             // listesiyle yakalanıyor (tazelik + `seen` süzgeçleri tekrarı eler).
             let token_stale = gateway_token_age(&app)
                 .is_none_or(|age| age >= Duration::from_millis(GATEWAY_TOKEN_MAX_AGE_MS));
-            if token_stale && !window_foreground_or_waking(&app) {
+            // ASKIYA ALINMIŞ MOTOR = GARANTİLİ 400 (ölçüm 2026-11-13):
+            // küçültülmüş pencerede token 25–32 sn yaştayken — yani henüz "bayat"
+            // sayılmıyorken — üçlü 400 patlamaları alındı. Sayfa TrySuspend ile
+            // donduğu için Vanguard token yaşından BAĞIMSIZ reddediyor. Bu yüzden
+            // askıdaki pencere için token yaşına bakılmaz; uyanma penceresi
+            // dışında hiç bağlanılmaz.
+            let suspended = all_windows_hidden(&app);
+            if (token_stale || suspended) && !window_foreground_or_waking(&app) {
                 if !waiting_for_foreground {
                     waiting_for_foreground = true;
                     crate::dbg_log!(
-                        "[SüperBildirim] Gateway-Token bayat ve pencere arka planda → akış duraklatıldı (pencere geri gelince sürecek)"
+                        "[SüperBildirim] Bağlanma duraklatıldı ({}): pencere arka planda, Vanguard render eden sayfa istiyor",
+                        if suspended { "motor askıda" } else { "token bayat" }
                     );
                 }
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -1460,6 +1468,17 @@ pub(crate) fn set_periodic_wake(active: bool) {
 
 fn window_foreground_or_waking(app: &AppHandle) -> bool {
     PERIODIC_WAKE_ACTIVE.load(Ordering::SeqCst) || crate::any_window_foreground(app)
+}
+
+/// Tüm pencereler gizli veya minimize mi? Bu durumda motor askıya alınmıştır
+/// (bkz. lib.rs `set_background_suspend` → DeepSleep/TrySuspend) ve Vanguard
+/// istekleri token yaşından bağımsız 400 döner.
+fn all_windows_hidden(app: &AppHandle) -> bool {
+    let windows = app.webview_windows();
+    !windows.is_empty()
+        && windows
+            .values()
+            .all(|w| w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(true))
 }
 
 #[cfg(target_os = "windows")]

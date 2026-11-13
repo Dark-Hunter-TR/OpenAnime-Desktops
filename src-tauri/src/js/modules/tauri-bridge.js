@@ -128,15 +128,20 @@ if (!window.__TAURI__) {
   const _detectPlatform = () => {
     const ua = navigator.userAgent || '';
     if (/macintosh|mac os x/i.test(ua)) return 'macos';
+    if (/linux/i.test(ua)) return 'linux';
     return 'windows';
   };
   const _detectedPlatform = _detectPlatform();
 
+  const _platformType = () => {
+    if (_detectedPlatform === 'macos') return 'darwin';
+    if (_detectedPlatform === 'linux') return 'linux';
+    return 'windows_nt';
+  };
+
   const osInstance = {
     platform: () => Promise.resolve(_detectedPlatform),
-    type: () => Promise.resolve(
-      _detectedPlatform === 'macos' ? 'darwin' : 'windows_nt'
-    ),
+    type: () => Promise.resolve(_platformType()),
   };
 
   window.__TAURI__ = {
