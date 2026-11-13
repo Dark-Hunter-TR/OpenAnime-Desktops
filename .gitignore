@@ -17,3 +17,7 @@ bun.lock
 src-tauri/gen/schemas/desktop-schema.json
 src-tauri/gen/schemas/windows-schema.json
 
+# Geçici dosyalar — repoya girmemeli (e7387f1'de yanlışlıkla girmişti)
+.tmp-site/
+.tmp-tauri-dev.conf.json
+
