@@ -11,6 +11,7 @@
   const LOOP_WINDOW_MS = 20000;
 
   let watchdogTimer = null;
+  let watchdogProfileToken = null;
   let observer = null;
 
   function getRetryCount() {
@@ -236,6 +237,9 @@
   }
 
   function startWatchdog() {
+    window.__oaProf?.count("pageRecovery.watchdog.start");
+    if (watchdogProfileToken) window.__oaProf?.timerCancel(watchdogProfileToken);
+    watchdogProfileToken = null;
     clearTimeout(watchdogTimer);
     if (observer) observer.disconnect();
 
@@ -243,7 +247,10 @@
 
     // Düğüm değişikliklerini dinle — içerik oluştuğu an başarılı say
     observer = new MutationObserver(() => {
+      window.__oaProf?.count("pageRecovery.observer.callback");
       if (!isContainerEmpty(container)) {
+        if (watchdogProfileToken) window.__oaProf?.timerCancel(watchdogProfileToken);
+        watchdogProfileToken = null;
         clearTimeout(watchdogTimer);
         maybeResetRetryCount();
         observer.disconnect();
@@ -255,7 +262,10 @@
     } catch (e) {}
 
     // Zaman aşımı kontrolü (1.8 saniye)
+    watchdogProfileToken = window.__oaProf?.timerStart("pageRecovery.watchdog");
     watchdogTimer = setTimeout(() => {
+      if (watchdogProfileToken) window.__oaProf?.timerEnd(watchdogProfileToken);
+      watchdogProfileToken = null;
       if (isContainerEmpty(container)) {
         handleWatchdogTrigger("Boş ekran (blank DOM)", "Container elementinde child node oluşturulamadı.");
       } else {
@@ -296,11 +306,13 @@
   const _rReplace = history.replaceState.bind(history);
 
   history.pushState = function (...args) {
+    window.__oaProf?.count("pageRecovery.history.pushState");
     _rPush(...args);
     startWatchdog();
   };
 
   history.replaceState = function (...args) {
+    window.__oaProf?.count("pageRecovery.history.replaceState");
     _rReplace(...args);
     startWatchdog();
   };

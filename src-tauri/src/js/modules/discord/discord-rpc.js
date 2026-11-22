@@ -117,12 +117,14 @@ window.addEventListener("load", () => {
   const _pushState = history.pushState.bind(history);
   const _replaceState = history.replaceState.bind(history);
   history.pushState = function (...args) {
+    window.__oaProf?.count("discord.history.pushState");
     _pushState(...args);
     forceUpdate = true;
     setTimeout(updatePresenceFromDOM, 150);
     setTimeout(() => { if (typeof tryInjectSettings === 'function') tryInjectSettings(); }, 150);
   };
   history.replaceState = function (...args) {
+    window.__oaProf?.count("discord.history.replaceState");
     _replaceState(...args);
     forceUpdate = true;
     setTimeout(updatePresenceFromDOM, 150);
@@ -131,6 +133,7 @@ window.addEventListener("load", () => {
 })();
 
 window.addEventListener("popstate", () => {
+  window.__oaProf?.count("discord.history.popstate");
   forceUpdate = true;
   setTimeout(updatePresenceFromDOM, 150);
   setTimeout(() => { if (typeof tryInjectSettings === 'function') tryInjectSettings(); }, 150);
@@ -165,6 +168,10 @@ function attachVideoListeners(video) {
 }
 
 async function updatePresenceFromDOM() {
+  return window.__oaProf ? window.__oaProf.time("discord.updatePresenceFromDOM", updatePresenceFromDOMImpl) : updatePresenceFromDOMImpl();
+}
+
+async function updatePresenceFromDOMImpl() {
   if (!window.__TAURI__ || !window.__TAURI__.core) return;
   
   const enabled = isDiscordRpcEnabled();

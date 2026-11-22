@@ -20,7 +20,10 @@
 
   try {
     // Browser back/forward button (popstate)
-    window.addEventListener("popstate", () => onRouteChange());
+    window.addEventListener("popstate", () => {
+      window.__oaProf?.markNavigation("popstate");
+      window.__oaProf?.time("theme.route.popstate", onRouteChange);
+    });
 
     // SvelteKit client-side router override (pushState/replaceState)
     const originalPushState = history.pushState;
@@ -28,8 +31,9 @@
 
     history.pushState = function (...args) {
       const result = originalPushState.apply(this, args);
+      window.__oaProf?.markNavigation("pushState");
       try {
-        onRouteChange();
+        window.__oaProf?.time("theme.route.pushState", onRouteChange);
       } catch (e) {
         console.error("[Theme] pushState onRouteChange error:", e);
       }
@@ -38,8 +42,9 @@
 
     history.replaceState = function (...args) {
       const result = originalReplaceState.apply(this, args);
+      window.__oaProf?.markNavigation("replaceState");
       try {
-        onRouteChange();
+        window.__oaProf?.time("theme.route.replaceState", onRouteChange);
       } catch (e) {
         console.error("[Theme] replaceState onRouteChange error:", e);
       }
@@ -64,8 +69,12 @@
     if (_obs) return;
     try {
       _obs = new MutationObserver((mutations) => {
+        window.__oaProf?.count("theme.observer.callback");
+        window.__oaProf?.count("theme.observer.records", mutations.length);
+        const _oaThemeProfileToken = window.__oaProf?.start("theme.observer.callback");
         try {
-          runWithoutObserver(() => {
+          try {
+            runWithoutObserver(() => {
             // Tema instant mode + UI setup her mutation'da
             checkThemePageInstantMode();
             setupThemeButton();
@@ -107,8 +116,11 @@
             }
             replaceAndShow(); // Final render
           });
-        } catch (e) {
-          console.error("[Theme] mutation callback error:", e);
+          } catch (e) {
+            console.error("[Theme] mutation callback error:", e);
+          }
+        } finally {
+          window.__oaProf?.end(_oaThemeProfileToken);
         }
       });
       _obs.observe(document.body, { childList: true, subtree: true });

@@ -245,17 +245,31 @@ fn build_settings_init_script() -> String {
     strip_heavy_modules(&build_init_script())
 }
 
+fn env_is_enabled(name: &str) -> bool {
+    std::env::var(name).map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+}
+
 fn build_init_script() -> String {
-    let base = build_base_init_script();
-    // WebGPU teşhis aracı YALNIZCA debug (dev) derlemelerinde enjekte edilir.
-    // Site (MARINA) createShaderModule/createComputePipeline'ın native olup
-    // olmadığını toString() ile denetliyor; inspector bunları sarar. Release
-    // derlemelerinde site API'lerine hiçbir yama uygulanmaz.
-    if cfg!(debug_assertions) {
-        format!("{}\n{}", WEBGPU_INSPECTOR_SCRIPT, base)
-    } else {
-        base
+    let inject_mode = std::env::var("OPENANIME_INJECT_MODE").unwrap_or_default();
+    let empty_inject = inject_mode.eq_ignore_ascii_case("empty");
+    let profile_env = env_is_enabled("OPENANIME_PROFILE");
+    let inspector_enabled = match std::env::var("OPENANIME_WEBGPU_INSPECTOR") {
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true") => true,
+        Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => false,
+        _ => cfg!(debug_assertions),
+    };
+    let shim_disabled = cfg!(target_os = "linux") && env_is_enabled("OPENANIME_DISABLE_WEBGPU");
+    static CONFIG_LOGGED: std::sync::Once = std::sync::Once::new();
+    CONFIG_LOGGED.call_once(|| println!(
+        "[OpenAnime Diagnostics] inject={} profile_env={} inspector={} webgpu_shim={}",
+        if empty_inject { "empty" } else { "normal" }, profile_env, inspector_enabled,
+        if shim_disabled { "disabled" } else { "default" }
+    ));
+    if empty_inject {
+        return "(function(){console.info('[OpenAnime Diagnostics] empty inject mode');})();".to_string();
     }
+    let base = format!("window.__OA_PROFILE_ENV__={};\n{}", profile_env, build_base_init_script());
+    if inspector_enabled { format!("{}\n{}", WEBGPU_INSPECTOR_SCRIPT, base) } else { base }
 }
 
 /// webgpu-inspector.js kendi IIFE'sinde çalışır (ortak init script'in kapsamına
@@ -906,6 +920,8 @@ const COMMON_INIT_SCRIPT: &str = concat!(
     // ──────────────────────────────────────────────
     // BLOK 1: TAURI BRIDGE (UPDATED MOCKS)
     // ──────────────────────────────────────────────
+    include_str!("js/modules/navigation-profiler.js"),
+    "\n",
     include_str!("js/modules/tauri-bridge.js"),
     "\n",
 

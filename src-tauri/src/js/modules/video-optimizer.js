@@ -235,6 +235,7 @@
   // applyAdaptiveNetworkHints() — Navigator.connection API ile network-aware preload.
   // WHY: Yavaş ağlarda ("2g", "slow-2g") metadata-only preload, normal ağlarda "auto".
   function applyAdaptiveNetworkHints() {
+    window.__oaProf?.count("video.networkHints.apply");
     try {
       const conn =
         navigator.connection ||
@@ -256,6 +257,7 @@
         });
       };
 
+      window.__oaProf?.count("video.networkHints.changeListener");
       conn.addEventListener("change", updateForNetwork, { passive: true });
       updateForNetwork();
     } catch (e) {}
@@ -267,11 +269,13 @@
 
   // initVideoOptimizer() — Tüm optimizasyonları koordine ve başlat.
   function initVideoOptimizer() {
-    patchHls();
-    patchDashJs();
-    patchVideoJs();
-    observeVideos();
-    applyAdaptiveNetworkHints();
+    window.__oaProf?.count("video.optimizer.init");
+    const _oaProfileToken = window.__oaProf?.start("video.optimizer.init");
+    try {
+      patchHls(); patchDashJs(); patchVideoJs(); observeVideos(); applyAdaptiveNetworkHints();
+    } finally {
+      window.__oaProf?.end(_oaProfileToken);
+    }
   }
 
   // Süper Açılış (bkz. super-opening.js) oynuyorsa, WebGL rAF döngüsüyle
@@ -294,17 +298,22 @@
   // SPA navigation tracking: yeni sayfa yüklendiğinde yeniden optimize et
   // WHY: SPA rotası değiştiğinde yeni <video> element'ler eklenir,
   // patche ihtiyaç kaldı. 300ms delay: DOM update'inin tamamlanmasını bekle.
-  window.addEventListener("popstate", () => setTimeout(initVideoOptimizer, 300), { passive: true });
+  window.addEventListener("popstate", () => {
+    window.__oaProf?.count("video.optimizer.popstate");
+    setTimeout(() => window.__oaProf?.time("video.optimizer.routeInit", initVideoOptimizer), 300);
+  }, { passive: true });
 
   // history.pushState + replaceState override — SPA route change detection
   const _origPush = history.pushState.bind(history);
   const _origReplace = history.replaceState.bind(history);
   history.pushState = function (...args) {
     _origPush(...args);
-    setTimeout(initVideoOptimizer, 300);
+    window.__oaProf?.count("video.optimizer.pushState");
+    setTimeout(() => window.__oaProf?.time("video.optimizer.routeInit", initVideoOptimizer), 300);
   };
   history.replaceState = function (...args) {
     _origReplace(...args);
-    setTimeout(initVideoOptimizer, 300);
+    window.__oaProf?.count("video.optimizer.replaceState");
+    setTimeout(() => window.__oaProf?.time("video.optimizer.routeInit", initVideoOptimizer), 300);
   };
 }

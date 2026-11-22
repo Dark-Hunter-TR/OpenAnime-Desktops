@@ -751,6 +751,9 @@
     }
 
     var _obs = new MutationObserver(function(mutations) {
+      window.__oaProf?.count("localLibrary.observer.callback");
+      window.__oaProf?.count("localLibrary.observer.records", mutations.length);
+      window.__oaProf?.time("localLibrary.observer.callback", function () {
       for (var m = 0; m < mutations.length; m++) {
         // Eklenen VE ÇIKARILAN düğümlere bak.
         // Bölüm silmek yalnızca düğüm ÇIKARIR; eskiden sadece addedNodes'e
@@ -769,6 +772,7 @@
           break;
         }
       }
+      });
     });
     // documentElement hazır değilse bekle
     function startObserver() {

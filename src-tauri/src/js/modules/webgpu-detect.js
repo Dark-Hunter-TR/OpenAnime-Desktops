@@ -5,7 +5,7 @@
   // tespit eder ve Rust tarafına bildirir. Böylece kullanıcıya /settings
   // sayfasında hangi GPU'nun kullanıldığı gösterilebilir.
 
-  async function detectWebGPU() {
+  async function detectWebGPUImpl() {
     try {
       if (!navigator.gpu || typeof navigator.gpu.requestAdapter !== "function") {
         console.log("[WebGPU] WebGPU desteklenmiyor");
@@ -54,6 +54,10 @@
     }
   }
 
+  async function detectWebGPU() {
+    return window.__oaProf ? window.__oaProf.time("webgpu.detect", detectWebGPUImpl) : detectWebGPUImpl();
+  }
+
   // Sayfa yüklendiğinde algılamayı başlat (gecikmeli — GPU API'si hydrate olmayı bekleyebilir)
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => setTimeout(detectWebGPU, 1000), { once: true });
@@ -62,10 +66,14 @@
   }
 
   // SPA navigasyonunda da tekrar dene
-  window.addEventListener("popstate", () => setTimeout(detectWebGPU, 1500), { passive: true });
+  window.addEventListener("popstate", () => {
+    window.__oaProf?.count("webgpu.detect.popstate");
+    setTimeout(detectWebGPU, 1500);
+  }, { passive: true });
   const _origPushW = history.pushState.bind(history);
   history.pushState = function (...args) {
     _origPushW(...args);
+    window.__oaProf?.count("webgpu.detect.pushState");
     setTimeout(detectWebGPU, 1500);
   };
 }

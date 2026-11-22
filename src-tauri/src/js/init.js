@@ -281,22 +281,27 @@
     if (window.MutationObserver) {
       var _oaRafToken = null;
       const observer = new MutationObserver((mutations) => {
+        window.__oaProf?.count("init.observer.callback");
+        window.__oaProf?.count("init.observer.records", mutations.length);
         // [feedback loop fix] Kendi tauri elementlerimizdeki style değişikliklerini yoksay
-        if (_isTauriMutation(mutations)) return;
+        if (_isTauriMutation(mutations)) {
+          window.__oaProf?.count("init.observer.ignoredTauriBatch");
+          return;
+        }
         // [throttle] Aynı frame içinde birden fazla tetiklemeyi birleştir
         if (_oaRafToken) return;
         _oaRafToken = requestAnimationFrame(function () {
           _oaRafToken = null;
-          const isFullscreen = !!(
-            document.fullscreenElement || document.webkitFullscreenElement
-          );
-          if (isFullscreen) {
-            if (typeof forceVideoFullscreen === "function") forceVideoFullscreen();
-          } else {
-            applyZoom(getActiveZoom());
-            setupTauriWindow();
-            setupDragRegion();
-          }
+          window.__oaProf?.time("init.observer.rafWork", function () {
+            const isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+            if (isFullscreen) {
+              if (typeof forceVideoFullscreen === "function") forceVideoFullscreen();
+            } else {
+              window.__oaProf?.time("init.applyZoom", function () { applyZoom(getActiveZoom()); });
+              window.__oaProf?.time("init.setupTauriWindow", setupTauriWindow);
+              window.__oaProf?.time("init.setupDragRegion", setupDragRegion);
+            }
+          });
         });
       });
       observer.observe(document.body, {
